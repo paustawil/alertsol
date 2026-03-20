@@ -1,0 +1,41 @@
+name: SOL Alert
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # Co 15 minut
+  workflow_dispatch:           # Ręczne uruchomienie (przycisk w GitHub)
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Przywróć ostatni alert (anty-spam)
+        uses: actions/cache/restore@v4
+        with:
+          path: last_alert.json
+          key: last-alert-cache
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zależności
+        run: pip install requests
+
+      - name: Uruchom analizę
+        env:
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python sol_alert.py
+
+      - name: Zapisz ostatni alert (anty-spam)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: last_alert.json
+          key: last-alert-cache
