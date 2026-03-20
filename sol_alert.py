@@ -11,7 +11,10 @@ import requests
 import anthropic
 import gspread
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
+
+TZ = ZoneInfo("Europe/Warsaw")
 
 # ── Konfiguracja ──────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",  "8645260464:AAGe_uTew0H1gJnijdcR7oav_A4U8n1HLHI")
@@ -289,7 +292,7 @@ def log_to_alerty(model: str, filter_passed: bool, setup: dict, current_price: f
     try:
         sh1, _ = _get_sheets()
         entries = setup.get("entries", [])
-        now     = datetime.now()
+        now     = datetime.now(TZ)
         sh1.append_row([
             now.strftime("%Y-%m-%d"),
             now.strftime("%H:%M"),
@@ -480,7 +483,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
 
     return (
         f"🎯 <b>SOL/USDT [{score}/15] — {model}</b>\n"
-        f"{icon}  |  {datetime.now().strftime('%d.%m  %H:%M')}  |  {filtr}\n\n"
+        f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}  |  {filtr}\n\n"
         f"Cena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejscia)\n\n"
         f"<b>Ustaw zlecenia:</b>\n{entries_txt}\n\n"
         f"<b>SL:</b>  ${sl:.2f}\n\n"
@@ -493,7 +496,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] SOL Alert v2 — start")
+    print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)

@@ -21,7 +21,8 @@ jobs:
           path: |
             last_alerts.json
             pending_setups.json
-          key: sol-alert-data
+          key: sol-alert-data-${{ github.run_id }}
+          restore-keys: sol-alert-data
 
       - name: Ustaw Python
         uses: actions/setup-python@v5
@@ -46,4 +47,4 @@ jobs:
           path: |
             last_alerts.json
             pending_setups.json
-          key: sol-alert-data
+          key: sol-alert-data-${{ github.run_id }}
