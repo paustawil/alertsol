@@ -13,15 +13,6 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Przywroc dane (anty-spam + tracking)
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            last_alerts.json
-            pending_setups.json
-          key: sol-alert-data-${{ github.run_id }}
-          restore-keys: sol-alert-data
-
       - name: Ustaw Python
         uses: actions/setup-python@v5
         with:
@@ -39,11 +30,11 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: python sol_alert.py
 
-      - name: Zapisz dane (anty-spam + tracking)
+      - name: Zapisz stan do repozytorium
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            last_alerts.json
-            pending_setups.json
-          key: sol-alert-data-${{ github.run_id }}
+        run: |
+          git config user.name "SOL Alert Bot"
+          git config user.email "bot@alertsol.com"
+          git add last_alerts.json pending_setups.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: update alert state [skip ci]"
+          git push || true
