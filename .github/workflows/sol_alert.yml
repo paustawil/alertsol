@@ -28,7 +28,7 @@ jobs:
           python-version: '3.12'
 
       - name: Zainstaluj zależności
-        run: pip install requests
+        run: pip install -r requirements.txt
 
       - name: Uruchom analizę
         env:
