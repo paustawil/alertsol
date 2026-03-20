@@ -19,25 +19,34 @@ COOLDOWN_HOURS  = 4           # Ile godzin ciszy po tym samym setupie
 LAST_ALERT_FILE = "last_alert.json"
 
 
-# ── Binance API ───────────────────────────────────────────────────────────────
+# ── Bybit API ─────────────────────────────────────────────────────────────────
+INTERVAL_MAP = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
+
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
-    """Pobiera dane OHLCV z Binance (bez klucza API)."""
+    """Pobiera dane OHLCV z Bybit (bez klucza API, brak geo-restrykcji)."""
     r = requests.get(
-        "https://api.binance.com/api/v3/klines",
-        params={"symbol": symbol, "interval": interval, "limit": limit},
+        "https://api.bybit.com/v5/market/kline",
+        params={
+            "category": "linear",
+            "symbol":   symbol,
+            "interval": INTERVAL_MAP.get(interval, interval),
+            "limit":    limit,
+        },
         timeout=10
     )
     r.raise_for_status()
+    # Bybit zwraca dane od najnowszych — odwracamy żeby mieć chronologicznie
+    rows = r.json()["result"]["list"][::-1]
     return [
         {
-            "time":   d[0],
+            "time":   int(d[0]),
             "open":   float(d[1]),
             "high":   float(d[2]),
             "low":    float(d[3]),
             "close":  float(d[4]),
             "volume": float(d[5]),
         }
-        for d in r.json()
+        for d in rows
     ]
 
 
