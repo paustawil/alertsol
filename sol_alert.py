@@ -9,6 +9,8 @@ import os
 import json
 import requests
 from datetime import datetime, timezone
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ── Konfiguracja ──────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN",  "8645260464:AAGe_uTew0H1gJnijdcR7oav_A4U8n1HLHI")
@@ -18,10 +20,10 @@ MIN_SCORE       = 11          # Minimum punktów żeby wysłać alert
 COOLDOWN_HOURS  = 4           # Ile godzin ciszy po tym samym setupie
 LAST_ALERT_FILE  = "last_alert.json"
 PENDING_FILE     = "pending_setups.json"
-LOG_FILE         = "setup_log.csv"
+SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
 ENTRY_TIMEOUT_H  = 2    # max godzin na wejście
 TRADE_TIMEOUT_H  = 24   # max godzin na wynik po wejściu
-TRACK_MIN_SCORE  = 12   # śledź tylko setupy >= tego progu
+TRACK_MIN_SCORE  = 10   # śledź setupy >= tego progu
 
 
 # ── CryptoCompare API ─────────────────────────────────────────────────────────
@@ -323,23 +325,53 @@ def _hits(candle: dict, price: float, direction: str, side: str) -> bool:
     return False
 
 
+def _get_sheet():
+    """Zwraca arkusz Google Sheets."""
+    creds_json = os.getenv("GOOGLE_CREDENTIALS")
+    creds_dict = json.loads(creds_json)
+    creds = Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    client = gspread.authorize(creds)
+    sheet  = client.open_by_key(SHEET_ID).sheet1
+
+    # Dodaj nagłówek jeśli arkusz pusty
+    if sheet.row_count == 0 or not sheet.row_values(1):
+        sheet.append_row([
+            "Data alertu", "Typ", "Kierunek", "Score",
+            "Cena alertu", "W1", "SL", "TP1", "TP2", "RR",
+            "Wejście o", "Wynik", "Ruch $"
+        ])
+    return sheet
+
+
 def _log_result(s: dict, result: str, entry_ts, move: float):
-    """Dopisuje wynik do setup_log.csv."""
-    write_header = not os.path.exists(LOG_FILE)
-    alert_dt  = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
-    entry_dt  = datetime.utcfromtimestamp(entry_ts).strftime("%H:%M") if entry_ts else "-"
-    tp2_str   = f"{s['tps'][1]:.2f}" if len(s["tps"]) > 1 else "-"
+    """Dopisuje wynik do Google Sheets."""
+    try:
+        sheet    = _get_sheet()
+        alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
+        entry_dt = datetime.utcfromtimestamp(entry_ts).strftime("%H:%M") if entry_ts else "-"
+        tp2_val  = s["tps"][1] if len(s["tps"]) > 1 else "-"
 
-    row = (f"{alert_dt},{s['type']},{s['direction']},{s['score']},"
-           f"{s['price_at_alert']:.2f},{s['entries'][0]:.2f},"
-           f"{s['sl']:.2f},{s['tps'][0]:.2f},{tp2_str},"
-           f"{s['rr']:.1f},{entry_dt},{result},{move:.2f}\n")
-
-    with open(LOG_FILE, "a") as f:
-        if write_header:
-            f.write("alert_time,type,direction,score,price_at_alert,"
-                    "w1,sl,tp1,tp2,rr,entry_time,result,move_usd\n")
-        f.write(row)
+        sheet.append_row([
+            alert_dt,
+            s["type"],
+            s["direction"],
+            s["score"],
+            s["price_at_alert"],
+            s["entries"][0],
+            s["sl"],
+            s["tps"][0],
+            tp2_val,
+            s["rr"],
+            entry_dt,
+            result,
+            round(move, 2),
+        ])
+        print(f"[sheets] Zapisano: {s['type']} {s['direction']} → {result}")
+    except Exception as e:
+        print(f"[sheets] Blad zapisu: {e}")
 
 
 def check_pending_setups(candles_m15: list[dict]):
