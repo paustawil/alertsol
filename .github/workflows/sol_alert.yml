@@ -13,11 +13,14 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Przywróć ostatni alert (anty-spam)
+      - name: Przywroc dane (anty-spam + tracking)
         uses: actions/cache/restore@v4
         with:
-          path: last_alert.json
-          key: last-alert-cache
+          path: |
+            last_alert.json
+            pending_setups.json
+            setup_log.csv
+          key: sol-alert-data
 
       - name: Ustaw Python
         uses: actions/setup-python@v5
@@ -33,9 +36,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python sol_alert.py
 
-      - name: Zapisz ostatni alert (anty-spam)
+      - name: Zapisz dane (anty-spam + tracking)
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: last_alert.json
-          key: last-alert-cache
+          path: |
+            last_alert.json
+            pending_setups.json
+            setup_log.csv
+          key: sol-alert-data

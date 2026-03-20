@@ -16,35 +16,40 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
 SYMBOL          = "SOLUSDT"
 MIN_SCORE       = 11          # Minimum punktów żeby wysłać alert
 COOLDOWN_HOURS  = 4           # Ile godzin ciszy po tym samym setupie
-LAST_ALERT_FILE = "last_alert.json"
+LAST_ALERT_FILE  = "last_alert.json"
+PENDING_FILE     = "pending_setups.json"
+LOG_FILE         = "setup_log.csv"
+ENTRY_TIMEOUT_H  = 2    # max godzin na wejście
+TRADE_TIMEOUT_H  = 24   # max godzin na wynik po wejściu
+TRACK_MIN_SCORE  = 12   # śledź tylko setupy >= tego progu
 
 
-# ── Bybit API ─────────────────────────────────────────────────────────────────
-INTERVAL_MAP = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
+# ── CryptoCompare API ─────────────────────────────────────────────────────────
+CC_ENDPOINTS = {
+    "15m": ("histominute", 15),
+    "1h":  ("histohour",    1),
+}
 
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
-    """Pobiera dane OHLCV z Bybit (bez klucza API, brak geo-restrykcji)."""
+    """Pobiera dane OHLCV z CryptoCompare (bez klucza API, działa globalnie)."""
+    endpoint, aggregate = CC_ENDPOINTS.get(interval, ("histominute", 15))
+    fsym = symbol.replace("USDT", "").replace("USD", "")  # SOLUSDT -> SOL
+
     r = requests.get(
-        "https://api.bybit.com/v5/market/kline",
-        params={
-            "category": "linear",
-            "symbol":   symbol,
-            "interval": INTERVAL_MAP.get(interval, interval),
-            "limit":    limit,
-        },
+        f"https://min-api.cryptocompare.com/data/v2/{endpoint}",
+        params={"fsym": fsym, "tsym": "USDT", "limit": limit, "aggregate": aggregate},
         timeout=10
     )
     r.raise_for_status()
-    # Bybit zwraca dane od najnowszych — odwracamy żeby mieć chronologicznie
-    rows = r.json()["result"]["list"][::-1]
+    rows = r.json()["Data"]["Data"]
     return [
         {
-            "time":   int(d[0]),
-            "open":   float(d[1]),
-            "high":   float(d[2]),
-            "low":    float(d[3]),
-            "close":  float(d[4]),
-            "volume": float(d[5]),
+            "time":   d["time"],
+            "open":   float(d["open"]),
+            "high":   float(d["high"]),
+            "low":    float(d["low"]),
+            "close":  float(d["close"]),
+            "volume": float(d["volumefrom"]),
         }
         for d in rows
     ]
@@ -281,6 +286,133 @@ def check_breakout_retest(candles_m15, candles_h1, rng) -> list[dict]:
     return setups
 
 
+# ── Śledzenie setupów ────────────────────────────────────────────────────────
+def save_pending_setup(setup: dict, current_price: float):
+    """Zapisuje setup do listy oczekujących na weryfikację."""
+    pending = []
+    if os.path.exists(PENDING_FILE):
+        with open(PENDING_FILE) as f:
+            pending = json.load(f)
+
+    pending.append({
+        "alert_time":      datetime.now(timezone.utc).isoformat(),
+        "alert_timestamp": int(datetime.now(timezone.utc).timestamp()),
+        "type":            setup["type"],
+        "direction":       setup["direction"],
+        "score":           setup["total"],
+        "price_at_alert":  round(current_price, 2),
+        "entries":         setup["entries"],
+        "sl":              setup["sl"],
+        "tps":             setup["tps"],
+        "rr":              setup["rr"],
+        "entry_hit_at":    None,
+    })
+
+    with open(PENDING_FILE, "w") as f:
+        json.dump(pending, f, indent=2)
+
+
+def _hits(candle: dict, price: float, direction: str, side: str) -> bool:
+    """Czy świeca osiągnęła dany poziom?"""
+    if side == "entry":
+        return candle["low"] <= price if direction == "long" else candle["high"] >= price
+    if side == "sl":
+        return candle["low"] <= price if direction == "long" else candle["high"] >= price
+    if side == "tp":
+        return candle["high"] >= price if direction == "long" else candle["low"] <= price
+    return False
+
+
+def _log_result(s: dict, result: str, entry_ts, move: float):
+    """Dopisuje wynik do setup_log.csv."""
+    write_header = not os.path.exists(LOG_FILE)
+    alert_dt  = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
+    entry_dt  = datetime.utcfromtimestamp(entry_ts).strftime("%H:%M") if entry_ts else "-"
+    tp2_str   = f"{s['tps'][1]:.2f}" if len(s["tps"]) > 1 else "-"
+
+    row = (f"{alert_dt},{s['type']},{s['direction']},{s['score']},"
+           f"{s['price_at_alert']:.2f},{s['entries'][0]:.2f},"
+           f"{s['sl']:.2f},{s['tps'][0]:.2f},{tp2_str},"
+           f"{s['rr']:.1f},{entry_dt},{result},{move:.2f}\n")
+
+    with open(LOG_FILE, "a") as f:
+        if write_header:
+            f.write("alert_time,type,direction,score,price_at_alert,"
+                    "w1,sl,tp1,tp2,rr,entry_time,result,move_usd\n")
+        f.write(row)
+
+
+def check_pending_setups(candles_m15: list[dict]):
+    """Weryfikuje oczekujące setupy na podstawie aktualnych świec."""
+    if not os.path.exists(PENDING_FILE):
+        return
+
+    with open(PENDING_FILE) as f:
+        pending = json.load(f)
+
+    if not pending:
+        return
+
+    now_ts       = int(datetime.now(timezone.utc).timestamp())
+    still_pending = []
+
+    for s in pending:
+        age_h       = (now_ts - s["alert_timestamp"]) / 3600
+        after_alert = [c for c in candles_m15 if c["time"] > s["alert_timestamp"]]
+        w1, sl      = s["entries"][0], s["sl"]
+        tp1         = s["tps"][0]
+        tp2         = s["tps"][1] if len(s["tps"]) > 1 else None
+        d           = s["direction"]
+
+        # ── Sprawdź czy wejście zostało osiągnięte ────────────────────────────
+        if s["entry_hit_at"] is None:
+            entry_hit_at = next(
+                (c["time"] for c in after_alert if _hits(c, w1, d, "entry")),
+                None
+            )
+            if entry_hit_at is None:
+                if age_h > ENTRY_TIMEOUT_H:
+                    _log_result(s, "nie weszlo", None, 0)
+                    print(f"[tracking] {s['type']} {d} [{s['score']}/15]: nie weszlo")
+                else:
+                    still_pending.append(s)
+                continue
+            s["entry_hit_at"] = entry_hit_at
+
+        # ── Szukaj TP / SL po wejściu ─────────────────────────────────────────
+        after_entry = [c for c in candles_m15 if c["time"] >= s["entry_hit_at"]]
+        result, move = None, 0.0
+
+        for c in after_entry:
+            sl_hit  = _hits(c, sl,  d, "sl")
+            tp2_hit = tp2 and _hits(c, tp2, d, "tp")
+            tp1_hit = _hits(c, tp1, d, "tp")
+
+            if sl_hit and (tp1_hit or tp2_hit):
+                result, move = "SL", round(abs(sl - w1), 2)
+                break
+            if tp2_hit:
+                result, move = "TP2", round(abs(tp2 - w1), 2)
+                break
+            if tp1_hit:
+                result, move = "TP1", round(abs(tp1 - w1), 2)
+                break
+            if sl_hit:
+                result, move = "SL", round(abs(sl - w1), 2)
+                break
+
+        if result:
+            _log_result(s, result, s["entry_hit_at"], move)
+            print(f"[tracking] {s['type']} {d} [{s['score']}/15]: {result} ${move:.2f}")
+        elif age_h > TRADE_TIMEOUT_H:
+            _log_result(s, "nieokreslone", s["entry_hit_at"], 0)
+        else:
+            still_pending.append(s)
+
+    with open(PENDING_FILE, "w") as f:
+        json.dump(still_pending, f, indent=2)
+
+
 # ── Anti-spam (cooldown) ──────────────────────────────────────────────────────
 def was_recently_alerted(level: float, direction: str) -> bool:
     if not os.path.exists(LAST_ALERT_FILE):
@@ -357,6 +489,9 @@ def main():
     rng         = detect_range(candles_m15)
     trend       = h1_trend(candles_h1)
 
+    # Sprawdź oczekujące setupy (weryfikacja wejść i wyników)
+    check_pending_setups(candles_m15)
+
     print(f"SOL: ${current:.2f} | Zakres: ${rng['support']}–${rng['resistance']} "
           f"(${rng['range_size']:.2f}) | Trend H1: {trend}")
 
@@ -378,7 +513,11 @@ def main():
     message = format_alert(best, current)
     send_telegram(message)
     save_alert(best["level"], best["direction"])
-    print(f"✅ Alert wysłany!  {best['type']} {best['direction']}  [{best['total']}/15]")
+    print(f"Alert wyslany! {best['type']} {best['direction']} [{best['total']}/15]")
+
+    if best["total"] >= TRACK_MIN_SCORE:
+        save_pending_setup(best, current)
+        print(f"Setup zapisany do sledzenia (score {best['total']}/15).")
 
 
 if __name__ == "__main__":
