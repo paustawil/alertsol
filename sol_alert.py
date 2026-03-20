@@ -469,9 +469,9 @@ def _get_sheets():
     try:
         sh2 = wb.worksheet("Wyniki")
     except gspread.WorksheetNotFound:
-        sh2 = wb.add_worksheet("Wyniki", rows=1000, cols=12)
+        sh2 = wb.add_worksheet("Wyniki", rows=1000, cols=13)
         sh2.append_row(["Data alertu", "Model", "Typ", "Kierunek", "Score",
-                         "W1", "SL", "TP1", "TP2", "RR", "Wejscie o", "Wynik", "Ruch $"])
+                         "W1", "SL", "TP1", "TP2", "RR", "Wejscie o", "Wyjscie o", "Wynik", "Ruch $"])
 
     return sh1, sh2
 
@@ -505,12 +505,13 @@ def log_to_alerty(model: str, filter_passed: bool, setup: dict, current_price: f
         print(f"[sheets] Blad Alerty: {e}")
 
 
-def log_to_wyniki(s: dict, result: str, entry_ts, move: float):
+def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float):
     """Zapisuje wynik rozwiązanego setupu do Sheet 2."""
     try:
         _, sh2   = _get_sheets()
         alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
-        entry_dt = datetime.utcfromtimestamp(entry_ts).strftime("%H:%M") if entry_ts else "-"
+        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else "-"
+        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else "-"
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
         sh2.append_row([
@@ -523,9 +524,9 @@ def log_to_wyniki(s: dict, result: str, entry_ts, move: float):
             tps[0] if tps else "-",
             tps[1] if len(tps) > 1 else "-",
             s.get("rr", "-"),
-            entry_dt, result, round(move, 2),
+            entry_dt, exit_dt, result, round(move, 2),
         ])
-        print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f}")
+        print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f} [{entry_dt}-{exit_dt}]")
     except Exception as e:
         print(f"[sheets] Blad Wyniki: {e}")
 
@@ -589,7 +590,7 @@ def check_pending(candles_m15: list[dict]):
             hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry")), None)
             if hit is None:
                 if age_h > ENTRY_TIMEOUT_H:
-                    log_to_wyniki(s, "nie weszlo", None, 0)
+                    log_to_wyniki(s, "nie weszlo", None, None, 0)
                     print(f"[pending] {s['model']} {d}: nie weszlo")
                 else:
                     still_pending.append(s)
@@ -599,25 +600,26 @@ def check_pending(candles_m15: list[dict]):
         after_entry  = [c for c in candles_m15 if c["time"] >= s["entry_hit_at"]]
         result, move = None, 0.0
 
+        exit_ts = None
         for c in after_entry:
             sl_hit  = _hits(c, sl,  d, "sl")
             tp2_hit = tp2 and _hits(c, tp2, d, "tp")
             tp1_hit = tp1 and _hits(c, tp1, d, "tp")
 
             if sl_hit and (tp1_hit or tp2_hit):
-                result, move = "SL", round(abs(sl - w1), 2); break
+                result, move, exit_ts = "SL",  round(abs(sl  - w1), 2), c["time"]; break
             if tp2_hit:
-                result, move = "TP2", round(abs(tp2 - w1), 2); break
+                result, move, exit_ts = "TP2", round(abs(tp2 - w1), 2), c["time"]; break
             if tp1_hit:
-                result, move = "TP1", round(abs(tp1 - w1), 2); break
+                result, move, exit_ts = "TP1", round(abs(tp1 - w1), 2), c["time"]; break
             if sl_hit:
-                result, move = "SL",  round(abs(sl - w1), 2); break
+                result, move, exit_ts = "SL",  round(abs(sl  - w1), 2), c["time"]; break
 
         if result:
-            log_to_wyniki(s, result, s["entry_hit_at"], move)
+            log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, move)
             print(f"[pending] {s['model']} {d}: {result} ${move:.2f}")
         elif age_h > TRADE_TIMEOUT_H:
-            log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], 0)
+            log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, 0)
         else:
             still_pending.append(s)
 
