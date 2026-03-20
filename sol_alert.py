@@ -14,36 +14,43 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN",  "8645260464:AAGe_uTew0H1gJnijdcR7oav_A4U8n1HLHI")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
 SYMBOL          = "SOLUSDT"
-MIN_SCORE       = 11          # Minimum punktów żeby wysłać alert
-COOLDOWN_HOURS  = 4           # Ile godzin ciszy po tym samym setupie
+MIN_SCORE       = 11
+COOLDOWN_HOURS  = 4
 LAST_ALERT_FILE = "last_alert.json"
 
 
-# ── Binance API ───────────────────────────────────────────────────────────────
+# ── Bybit API ─────────────────────────────────────────────────────────────────
+INTERVAL_MAP = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
+
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
-    """Pobiera dane OHLCV z Binance (bez klucza API)."""
+    """Pobiera dane OHLCV z Bybit (bez klucza API, brak geo-restrykcji)."""
     r = requests.get(
-        "https://api.binance.com/api/v3/klines",
-        params={"symbol": symbol, "interval": interval, "limit": limit},
+        "https://api.bybit.com/v5/market/kline",
+        params={
+            "category": "linear",
+            "symbol":   symbol,
+            "interval": INTERVAL_MAP.get(interval, interval),
+            "limit":    limit,
+        },
         timeout=10
     )
     r.raise_for_status()
+    rows = r.json()["result"]["list"][::-1]
     return [
         {
-            "time":   d[0],
+            "time":   int(d[0]),
             "open":   float(d[1]),
             "high":   float(d[2]),
             "low":    float(d[3]),
             "close":  float(d[4]),
             "volume": float(d[5]),
         }
-        for d in r.json()
+        for d in rows
     ]
 
 
 # ── Wskaźniki techniczne ──────────────────────────────────────────────────────
 def calc_atr(candles: list[dict], period: int = 14) -> float:
-    """Average True Range."""
     trs = [
         max(c["high"] - c["low"],
             abs(c["high"] - p["close"]),
@@ -54,7 +61,6 @@ def calc_atr(candles: list[dict], period: int = 14) -> float:
 
 
 def h1_trend(candles_h1: list[dict]) -> str:
-    """Trend na H1: bullish / bearish / neutral."""
     closes = [c["close"] for c in candles_h1[-20:]]
     fast = sum(closes[-5:])  / 5
     slow = sum(closes[-20:]) / 20
@@ -65,7 +71,6 @@ def h1_trend(candles_h1: list[dict]) -> str:
 
 
 def impulse_strength(candles_m15: list[dict]) -> int:
-    """Siła impulsu poprzedzającego setup (0–3)."""
     atr = calc_atr(candles_m15)
     sizes = [abs(c["close"] - c["open"]) for c in candles_m15[-15:-5]]
     avg   = sum(sizes) / len(sizes) if sizes else 0
@@ -78,15 +83,11 @@ def impulse_strength(candles_m15: list[dict]) -> int:
 
 # ── Wykrywanie zakresu ────────────────────────────────────────────────────────
 def detect_range(candles: list[dict], n: int = 32) -> dict:
-    """
-    Analizuje ostatnie n świec M15 (~8h) i zwraca:
-    resistance, support, range_size, r_touches, s_touches
-    """
     recent     = candles[-n:]
     resistance = max(c["high"] for c in recent)
     support    = min(c["low"]  for c in recent)
     rng_size   = resistance - support
-    zone       = rng_size * 0.06  # 6% zakresu = strefa dotknięcia
+    zone       = rng_size * 0.06
 
     return {
         "resistance": round(resistance, 2),
@@ -99,7 +100,6 @@ def detect_range(candles: list[dict], n: int = 32) -> dict:
 
 # ── Punktacja ─────────────────────────────────────────────────────────────────
 def score_range_size(size: float) -> int:
-    """Filar 2: Potencjał ruchu (sweet spot ~1–2 USD)."""
     if 1.2 <= size <= 2.0: return 3
     if 0.8 <= size <  1.2 or 2.0 < size <= 3.0: return 2
     if 0.5 <= size <  0.8 or 3.0 < size <= 4.0: return 1
@@ -107,7 +107,6 @@ def score_range_size(size: float) -> int:
 
 
 def score_rr(rr: float) -> int:
-    """Filar 4: Relacja RR."""
     if rr >= 2.5: return 3
     if rr >= 2.0: return 2
     if rr >= 1.5: return 1
@@ -137,11 +136,6 @@ def build_scores(touches: int, rng_size: float, trend: str,
 
 # ── Kierunek ruchu ceny ───────────────────────────────────────────────────────
 def is_moving_toward(candles: list[dict], direction: str) -> bool:
-    """
-    Sprawdza czy cena zmierza w danym kierunku (ostatnie 4 świece).
-    direction='down' → cena opada (w stronę wsparcia)
-    direction='up'   → cena rośnie (w stronę oporu)
-    """
     closes = [c["close"] for c in candles[-4:]]
     if direction == "down":
         return closes[-1] < closes[0]
@@ -150,11 +144,6 @@ def is_moving_toward(candles: list[dict], direction: str) -> bool:
 
 # ── Setup: Range Trading ──────────────────────────────────────────────────────
 def check_range_setup(candles_m15, candles_h1, rng) -> list[dict]:
-    """
-    Alert wyprzedzający: wysyłany gdy cena zbliża się do granicy zakresu,
-    zanim tam dotrze — żeby zdążyć ustawić zlecenia limit.
-    Strefa alertu: 10–35% szerokości zakresu przed poziomem.
-    """
     setups  = []
     current = candles_m15[-1]["close"]
     trend   = h1_trend(candles_h1)
@@ -163,10 +152,9 @@ def check_range_setup(candles_m15, candles_h1, rng) -> list[dict]:
     if size < 0.5:
         return []
 
-    near  = size * 0.10   # minimalny dystans od poziomu (już "przy nim")
-    far   = size * 0.35   # maksymalny dystans (jeszcze za daleko)
+    near = size * 0.10
+    far  = size * 0.35
 
-    # ── Long przy wsparciu ────────────────────────────────────────────────────
     dist_to_support = current - rng["support"]
     if (trend != "bearish"
             and near <= dist_to_support <= far
@@ -188,7 +176,6 @@ def check_range_setup(candles_m15, candles_h1, rng) -> list[dict]:
                     "entries": entries, "sl": sl, "tps": [tp1, tp2], "rr": rr,
                 })
 
-    # ── Short przy oporze ─────────────────────────────────────────────────────
     dist_to_resistance = rng["resistance"] - current
     if (trend != "bullish"
             and near <= dist_to_resistance <= far
@@ -215,15 +202,13 @@ def check_range_setup(candles_m15, candles_h1, rng) -> list[dict]:
 
 # ── Setup: Breakout Retest ────────────────────────────────────────────────────
 def check_breakout_retest(candles_m15, candles_h1, rng) -> list[dict]:
-    """Retest wybitego poziomu (wsparcia lub oporu)."""
     setups   = []
     current  = candles_m15[-1]["close"]
     trend    = h1_trend(candles_h1)
     size     = rng["range_size"]
     lookback = candles_m15[-12:-1]
-    zone     = size * 0.04  # 4% zakresu = strefa retestu
+    zone     = size * 0.04
 
-    # ── Bullish retest ────────────────────────────────────────────────────────
     if trend != "bearish":
         for c in lookback:
             if c["close"] > rng["resistance"] and c["close"] > c["open"]:
@@ -246,7 +231,6 @@ def check_breakout_retest(candles_m15, candles_h1, rng) -> list[dict]:
                             })
                 break
 
-    # ── Bearish retest ────────────────────────────────────────────────────────
     if trend != "bullish":
         for c in lookback:
             if c["close"] < rng["support"] and c["open"] > c["close"]:
@@ -272,7 +256,7 @@ def check_breakout_retest(candles_m15, candles_h1, rng) -> list[dict]:
     return setups
 
 
-# ── Anti-spam (cooldown) ──────────────────────────────────────────────────────
+# ── Anti-spam ─────────────────────────────────────────────────────────────────
 def was_recently_alerted(level: float, direction: str) -> bool:
     if not os.path.exists(LAST_ALERT_FILE):
         return False
@@ -313,11 +297,11 @@ def send_telegram(text: str):
 
 
 def format_alert(s: dict, current_price: float) -> str:
-    sc        = s["scores"]
-    dir_icon  = "📈 Long" if s["direction"] == "long" else "📉 Short"
-    dist      = abs(current_price - s["level"])
-    entries   = "\n".join(f"  W{i+1}: ${e:.2f}" for i, e in enumerate(s["entries"]))
-    tps       = "\n".join(
+    sc       = s["scores"]
+    dir_icon = "📈 Long" if s["direction"] == "long" else "📉 Short"
+    dist     = abs(current_price - s["level"])
+    entries  = "\n".join(f"  W{i+1}: ${e:.2f}" for i, e in enumerate(s["entries"]))
+    tps      = "\n".join(
         f"  TP{i+1}: ${tp:.2f}  (+${abs(tp - s['entries'][0]):.2f})"
         for i, tp in enumerate(s["tps"])
     )
@@ -340,7 +324,7 @@ def format_alert(s: dict, current_price: float) -> str:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] SOL Alert – start")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] SOL Alert - start")
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
@@ -348,7 +332,7 @@ def main():
     rng         = detect_range(candles_m15)
     trend       = h1_trend(candles_h1)
 
-    print(f"SOL: ${current:.2f} | Zakres: ${rng['support']}–${rng['resistance']} "
+    print(f"SOL: ${current:.2f} | Zakres: ${rng['support']}-${rng['resistance']} "
           f"(${rng['range_size']:.2f}) | Trend H1: {trend}")
 
     all_setups = (
@@ -369,7 +353,7 @@ def main():
     message = format_alert(best, current)
     send_telegram(message)
     save_alert(best["level"], best["direction"])
-    print(f"✅ Alert wysłany!  {best['type']} {best['direction']}  [{best['total']}/15]")
+    print(f"Alert wyslany! {best['type']} {best['direction']} [{best['total']}/15]")
 
 
 if __name__ == "__main__":
