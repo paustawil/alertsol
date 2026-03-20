@@ -19,34 +19,36 @@ COOLDOWN_HOURS  = 4
 LAST_ALERT_FILE = "last_alert.json"
 
 
-# ── Bybit API ─────────────────────────────────────────────────────────────────
-INTERVAL_MAP = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
+# ── CryptoCompare API ─────────────────────────────────────────────────────────
+CC_ENDPOINTS = {
+    "15m": ("histominute", 15),
+    "1h":  ("histohour",    1),
+}
 
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
-    """Pobiera dane OHLCV z Bybit (bez klucza API, brak geo-restrykcji)."""
+    """Pobiera dane OHLCV z CryptoCompare (bez klucza API, działa globalnie)."""
+    endpoint, aggregate = CC_ENDPOINTS.get(interval, ("histominute", 15))
+    fsym = symbol.replace("USDT", "").replace("USD", "")  # SOLUSDT -> SOL
+
     r = requests.get(
-        "https://api.bybit.com/v5/market/kline",
-        params={
-            "category": "linear",
-            "symbol":   symbol,
-            "interval": INTERVAL_MAP.get(interval, interval),
-            "limit":    limit,
-        },
+        f"https://min-api.cryptocompare.com/data/v2/{endpoint}",
+        params={"fsym": fsym, "tsym": "USDT", "limit": limit, "aggregate": aggregate},
         timeout=10
     )
     r.raise_for_status()
-    rows = r.json()["result"]["list"][::-1]
+    rows = r.json()["Data"]["Data"]
     return [
         {
-            "time":   int(d[0]),
-            "open":   float(d[1]),
-            "high":   float(d[2]),
-            "low":    float(d[3]),
-            "close":  float(d[4]),
-            "volume": float(d[5]),
+            "time":   d["time"],
+            "open":   float(d["open"]),
+            "high":   float(d["high"]),
+            "low":    float(d["low"]),
+            "close":  float(d["close"]),
+            "volume": float(d["volumefrom"]),
         }
         for d in rows
     ]
+
 
 
 # ── Wskaźniki techniczne ──────────────────────────────────────────────────────
