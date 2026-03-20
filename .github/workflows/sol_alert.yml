@@ -1,10 +1,8 @@
 name: SOL Alert
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'   # Backup: GitHub schedule (może być opóźniony)
   workflow_dispatch:           # Ręczne uruchomienie (przycisk w GitHub)
-  repository_dispatch:         # Trigger z zewnętrznego crona (cron-job.org)
+  repository_dispatch:         # Trigger z cron-job.org (co 15 min)
     types: [sol-alert-trigger]
 
 jobs:
