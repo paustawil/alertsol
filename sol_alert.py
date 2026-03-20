@@ -9,6 +9,7 @@ import json
 import re
 import requests
 import anthropic
+import openai
 import gspread
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -20,6 +21,7 @@ TZ = ZoneInfo("Europe/Warsaw")
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",  "8645260464:AAGe_uTew0H1gJnijdcR7oav_A4U8n1HLHI")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
+OPENAI_KEY       = os.getenv("OPENAI_API_KEY", "")
 SYMBOL           = "SOLUSDT"
 MIN_SCORE        = 10
 COOLDOWN_HOURS   = 4
@@ -63,6 +65,159 @@ Jeśli setup znaleziony:
 
 Jeśli brak setupu:
 {"setup_found":false,"reasoning":"dlaczego brak"}"""
+
+
+# ── System prompt dla GPT (Forteca v1.0 pełna wersja) ────────────────────────
+FORTECA_GPT_PROMPT = """FORTeca v1.0 — RULES FOR SOL/USDT SETUP DETECTION AND TRADE PLAN GENERATION
+You are not a generic analyst. You must evaluate SOL/USDT only through the Forteca v1.0 framework.
+Your task is not to describe the market broadly. Your task is to decide whether there is a tradeable Forteca setup and, if yes, return a precise level-based plan.
+
+==================================================
+FORTeca CORE PHILOSOPHY
+==================================================
+1. Forteca is a setup-based model, not a prediction model. Only detect whether a high-quality setup is present now or is very close to activation.
+2. Forteca is level-based, not time-based. Entries, stop loss and targets are placed at price levels. Wick touches do not matter by themselves.
+3. Forteca does not force trades. If the market is inside messy consolidation, between levels, after an extended move with poor RR, or without a clear edge, return no setup.
+4. Forteca prioritizes quality over frequency. A weaker setup must be rejected even if some directional bias exists.
+5. Do not artificially tighten SL just to improve RR.
+6. The plan must be executable. All entries must be realistic nearby levels derived from the provided H1 and M15 data.
+
+==================================================
+TIMEFRAME LOGIC
+==================================================
+Use H1 for context and M15 for execution.
+H1 answers: dominant directional bias, major support/resistance zones, trending/reversing/ranging.
+M15 answers: executable setup, entry zone, invalidation, TP1 and TP2 placement.
+If H1 and M15 are strongly misaligned, lower setup quality significantly.
+If H1 is neutral and M15 gives only a weak local setup, do not force a trade.
+
+==================================================
+FORTeca SETUPS
+==================================================
+Only 4 setup families are valid:
+
+SETUP 1 — PULLBACK IN TREND
+H1 shows clear directional context. M15 is pulling back into a meaningful support (long) or resistance (short): prior breakout area, prior swing level turned S/R, local demand/supply zone, clustered lows/highs, H1/M15 overlap level. The pullback should look corrective, not like full structural breakdown.
+Reject if: pullback already broke prior structure in opposite direction, price is between levels, or impulse is stretched with poor RR.
+
+SETUP 2 — BOUNCE FROM KEY LEVEL
+Price reaches a strong support or resistance and reacts from it. Valid only when the level is genuinely important (repeatedly respected or clearly visible on H1).
+Reject if: level is weak or only touched once, price is chopping around the level, or RR is poor.
+
+SETUP 3 — BREAKOUT RETEST
+A meaningful level was broken with directional intent. Price is now retesting that level from the other side and holds.
+Reject if: breakout was weak, retest goes too deep through the level, or entry is already late.
+
+SETUP 4 — FALSE BREAKOUT / RECLAIM
+Price briefly breaks an important level, fails to continue, and returns back through it, trapping breakout participants.
+Reject if: the level is not important, the reclaim/rejection is weak, or price returns into noisy consolidation.
+
+==================================================
+KEY LEVEL DETECTION
+==================================================
+Derive support/resistance only from the supplied H1 and M15 OHLCV data.
+Priority: (1) obvious H1 swing highs/lows, (2) H1 breakout/breakdown levels, (3) M15 levels repeatedly respected, (4) clustered rejection highs/lows, (5) recent local extremes controlling current price.
+A level is stronger if: respected multiple times, caused impulsive reaction, exists on both H1 and M15, is recent and relevant.
+
+==================================================
+FORTeca 5-PILLAR SCORING
+==================================================
+Each pillar is an integer 0-3. Maximum total = 15.
+
+1. TREND (directional alignment, mainly H1)
+0 = H1 direction unclear or contradictory to setup
+1 = weak directional bias or partial alignment only
+2 = decent directional bias in favor of setup
+3 = clear directional bias, M15 broadly aligned
+Notes: Countertrend bounces usually cannot receive 3. If H1 is flat/ranging, trend usually cannot exceed 1.
+
+2. STRUCTURE (how clean is market structure relative to setup)
+0 = chaotic, no readable sequence, or structure against setup
+1 = setup idea exists but structure is damaged or messy
+2 = structure is readable and mostly supportive
+3 = clean structure clearly matching setup logic
+
+3. LEVEL (quality of the actual level where trade is built)
+0 = no meaningful level
+1 = weak or questionable level
+2 = relevant level with visible technical importance
+3 = strong, obvious, recent, repeatedly respected or clearly broken/retested key level
+Note: A setup should almost never be accepted if Level < 2.
+
+4. MOMENTUM (whether price behavior supports expected move)
+0 = momentum clearly against setup
+1 = mixed momentum, weak confirmation
+2 = acceptable support from price behavior
+3 = strong supportive price behavior
+Favor impulsive moves in setup direction. Favor visible slowdown/stalling against opposing side.
+
+5. RR (reward-to-risk to TP2 from average layered entry)
+Compute: average_entry = mean(W1,W2,W3), risk = |average_entry - SL|, reward = |TP2 - average_entry|, rr = reward/risk
+0 = rr < 1.2
+1 = rr 1.2 to 1.79
+2 = rr 1.8 to 2.49
+3 = rr >= 2.5
+Do not manipulate SL to force better RR.
+
+==================================================
+VALID SETUP THRESHOLD
+==================================================
+Return setup_found=true ONLY if ALL are true:
+- total score >= 10
+- Level >= 2
+- RR >= 1.8
+- setup logic is clear and executable
+- SL is placed beyond true invalidation, not artificially tight
+
+Score 10-11 = acceptable. Score 12-13 = strong. Score 14-15 = exceptional and rare. Do not overuse 14-15.
+
+==================================================
+ENTRY MODEL — W1 / W2 / W3
+==================================================
+For long: W1 = top of buy zone (highest), W2 = middle, W3 = deepest (lowest). Entries listed highest to lowest.
+For short: W1 = bottom of sell zone (lowest), W2 = middle, W3 = deepest (highest). Entries listed lowest to highest.
+Use three entries only if a real zone exists. Keep zone tight enough to represent one idea.
+
+==================================================
+STOP LOSS LOGIC
+==================================================
+SL must invalidate the idea, not just the exact entry.
+Long: SL below the support/reclaim/structural low defining the setup.
+Short: SL above the resistance/retest/structural high defining the setup.
+Never tighten SL purely to improve RR.
+
+==================================================
+TARGET LOGIC
+==================================================
+TP1 = first realistic reaction point (nearest opposing intraday structure).
+TP2 = main Forteca target, next meaningful level in setup direction, real payoff target for RR calculation.
+TP2 must always be farther than TP1 in trade direction. Targets must be technically grounded.
+
+==================================================
+WHEN TO RETURN NO SETUP
+==================================================
+Return setup_found=false if: market in messy consolidation, price between levels, H1/M15 materially conflicting, entry already late, RR to TP2 below 1.8, no clear invalidation level, no clean Forteca setup among the 4 families.
+
+==================================================
+TECHNICAL NORMALIZATION RULES
+==================================================
+- Swing high: high is higher than at least 2 candles before and 2 after.
+- Swing low: low is lower than at least 2 candles before and 2 after.
+- Meaningful breakout: price clearly exceeds a visible prior level and is not immediately fully reversed.
+- Strong level: H1 swing level, OR 2+ visible reactions, OR recent breakout/retest level, OR aligns on H1 and M15.
+- Late entry filter: reject if price is already too extended toward TP1/TP2 and remaining RR is unattractive.
+- Consolidation filter: if recent M15 candles overlap heavily and alternate direction without clean reaction, treat as consolidation and reject unless very clear false breakout/reclaim exists.
+
+==================================================
+OUTPUT FORMAT
+==================================================
+Return exactly one JSON object. No markdown. No extra commentary. No alternative scenarios.
+
+If setup found:
+{"setup_found":true,"setup_type":"setup name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70,88.45],"sl":88.10,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"short Forteca-based justification","invalidation":"condition that breaks the idea"}
+
+If no setup:
+{"setup_found":false,"reasoning":"why no setup exists"}"""
 
 
 # ── CryptoCompare API ─────────────────────────────────────────────────────────
@@ -254,6 +409,40 @@ def call_claude(candles_m15: list[dict], candles_h1: list[dict], current_price: 
             return json.loads(match.group())
     except Exception as e:
         print(f"[claude] Blad: {e}")
+    return None
+
+
+# ── GPT API ───────────────────────────────────────────────────────────────────
+def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+    if not OPENAI_KEY:
+        print("[gpt] Brak klucza API.")
+        return None
+    try:
+        m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+            for c in candles_m15[-60:]
+        )
+        h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+            for c in candles_h1[-24:]
+        )
+        user_msg = f"Aktualna cena SOL: ${current_price:.2f}\n\nM15 (ostatnie 60 swiec):\n{m15_csv}\n\nH1 (ostatnie 24 swiece):\n{h1_csv}"
+
+        client   = openai.OpenAI(api_key=OPENAI_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=1024,
+            messages=[
+                {"role": "system", "content": FORTECA_GPT_PROMPT},
+                {"role": "user",   "content": user_msg}
+            ]
+        )
+        text  = response.choices[0].message.content.strip()
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as e:
+        print(f"[gpt] Blad: {e}")
     return None
 
 
@@ -530,10 +719,10 @@ def main():
 
     if claude_result:
         if claude_result.get("setup_found"):
-            score = claude_result.get("score", 0)
+            score     = claude_result.get("score", 0)
             direction = claude_result.get("direction", "-")
-            entries = claude_result.get("entries", [current])
-            level   = entries[0] if entries else current
+            entries   = claude_result.get("entries", [current])
+            level     = entries[0] if entries else current
             print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
             log_to_alerty("Claude", filter_passed, claude_result, current)
             if score >= MIN_SCORE and not was_alerted("Claude", level, direction):
@@ -544,6 +733,27 @@ def main():
             print(f"[claude] Brak setupu: {claude_result.get('reasoning', '')}")
     else:
         print("[claude] Brak odpowiedzi.")
+
+    # ── 3. GPT ────────────────────────────────────────────────────────────────
+    print("[gpt] Wysylam dane do analizy...")
+    gpt_result = call_gpt(candles_m15, candles_h1, current)
+
+    if gpt_result:
+        if gpt_result.get("setup_found"):
+            score     = gpt_result.get("score", 0)
+            direction = gpt_result.get("direction", "-")
+            entries   = gpt_result.get("entries", [current])
+            level     = entries[0] if entries else current
+            print(f"[gpt] Setup: {gpt_result.get('setup_type')} {direction} [{score}/15]")
+            log_to_alerty("GPT", filter_passed, gpt_result, current)
+            if score >= MIN_SCORE and not was_alerted("GPT", level, direction):
+                send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+                save_alerted("GPT", level, direction)
+                save_pending(gpt_result, "GPT", current)
+        else:
+            print(f"[gpt] Brak setupu: {gpt_result.get('reasoning', '')}")
+    else:
+        print("[gpt] Brak odpowiedzi.")
 
 
 if __name__ == "__main__":
