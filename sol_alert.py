@@ -745,11 +745,10 @@ def main():
     if best_algo:
         print(f"[algo] Setup: {best_algo['type']} {best_algo['direction']} [{best_algo['total']}/15]")
         log_to_alerty("Algorytm", filter_passed, best_algo, current)
-        if best_algo["total"] >= MIN_SCORE:
-            save_pending(best_algo, "Algorytm", current)
-            if not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
-                send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
-                save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
+        save_pending(best_algo, "Algorytm", current)
+        if best_algo["total"] >= MIN_SCORE and not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
+            send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
+            save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
     else:
         print("[algo] Brak setupu.")
 
@@ -765,11 +764,10 @@ def main():
             level     = entries[0] if entries else current
             print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
             log_to_alerty("Claude", filter_passed, claude_result, current)
-            if score >= MIN_SCORE:
-                save_pending(claude_result, "Claude", current)
-                if not was_alerted("Claude", level, direction):
-                    send_telegram(format_alert("Claude", claude_result, current, filter_passed))
-                    save_alerted("Claude", level, direction)
+            save_pending(claude_result, "Claude", current)
+            if score >= MIN_SCORE and not was_alerted("Claude", level, direction):
+                send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+                save_alerted("Claude", level, direction)
         else:
             print(f"[claude] Brak setupu: {claude_result.get('reasoning', '')}")
     else:
@@ -787,11 +785,10 @@ def main():
             level     = entries[0] if entries else current
             print(f"[gpt] Setup: {gpt_result.get('setup_type')} {direction} [{score}/15]")
             log_to_alerty("GPT", filter_passed, gpt_result, current)
-            if score >= MIN_SCORE:
-                save_pending(gpt_result, "GPT", current)
-                if not was_alerted("GPT", level, direction):
-                    send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
-                    save_alerted("GPT", level, direction)
+            save_pending(gpt_result, "GPT", current)
+            if score >= MIN_SCORE and not was_alerted("GPT", level, direction):
+                send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+                save_alerted("GPT", level, direction)
         else:
             print(f"[gpt] Brak setupu: {gpt_result.get('reasoning', '')}")
     else:
