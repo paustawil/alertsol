@@ -42,5 +42,28 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "entries_hit": 1
+  },
+  {
+    "alert_time": "2026-03-21T23:15:50.844293+00:00",
+    "alert_timestamp": 1774134950,
+    "model": "Claude",
+    "type": "Range trading",
+    "direction": "long",
+    "score": 11,
+    "price_at_alert": 89.72,
+    "entries": [
+      89.72,
+      89.62,
+      89.52
+    ],
+    "sl": 89.35,
+    "tps": [
+      90.1,
+      90.28
+    ],
+    "rr": 2.44,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "entries_hit": 1
   }
 ]
