@@ -625,7 +625,7 @@ def check_pending(candles_m15: list[dict]):
             except Exception:
                 pass
 
-        after_entry  = [c for c in candles_m15 if c["time"] >= s["entry_hit_at"]]
+        after_entry  = [c for c in candles_m15 if c["time"] > s["entry_hit_at"]]
         result, move = None, 0.0
 
         exit_ts = None
@@ -744,11 +744,14 @@ def main():
 
     if best_algo:
         print(f"[algo] Setup: {best_algo['type']} {best_algo['direction']} [{best_algo['total']}/15]")
-        log_to_alerty("Algorytm", filter_passed, best_algo, current)
-        save_pending(best_algo, "Algorytm", current)
-        if best_algo["total"] >= MIN_SCORE and not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
-            send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
+        if not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
+            log_to_alerty("Algorytm", filter_passed, best_algo, current)
+            save_pending(best_algo, "Algorytm", current)
             save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
+            if best_algo["total"] >= MIN_SCORE:
+                send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
+        else:
+            print(f"[algo] Duplikat w cooldown, pomijam.")
     else:
         print("[algo] Brak setupu.")
 
@@ -763,11 +766,14 @@ def main():
             entries   = claude_result.get("entries", [current])
             level     = entries[0] if entries else current
             print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
-            log_to_alerty("Claude", filter_passed, claude_result, current)
-            save_pending(claude_result, "Claude", current)
-            if score >= MIN_SCORE and not was_alerted("Claude", level, direction):
-                send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+            if not was_alerted("Claude", level, direction):
+                log_to_alerty("Claude", filter_passed, claude_result, current)
+                save_pending(claude_result, "Claude", current)
                 save_alerted("Claude", level, direction)
+                if score >= MIN_SCORE:
+                    send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+            else:
+                print(f"[claude] Duplikat w cooldown, pomijam.")
         else:
             print(f"[claude] Brak setupu: {claude_result.get('reasoning', '')}")
     else:
@@ -784,11 +790,14 @@ def main():
             entries   = gpt_result.get("entries", [current])
             level     = entries[0] if entries else current
             print(f"[gpt] Setup: {gpt_result.get('setup_type')} {direction} [{score}/15]")
-            log_to_alerty("GPT", filter_passed, gpt_result, current)
-            save_pending(gpt_result, "GPT", current)
-            if score >= MIN_SCORE and not was_alerted("GPT", level, direction):
-                send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+            if not was_alerted("GPT", level, direction):
+                log_to_alerty("GPT", filter_passed, gpt_result, current)
+                save_pending(gpt_result, "GPT", current)
                 save_alerted("GPT", level, direction)
+                if score >= MIN_SCORE:
+                    send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+            else:
+                print(f"[gpt] Duplikat w cooldown, pomijam.")
         else:
             print(f"[gpt] Brak setupu: {gpt_result.get('reasoning', '')}")
     else:
