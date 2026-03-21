@@ -19,5 +19,26 @@
     ],
     "rr": 2.81,
     "entry_hit_at": 1774046700
+  },
+  {
+    "alert_time": "2026-03-21T11:15:50.288485+00:00",
+    "alert_timestamp": 1774091750,
+    "model": "Claude",
+    "type": "Korekta do 50% impulsu",
+    "direction": "long",
+    "score": 11,
+    "price_at_alert": 89.86,
+    "entries": [
+      89.86,
+      89.74,
+      89.5
+    ],
+    "sl": 89.35,
+    "tps": [
+      90.5,
+      90.81
+    ],
+    "rr": 2.2,
+    "entry_hit_at": null
   }
 ]
