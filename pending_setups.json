@@ -40,5 +40,26 @@
     ],
     "rr": 2.0,
     "entry_hit_at": null
+  },
+  {
+    "alert_time": "2026-03-21T06:15:54.750785+00:00",
+    "alert_timestamp": 1774073754,
+    "model": "Claude",
+    "type": "Korekta do 50% impulsu \u2014 wej\u015bcie warstwowe w strefie 38\u201362% Fibo",
+    "direction": "long",
+    "score": 11,
+    "price_at_alert": 90.1,
+    "entries": [
+      89.8,
+      89.6,
+      89.47
+    ],
+    "sl": 88.85,
+    "tps": [
+      90.81,
+      91.5
+    ],
+    "rr": 2.1,
+    "entry_hit_at": null
   }
 ]
