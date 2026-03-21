@@ -505,8 +505,8 @@ def log_to_alerty(model: str, filter_passed: bool, setup: dict, current_price: f
         print(f"[sheets] Blad Alerty: {e}")
 
 
-def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float):
-    """Zapisuje wynik rozwiązanego setupu do Sheet 2."""
+def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float) -> bool:
+    """Zapisuje wynik rozwiązanego setupu do Sheet 2. Zwraca True jeśli sukces."""
     try:
         _, sh2   = _get_sheets()
         alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
@@ -527,8 +527,10 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float):
             entry_dt, exit_dt, result, round(move, 2),
         ])
         print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f} [{entry_dt}-{exit_dt}]")
+        return True
     except Exception as e:
         print(f"[sheets] Blad Wyniki: {e}")
+        return False
 
 
 # ── Śledzenie setupów (pending) ───────────────────────────────────────────────
@@ -601,16 +603,18 @@ def check_pending(candles_m15: list[dict]):
             hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry")), None)
             if hit is None:
                 if age_h > ENTRY_TIMEOUT_H:
-                    log_to_wyniki(s, "nie weszlo", None, None, 0)
                     print(f"[pending] {s['model']} {d}: nie weszlo")
-                    try:
-                        send_telegram(
-                            f"⏳ <b>Nie weszło</b> [{s['model']}]\n"
-                            f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
-                            f"W1: ${w1:.2f} | SL: ${sl:.2f}"
-                        )
-                    except Exception:
-                        pass
+                    if log_to_wyniki(s, "nie weszlo", None, None, 0):
+                        try:
+                            send_telegram(
+                                f"⏳ <b>Nie weszło</b> [{s['model']}]\n"
+                                f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
+                                f"W1: ${w1:.2f} | SL: ${sl:.2f}"
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        still_pending.append(s)
                 else:
                     still_pending.append(s)
                 continue
@@ -644,17 +648,20 @@ def check_pending(candles_m15: list[dict]):
                 result, move, exit_ts = "SL",  round(abs(sl  - w1), 2), c["time"]; break
 
         if result:
-            log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, move)
             print(f"[pending] {s['model']} {d}: {result} ${move:.2f}")
-            icon = "💰" if result.startswith("TP") else "🔴"
-            try:
-                send_telegram(
-                    f"{icon} <b>{result}</b> [{s['model']}]\n"
-                    f"Setup {s['type']} {d.upper()} zamknięty\n"
-                    f"W1: ${w1:.2f} | Ruch: ${move:.2f}"
-                )
-            except Exception:
-                pass
+            if log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, move):
+                icon = "💰" if result.startswith("TP") else "🔴"
+                try:
+                    send_telegram(
+                        f"{icon} <b>{result}</b> [{s['model']}]\n"
+                        f"Setup {s['type']} {d.upper()} zamknięty\n"
+                        f"W1: ${w1:.2f} | Ruch: ${move:.2f}"
+                    )
+                except Exception:
+                    pass
+            else:
+                print(f"[pending] Blad zapisu Wyniki — setup zostaje w pending, retry za 15 min")
+                still_pending.append(s)
         elif age_h > TRADE_TIMEOUT_H:
             log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, 0)
         else:
