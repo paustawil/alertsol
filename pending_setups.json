@@ -21,27 +21,6 @@
     "entry_hit_at": 1774046700
   },
   {
-    "alert_time": "2026-03-21T05:45:43.979920+00:00",
-    "alert_timestamp": 1774071943,
-    "model": "GPT",
-    "type": "bounce from key level",
-    "direction": "short",
-    "score": 12,
-    "price_at_alert": 90.19,
-    "entries": [
-      90.6,
-      90.5,
-      90.4
-    ],
-    "sl": 90.82,
-    "tps": [
-      90.0,
-      89.4
-    ],
-    "rr": 2.0,
-    "entry_hit_at": null
-  },
-  {
     "alert_time": "2026-03-21T06:15:54.750785+00:00",
     "alert_timestamp": 1774073754,
     "model": "Claude",
