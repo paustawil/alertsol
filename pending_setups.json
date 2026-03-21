@@ -1,26 +1,5 @@
 [
   {
-    "alert_time": "2026-03-20T22:30:39.578267+00:00",
-    "alert_timestamp": 1774045839,
-    "model": "Algorytm",
-    "type": "Range",
-    "direction": "short",
-    "score": 10,
-    "price_at_alert": 89.9,
-    "entries": [
-      90.2,
-      90.45,
-      90.65
-    ],
-    "sl": 90.9,
-    "tps": [
-      89.19,
-      88.23
-    ],
-    "rr": 2.81,
-    "entry_hit_at": 1774046700
-  },
-  {
     "alert_time": "2026-03-21T11:15:50.288485+00:00",
     "alert_timestamp": 1774091750,
     "model": "Claude",
