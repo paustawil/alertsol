@@ -28,7 +28,7 @@ COOLDOWN_HOURS   = 4
 PENDING_FILE     = "pending_setups.json"
 COOLDOWN_FILE    = "last_alerts.json"
 SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
-ENTRY_TIMEOUT_H  = 2
+ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
 
 
@@ -541,6 +541,17 @@ def save_pending(setup: dict, model: str, current_price: float):
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
     tps     = [t for t in tps if t is not None]
+    new_level = entries[0] if entries else current_price
+    direction = setup.get("direction", "-")
+
+    # Nie dodawaj duplikatu — ten sam model/kierunek/poziom już w pending
+    for p in pending:
+        if (p["model"] == model
+                and p["direction"] == direction
+                and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5
+                and p["entry_hit_at"] is None):
+            print(f"[pending] Duplikat pominiêty: {model} {direction} ~${new_level:.2f}")
+            return
 
     pending.append({
         "alert_time":      datetime.now(timezone.utc).isoformat(),
@@ -592,10 +603,27 @@ def check_pending(candles_m15: list[dict]):
                 if age_h > ENTRY_TIMEOUT_H:
                     log_to_wyniki(s, "nie weszlo", None, None, 0)
                     print(f"[pending] {s['model']} {d}: nie weszlo")
+                    try:
+                        send_telegram(
+                            f"⏳ <b>Nie weszło</b> [{s['model']}]\n"
+                            f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
+                            f"W1: ${w1:.2f} | SL: ${sl:.2f}"
+                        )
+                    except Exception:
+                        pass
                 else:
                     still_pending.append(s)
                 continue
             s["entry_hit_at"] = hit
+            try:
+                send_telegram(
+                    f"✅ <b>ENTRY HIT</b> [{s['model']}]\n"
+                    f"Setup {s['type']} {d.upper()} aktywowany!\n"
+                    f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
+                    f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
+                )
+            except Exception:
+                pass
 
         after_entry  = [c for c in candles_m15 if c["time"] >= s["entry_hit_at"]]
         result, move = None, 0.0
@@ -618,6 +646,15 @@ def check_pending(candles_m15: list[dict]):
         if result:
             log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, move)
             print(f"[pending] {s['model']} {d}: {result} ${move:.2f}")
+            icon = "💰" if result.startswith("TP") else "🔴"
+            try:
+                send_telegram(
+                    f"{icon} <b>{result}</b> [{s['model']}]\n"
+                    f"Setup {s['type']} {d.upper()} zamknięty\n"
+                    f"W1: ${w1:.2f} | Ruch: ${move:.2f}"
+                )
+            except Exception:
+                pass
         elif age_h > TRADE_TIMEOUT_H:
             log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, 0)
         else:
@@ -708,10 +745,10 @@ def main():
     if best_algo:
         print(f"[algo] Setup: {best_algo['type']} {best_algo['direction']} [{best_algo['total']}/15]")
         log_to_alerty("Algorytm", filter_passed, best_algo, current)
+        save_pending(best_algo, "Algorytm", current)
         if best_algo["total"] >= MIN_SCORE and not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
             send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
             save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
-            save_pending(best_algo, "Algorytm", current)
     else:
         print("[algo] Brak setupu.")
 
@@ -727,10 +764,10 @@ def main():
             level     = entries[0] if entries else current
             print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
             log_to_alerty("Claude", filter_passed, claude_result, current)
+            save_pending(claude_result, "Claude", current)
             if score >= MIN_SCORE and not was_alerted("Claude", level, direction):
                 send_telegram(format_alert("Claude", claude_result, current, filter_passed))
                 save_alerted("Claude", level, direction)
-                save_pending(claude_result, "Claude", current)
         else:
             print(f"[claude] Brak setupu: {claude_result.get('reasoning', '')}")
     else:
@@ -748,10 +785,10 @@ def main():
             level     = entries[0] if entries else current
             print(f"[gpt] Setup: {gpt_result.get('setup_type')} {direction} [{score}/15]")
             log_to_alerty("GPT", filter_passed, gpt_result, current)
+            save_pending(gpt_result, "GPT", current)
             if score >= MIN_SCORE and not was_alerted("GPT", level, direction):
                 send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
                 save_alerted("GPT", level, direction)
-                save_pending(gpt_result, "GPT", current)
         else:
             print(f"[gpt] Brak setupu: {gpt_result.get('reasoning', '')}")
     else:
