@@ -245,6 +245,38 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
             "exit_ts": exit_ts, "pnl": pnl, "eff_entry": eff_entry, "eff_exit": eff_exit}
 
 
+def simulate_tp1_only(setup: dict, future_candles: list[dict]) -> dict:
+    """Symuluje strategię TP1-only: wychodzi w całości na TP1 (ignoruje TP2)."""
+    entries = setup.get("entries", [])
+    sl      = setup.get("sl")
+    tps     = setup.get("tps", [])
+    tp1     = tps[0] if tps else None
+    d       = setup.get("direction", "long")
+    w1      = entries[0] if entries else None
+
+    if not entries or sl is None or w1 is None or tp1 is None:
+        return {"result": "brak_danych", "pnl": 0.0}
+
+    entry_ts = None
+    for c in future_candles[:ENTRY_TIMEOUT_CANDLES]:
+        if _hits(c, w1, d, "entry"):
+            entry_ts = c["time"]; break
+
+    if entry_ts is None:
+        return {"result": "nie_weszlo", "pnl": 0.0}
+
+    after_entry = [c for c in future_candles if c["time"] > entry_ts]
+    for c in after_entry[:TRADE_TIMEOUT_CANDLES]:
+        if _hits(c, tp1, d, "tp"):
+            pnl = round((tp1 - w1) if d == "long" else (w1 - tp1), 2)
+            return {"result": "TP1", "pnl": pnl}
+        if _hits(c, sl, d, "sl"):
+            pnl = round((sl - w1) if d == "long" else (w1 - sl), 2)
+            return {"result": "SL", "pnl": pnl}
+
+    return {"result": "timeout", "pnl": 0.0}
+
+
 # ── Google Sheets ──────────────────────────────────────────────────────────────
 def _get_test_sheets(reset: bool = False):
     creds  = Credentials.from_service_account_info(
@@ -260,9 +292,10 @@ def _get_test_sheets(reset: bool = False):
     ]
     WYNIKI_HEADER = [
         "Snapshot", "Model", "Typ", "Kierunek", "Score",
-        "W1", "SL", "TP1", "TP2", "RR",
+        "W1", "W2", "SL", "TP1", "TP2", "RR",
         "Entries_hit", "Śr.Entry", "Śr.Exit",
-        "Wejście o", "Wyjście o", "Wynik", "PnL $",
+        "Wejście o", "Wyjście o", "Wynik (TP1+TP2)", "PnL $ (TP1+TP2)",
+        "Wynik (TP1 only)", "PnL $ (TP1 only)",
     ]
 
     for name, header, rows in [
@@ -311,12 +344,14 @@ def log_alert(sh1, snapshot_label: str, model: str, passed: bool, setup: dict):
     ])
 
 
-def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict):
+def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict, sim_tp1: dict):
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [])
     eff_entry = f"{sim['eff_entry']:.2f}" if sim["eff_entry"] is not None else "-"
     eff_exit  = f"{sim['eff_exit']:.2f}"  if sim["eff_exit"]  is not None else "-"
     n_w = sim["entries_hit"]
+    pnl_tp12  = sim["pnl"]     if sim["pnl"]     != 0.0 or sim["result"]     not in ("nie_weszlo", "brak_danych", "timeout") else "-"
+    pnl_tp1   = sim_tp1["pnl"] if sim_tp1["pnl"] != 0.0 or sim_tp1["result"] not in ("nie_weszlo", "brak_danych", "timeout") else "-"
     sh2.append_row([
         snapshot_label,
         model,
@@ -324,6 +359,7 @@ def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict):
         setup.get("direction", "-"),
         setup.get("total", setup.get("score", "-")),
         entries[0] if entries else "-",
+        entries[1] if len(entries) > 1 else "-",
         setup.get("sl", "-"),
         tps[0] if tps else setup.get("tp1", "-"),
         tps[1] if len(tps) > 1 else setup.get("tp2", "-"),
@@ -334,7 +370,9 @@ def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict):
         ts_to_str(sim["entry_ts"]),
         ts_to_str(sim["exit_ts"]),
         sim["result"],
-        sim["pnl"] if sim["pnl"] != 0.0 or sim["result"] not in ("nie_weszlo", "brak_danych", "timeout") else "-",
+        pnl_tp12,
+        sim_tp1["result"],
+        pnl_tp1,
     ])
 
 
@@ -390,11 +428,13 @@ def run_session(test_date: str, hours: list[int],
             passed = validate_setup(s, "Algo") and s.get("total", 0) >= MIN_SCORE
             log_alert(sh1, snap_label, "Algo", passed, s)
             if passed:
-                sim = simulate_result(s, future_m15)
-                log_wynik(sh2, snap_label, "Algo", s, sim)
+                sim      = simulate_result(s, future_m15)
+                sim_tp1  = simulate_tp1_only(s, future_m15)
+                log_wynik(sh2, snap_label, "Algo", s, sim, sim_tp1)
                 sign = "+" if sim["pnl"] >= 0 else ""
                 print(f"    {s['direction']:5s} {s['type']:12s} score={s['total']} "
-                      f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$")
+                      f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                      f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
             else:
                 print(f"    {s['direction']:5s} {s['type']:12s} score={s.get('total',0)} → [odrzucony]")
 
@@ -409,11 +449,13 @@ def run_session(test_date: str, hours: list[int],
                 passed = validate_setup(setup_c, "Claude")
                 log_alert(sh1, snap_label, "Claude", passed, setup_c)
                 if passed:
-                    sim = simulate_result(setup_c, future_m15)
-                    log_wynik(sh2, snap_label, "Claude", setup_c, sim)
+                    sim     = simulate_result(setup_c, future_m15)
+                    sim_tp1 = simulate_tp1_only(setup_c, future_m15)
+                    log_wynik(sh2, snap_label, "Claude", setup_c, sim, sim_tp1)
                     sign = "+" if sim["pnl"] >= 0 else ""
                     print(f"    {setup_c['direction']:5s} {setup_c['type']:12s} "
-                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$")
+                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                          f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
                 else:
                     print("    Setup Claude odrzucony przez walidację")
             else:
@@ -435,11 +477,13 @@ def run_session(test_date: str, hours: list[int],
                 passed = validate_setup(setup_g, "GPT")
                 log_alert(sh1, snap_label, "GPT", passed, setup_g)
                 if passed:
-                    sim = simulate_result(setup_g, future_m15)
-                    log_wynik(sh2, snap_label, "GPT", setup_g, sim)
+                    sim     = simulate_result(setup_g, future_m15)
+                    sim_tp1 = simulate_tp1_only(setup_g, future_m15)
+                    log_wynik(sh2, snap_label, "GPT", setup_g, sim, sim_tp1)
                     sign = "+" if sim["pnl"] >= 0 else ""
                     print(f"    {setup_g['direction']:5s} {setup_g['type']:12s} "
-                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$")
+                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                          f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
                 else:
                     print("    Setup GPT odrzucony przez walidację")
             else:
