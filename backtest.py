@@ -148,7 +148,7 @@ def call_claude_hist(candles_m15: list[dict], candles_h1: list[dict],
                     f"H1 (ostatnie 24 swiece):\n{h1_csv}")
         client   = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
         response = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=1500,
+            model="claude-sonnet-4-6", max_tokens=2048,
             system=FORTECA_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
@@ -181,7 +181,7 @@ def call_gpt_hist(candles_m15: list[dict], candles_h1: list[dict],
                     f"H1 (ostatnie 24 swiece):\n{h1_csv}")
         client   = openai.OpenAI(api_key=OPENAI_KEY)
         response = client.chat.completions.create(
-            model="gpt-4o", max_tokens=1024,
+            model="gpt-4o", max_tokens=2048,
             messages=[
                 {"role": "system", "content": FORTECA_GPT_PROMPT},
                 {"role": "user",   "content": user_msg},
