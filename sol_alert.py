@@ -161,8 +161,8 @@ The target is a 1.0–1.5 USD move on SOL/USDT. These are HARD constraints:
 - TP1 must be at least 0.5 USD above W1 (long) or below W1 (short). If nearest level is closer than 0.5 USD, REJECT the setup.
 - TP2 must be 1.0–1.5 USD from W1 under normal conditions.
 - In a STRONG IMPULSE context (clear BOS on H1, multiple impulsive M15 candles in setup direction, aligned momentum): TP2 may extend to 2.0 USD from W1.
-- Never place TP2 farther than 2.0 USD from W1 regardless of conditions.
-- If no level exists within the 1.0–1.5 USD window for TP2, REJECT the setup unless strong impulse context justifies 1.5–2.0 USD.
+- If the technically grounded TP2 level would be farther than 2.0 USD from W1, cap TP2 at 2.0 USD from W1 (do not reject for this reason).
+- If no level exists within the 1.0–2.0 USD window for TP2, REJECT the setup.
 
 ==================================================
 TARGET LOGIC
@@ -194,7 +194,7 @@ Return setup_found=false in any of these situations:
 - Setup logic is vague, uncertain, or "possible but not clear".
 - Level is only touched once with no proven historical reaction.
 - TP1 is less than 0.5 USD from W1.
-- TP2 cannot be placed within 1.0–2.0 USD from W1 at a technically grounded level.
+- No technically grounded level exists within the 1.0–2.0 USD window for TP2.
 - You need to bend or stretch any rule above to make the setup work.
 
 ==================================================
@@ -335,8 +335,8 @@ The expected move is 1.0–1.5 USD on SOL/USDT. These are HARD constraints:
 - TP1 must be at least 0.5 USD from W1. If nearest level is closer, REJECT the setup.
 - TP2 must be 1.0–1.5 USD from W1 under normal conditions.
 - In a STRONG IMPULSE context (clear BOS on H1, multiple impulsive M15 candles, aligned momentum): TP2 may extend to 2.0 USD from W1.
-- Never place TP2 farther than 2.0 USD from W1 regardless of conditions.
-- Reject if no technically grounded level exists within the required TP2 window.
+- If the technically grounded TP2 level would be farther than 2.0 USD from W1, cap TP2 at 2.0 USD (do not reject for this reason).
+- Reject if no technically grounded level exists within the 1.0–2.0 USD window.
 
 ==================================================
 TARGET LOGIC
@@ -480,8 +480,8 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
         entries = [round(base + 0.05, 2), round(base - 0.25, 2)]
         sl      = round(base - 0.55, 2)
         tp1     = round((rng["support"] + rng["resistance"]) / 2, 2)
-        tp2     = round(rng["resistance"] - 0.10, 2)
-        if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+        tp2     = round(min(rng["resistance"] - 0.10, entries[0] + 2.0), 2)
+        if abs(tp1 - entries[0]) >= 0.5 and abs(tp2 - entries[0]) >= 1.0:
             rr = rr_calc(sum(entries) / len(entries), sl, tp2)
             if rr >= 1.5:
                 scores = build_scores(rng["s_touches"], size, trend, "long", rr, candles_m15)
@@ -497,8 +497,8 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
         entries = [round(base - 0.05, 2), round(base + 0.25, 2)]
         sl      = round(base + 0.55, 2)
         tp1     = round((rng["support"] + rng["resistance"]) / 2, 2)
-        tp2     = round(rng["support"] + 0.10, 2)
-        if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+        tp2     = round(max(rng["support"] + 0.10, entries[0] - 2.0), 2)
+        if abs(tp1 - entries[0]) >= 0.5 and abs(tp2 - entries[0]) >= 1.0:
             rr = rr_calc(sum(entries) / len(entries), sl, tp2)
             if rr >= 1.5:
                 scores = build_scores(rng["r_touches"], size, trend, "short", rr, candles_m15)
@@ -520,8 +520,8 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
                     entries = [round(base + 0.05, 2), round(base - 0.25, 2)]
                     sl      = round(base - 0.65, 2)
                     tp1     = round(base + max(size * 0.5, 0.5), 2)
-                    tp2     = round(base + min(size, 1.5), 2)
-                    if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+                    tp2     = round(min(base + size, entries[0] + 2.0), 2)
+                    if abs(tp1 - entries[0]) >= 0.5 and abs(tp2 - entries[0]) >= 1.0:
                         rr = rr_calc(sum(entries) / len(entries), sl, tp2)
                         if rr >= 1.5:
                             scores = build_scores(rng["r_touches"], size, trend, "long", rr, candles_m15)
@@ -539,8 +539,8 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
                     entries = [round(base - 0.05, 2), round(base + 0.25, 2)]
                     sl      = round(base + 0.65, 2)
                     tp1     = round(base - max(size * 0.5, 0.5), 2)
-                    tp2     = round(base - min(size, 1.5), 2)
-                    if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+                    tp2     = round(max(base - size, entries[0] - 2.0), 2)
+                    if abs(tp1 - entries[0]) >= 0.5 and abs(tp2 - entries[0]) >= 1.0:
                         rr = rr_calc(sum(entries) / len(entries), sl, tp2)
                         if rr >= 1.5:
                             scores = build_scores(rng["s_touches"], size, trend, "short", rr, candles_m15)
@@ -852,11 +852,11 @@ def check_pending(candles_m15: list[dict]):
             tp1_now = tp1 and _hits(c, tp1, d, "tp")
 
             if tp2_hit:
-                result, move, exit_ts = "TP2", round(abs(tp2 - w1), 2), c["time"]; break
+                result, exit_ts = "TP2", c["time"]; break
 
             # TP1 i SL na tej samej świecy — nie znamy kolejności, bezpieczniej SL
             if tp1_now and sl_hit and tp1_hit_at is None:
-                result, move, exit_ts = "SL", round(abs(sl - w1), 2), c["time"]; break
+                result, exit_ts = "SL", c["time"]; break
 
             # TP1 trafiony po raz pierwszy — zapisz, wyślij powiadomienie, przestaw SL
             if tp1_now and tp1_hit_at is None:
@@ -879,34 +879,47 @@ def check_pending(candles_m15: list[dict]):
                 continue
 
             if sl_hit:
-                if tp1_hit_at is not None:
-                    # Po TP1 — wynik zależy od nowego SL
-                    lock = round(abs(effective_sl - w1), 2)
-                    label = "TP1+BE" if s.get("sl_adjusted") and abs(effective_sl - w1) < 0.05 else "TP1+SL"
-                    result, move, exit_ts = label, lock, c["time"]
-                else:
-                    result, move, exit_ts = "SL", round(abs(sl - w1), 2), c["time"]
+                label = ("TP1+BE" if s.get("sl_adjusted") and abs(effective_sl - w1) < 0.05
+                         else "TP1+SL" if tp1_hit_at is not None
+                         else "SL")
+                result, exit_ts = label, c["time"]
                 break
 
-        # Które W zostały trafione podczas trwania pozycji
+        # Które W zostały trafione podczas trwania pozycji + kalkulacja PnL
         if result:
             scan = [c for c in after_entry if c["time"] <= exit_ts]
             entries_hit = 1
             if len(s["entries"]) > 1 and any(_hits(c, s["entries"][1], d, "entry") for c in scan):
                 entries_hit = 2
-                if len(s["entries"]) > 2 and any(_hits(c, s["entries"][2], d, "entry") for c in scan):
-                    entries_hit = 3
             s["entries_hit"] = entries_hit
 
+            # Średnia arytmetyczna wejść
+            active_entries = s["entries"][:entries_hit]
+            eff_entry = sum(active_entries) / len(active_entries)
+
+            # Średnia arytmetyczna wyjść (każdy aktywowany próg = jedna obserwacja)
+            eff_sl_exit = sl_after_tp1 if s.get("sl_adjusted") and sl_after_tp1 is not None else sl
+            if result == "SL":
+                exit_prices = [sl]
+            elif result == "TP2":
+                exit_prices = [tp1, tp2] if tp1 else [tp2]
+            else:  # TP1+BE lub TP1+SL
+                exit_prices = [tp1, eff_sl_exit] if tp1 else [eff_sl_exit]
+            eff_exit = sum(exit_prices) / len(exit_prices)
+
+            # Signed PnL (pozytywny = zysk)
+            move = round((eff_exit - eff_entry) if d == "long" else (eff_entry - eff_exit), 2)
+
         if result:
-            print(f"[pending] {s['model']} {d}: {result} ${move:.2f}")
+            sign = "+" if move >= 0 else ""
+            print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
             if log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, move):
-                icon = "💰" if result.startswith("TP") else "🔴"
+                icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
                 try:
                     send_telegram(
                         f"{icon} <b>{result}</b> [{s['model']}]\n"
                         f"Setup {s['type']} {d.upper()} zamknięty\n"
-                        f"W1: ${w1:.2f} | Ruch: ${move:.2f}"
+                        f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
                     )
                 except Exception:
                     pass
