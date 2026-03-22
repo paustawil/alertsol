@@ -122,9 +122,11 @@ def call_claude_hist(candles_m15: list[dict], candles_h1: list[dict],
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
+        print(f"[claude] Brak JSON w odpowiedzi: {text[:300]!r}")
+        return {"_error": "no_json", "_raw": text[:300]}
     except Exception as e:
-        print(f"[claude] Blad: {e}")
-    return None
+        print(f"[claude] Blad API: {e}")
+        return {"_error": str(e)}
 
 
 def call_gpt_hist(candles_m15: list[dict], candles_h1: list[dict],
@@ -155,6 +157,8 @@ def call_gpt_hist(candles_m15: list[dict], candles_h1: list[dict],
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
+        print(f"[gpt] Brak JSON w odpowiedzi: {text[:300]!r}")
+        return {"_error": "no_json", "_raw": text[:300]}
     except Exception as e:
         print(f"[gpt] Blad: {e}")
     return None
@@ -512,11 +516,21 @@ def run_session(test_date: str, hours: list[int],
                       f"{tag}→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
                       f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
             else:
-                print("    Brak setupu (setup_found=false lub błąd)")
-                if raw_c and not raw_c.get("setup_found"):
-                    log_alert(sh1, snap_label, "Claude", "brak_setupu",
-                              {"type": "-", "direction": "-", "entries": [],
-                               "reasoning": raw_c.get("reasoning", "-")})
+                if raw_c is None:
+                    reason = "błąd_API (None)"
+                    print("    [Claude] BRAK ODPOWIEDZI (None) — błąd API lub timeout")
+                elif raw_c.get("_error"):
+                    reason = f"błąd: {raw_c['_error']}"
+                    print(f"    [Claude] BŁĄD: {raw_c['_error']}")
+                elif not raw_c.get("setup_found"):
+                    reason = "brak_setupu"
+                    print(f"    [Claude] setup_found=false | {raw_c.get('reasoning', '-')[:120]}")
+                else:
+                    reason = "brak_setupu"
+                    print(f"    [Claude] Nieznany brak setupu: {str(raw_c)[:120]}")
+                log_alert(sh1, snap_label, "Claude", reason,
+                          {"type": "-", "direction": "-", "entries": [],
+                           "reasoning": (raw_c or {}).get("reasoning", reason)})
             time.sleep(1.0)
         elif not no_llm:
             print("  [Claude] Pominięty — brak klucza API")
@@ -538,11 +552,21 @@ def run_session(test_date: str, hours: list[int],
                       f"{tag}→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
                       f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
             else:
-                print("    Brak setupu (setup_found=false lub błąd)")
-                if raw_g and not raw_g.get("setup_found"):
-                    log_alert(sh1, snap_label, "GPT", "brak_setupu",
-                              {"type": "-", "direction": "-", "entries": [],
-                               "reasoning": raw_g.get("reasoning", "-")})
+                if raw_g is None:
+                    reason = "błąd_API (None)"
+                    print("    [GPT] BRAK ODPOWIEDZI (None) — błąd API lub timeout")
+                elif raw_g.get("_error"):
+                    reason = f"błąd: {raw_g['_error']}"
+                    print(f"    [GPT] BŁĄD: {raw_g['_error']}")
+                elif not raw_g.get("setup_found"):
+                    reason = "brak_setupu"
+                    print(f"    [GPT] setup_found=false | {raw_g.get('reasoning', '-')[:120]}")
+                else:
+                    reason = "brak_setupu"
+                    print(f"    [GPT] Nieznany brak setupu: {str(raw_g)[:120]}")
+                log_alert(sh1, snap_label, "GPT", reason,
+                          {"type": "-", "direction": "-", "entries": [],
+                           "reasoning": (raw_g or {}).get("reasoning", reason)})
             time.sleep(1.0)
         elif not no_llm:
             print("  [GPT]    Pominięty — brak klucza API")
