@@ -1,68 +1,24 @@
 [
   {
-    "alert_time": "2026-03-21T11:15:50.288485+00:00",
-    "alert_timestamp": 1774091750,
+    "alert_time": "2026-03-22T07:01:05.543212+00:00",
+    "alert_timestamp": 1774162865,
     "model": "Claude",
-    "type": "Korekta do 50% impulsu",
+    "type": "Korekta do 50% impulsu \u2014 wej\u015bcie warstwowe w strefie 38\u201362% Fibo",
     "direction": "long",
     "score": 11,
-    "price_at_alert": 89.86,
+    "price_at_alert": 88.21,
     "entries": [
-      89.86,
-      89.74,
-      89.5
+      88.21,
+      87.95,
+      87.7
     ],
-    "sl": 89.35,
+    "sl": 86.2,
     "tps": [
-      90.5,
-      90.81
-    ],
-    "rr": 2.2,
-    "entry_hit_at": 1774092600
-  },
-  {
-    "alert_time": "2026-03-21T22:30:58.827431+00:00",
-    "alert_timestamp": 1774132258,
-    "model": "Claude",
-    "type": "Korekta do 50% impulsu",
-    "direction": "short",
-    "score": 9,
-    "price_at_alert": 89.89,
-    "entries": [
-      89.95,
-      90.05,
-      90.18
-    ],
-    "sl": 90.45,
-    "tps": [
-      89.55,
-      89.4
-    ],
-    "rr": 1.7,
-    "entry_hit_at": null,
-    "tp1_hit_at": null,
-    "entries_hit": 1
-  },
-  {
-    "alert_time": "2026-03-21T23:15:50.844293+00:00",
-    "alert_timestamp": 1774134950,
-    "model": "Claude",
-    "type": "Range trading",
-    "direction": "long",
-    "score": 11,
-    "price_at_alert": 89.72,
-    "entries": [
-      89.72,
-      89.62,
-      89.52
-    ],
-    "sl": 89.35,
-    "tps": [
-      90.1,
+      89.5,
       90.28
     ],
-    "rr": 2.44,
-    "entry_hit_at": 1774135800,
+    "rr": 1.6,
+    "entry_hit_at": null,
     "tp1_hit_at": null,
     "entries_hit": 1
   }
