@@ -689,9 +689,9 @@ def check_pending(candles_m15: list[dict]):
         if result:
             scan = [c for c in after_entry if c["time"] <= exit_ts]
             entries_hit = 1
-            if len(entries) > 1 and any(_hits(c, entries[1], d, "entry") for c in scan):
+            if len(s["entries"]) > 1 and any(_hits(c, s["entries"][1], d, "entry") for c in scan):
                 entries_hit = 2
-                if len(entries) > 2 and any(_hits(c, entries[2], d, "entry") for c in scan):
+                if len(s["entries"]) > 2 and any(_hits(c, s["entries"][2], d, "entry") for c in scan):
                     entries_hit = 3
             s["entries_hit"] = entries_hit
 
