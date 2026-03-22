@@ -619,8 +619,19 @@ def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: flo
 
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
-def _get_sheets():
-    """Zwraca (sheet_alerty, sheet_wyniki) — tworzy arkusze jeśli nie istnieją."""
+ALERTY_HEADER = [
+    "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
+    "W1", "W2", "SL", "SL@TP1", "TP1", "TP2", "RR", "Reasoning",
+]
+WYNIKI_HEADER = [
+    "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
+    "W1", "W2", "SL", "TP1", "TP2", "RR",
+    "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik", "PnL $",
+]
+
+
+def _get_sheets(reset: bool = False):
+    """Zwraca (sheet_alerty, sheet_wyniki) — tworzy/czyści arkusze jeśli trzeba."""
     creds  = Credentials.from_service_account_info(
         json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
         scopes=["https://www.googleapis.com/auth/spreadsheets"]
@@ -628,48 +639,62 @@ def _get_sheets():
     client = gspread.authorize(creds)
     wb     = client.open_by_key(SHEET_ID)
 
-    # Sheet 1: Alerty
-    try:
-        sh1 = wb.worksheet("Alerty")
-    except gspread.WorksheetNotFound:
-        sh1 = wb.add_worksheet("Alerty", rows=1000, cols=20)
-        sh1.append_row(["Data", "Godzina", "Model", "Filtr", "Typ", "Kierunek",
-                         "Score", "W1", "W2", "W3", "SL", "TP1", "TP2", "RR",
-                         "Cena alertu", "Reasoning"])
-
-    # Sheet 2: Wyniki
-    try:
-        sh2 = wb.worksheet("Wyniki")
-    except gspread.WorksheetNotFound:
-        sh2 = wb.add_worksheet("Wyniki", rows=1000, cols=13)
-        sh2.append_row(["Data alertu", "Model", "Typ", "Kierunek", "Score",
-                         "W1", "SL", "TP1", "TP2", "RR", "Wejscie o", "Wyjscie o", "Wynik", "Ruch $"])
+    for name, header, rows in [
+        ("Alerty", ALERTY_HEADER, 1000),
+        ("Wyniki", WYNIKI_HEADER, 1000),
+    ]:
+        try:
+            sh = wb.worksheet(name)
+            if reset:
+                sh.clear()
+                sh.append_row(header)
+        except gspread.WorksheetNotFound:
+            sh = wb.add_worksheet(name, rows=rows, cols=len(header) + 2)
+            sh.append_row(header)
+        if name == "Alerty":
+            sh1 = sh
+        else:
+            sh2 = sh
 
     return sh1, sh2
 
 
-def log_to_alerty(model: str, filter_passed: bool, setup: dict, current_price: float):
+def _rejection_reason(setup: dict) -> str:
+    """Zwraca powody odrzucenia setupu oddzielone ' | ', lub pusty string gdy OK."""
+    reasons = []
+    score = setup.get("total", setup.get("score", 0))
+    if score < MIN_SCORE:
+        reasons.append(f"Score<{MIN_SCORE} ({score})")
+    rr = setup.get("rr", 0)
+    if isinstance(rr, (int, float)) and rr > 0 and rr < 1.6:
+        reasons.append(f"RR<1.6 ({rr:.2f})")
+    geo = validate_setup(setup, "")
+    if geo:
+        reasons.append(geo)
+    return " | ".join(reasons)
+
+
+def log_to_alerty(model: str, rejection: str, setup: dict):
     """Zapisuje wykryty setup do Sheet 1 (natychmiast)."""
     try:
         sh1, _ = _get_sheets()
         entries = setup.get("entries", [])
-        now     = datetime.now(TZ)
+        tps     = setup.get("tps", [])
+        now     = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
         sh1.append_row([
-            now.strftime("%Y-%m-%d"),
-            now.strftime("%H:%M"),
+            now,
             model,
-            "TAK" if filter_passed else "NIE",
+            rejection or "OK",
             setup.get("type", setup.get("setup_type", "-")),
             setup.get("direction", "-"),
             setup.get("total", setup.get("score", 0)),
             entries[0] if len(entries) > 0 else "-",
             entries[1] if len(entries) > 1 else "-",
-            entries[2] if len(entries) > 2 else "-",
             setup.get("sl", "-"),
-            setup.get("tp1", setup.get("tps", ["-"])[0]),
-            setup.get("tp2", setup.get("tps", ["-", "-"])[1] if len(setup.get("tps", [])) > 1 else "-"),
+            setup.get("sl_after_tp1", "-"),
+            tps[0] if tps else setup.get("tp1", "-"),
+            tps[1] if len(tps) > 1 else setup.get("tp2", "-"),
             setup.get("rr", "-"),
-            round(current_price, 2),
             setup.get("reasoning", "-"),
         ])
         print(f"[sheets] Alerty: {model} {setup.get('direction')} [{setup.get('total', setup.get('score'))}]")
@@ -677,7 +702,8 @@ def log_to_alerty(model: str, filter_passed: bool, setup: dict, current_price: f
         print(f"[sheets] Blad Alerty: {e}")
 
 
-def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float) -> bool:
+def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
+                  eff_entry, eff_exit, move: float) -> bool:
     """Zapisuje wynik rozwiązanego setupu do Sheet 2. Zwraca True jeśli sukces."""
     try:
         _, sh2   = _get_sheets()
@@ -686,19 +712,24 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float) -> bool:
         exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else "-"
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
-        n_w = s.get("entries_hit", 1)
-        w_label = "+".join(f"W{i+1}" for i in range(n_w))
+        n_w      = s.get("entries_hit", 1)
         sh2.append_row([
-            alert_dt, s.get("model", "-"),
+            alert_dt,
+            s.get("model", "-"),
+            s.get("rejection", "OK"),
             s.get("type", s.get("setup_type", "-")),
             s.get("direction", "-"),
             s.get("score", s.get("total", 0)),
             entries[0] if entries else "-",
+            entries[1] if len(entries) > 1 else "-",
             s.get("sl", "-"),
             tps[0] if tps else "-",
             tps[1] if len(tps) > 1 else "-",
             s.get("rr", "-"),
-            entry_dt, exit_dt, result, w_label, round(move, 2),
+            "+".join(f"W{i+1}" for i in range(n_w)) if n_w > 0 else "-",
+            round(eff_entry, 2) if eff_entry is not None else "-",
+            round(eff_exit,  2) if eff_exit  is not None else "-",
+            entry_dt, exit_dt, result, round(move, 2),
         ])
         print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f} [{entry_dt}-{exit_dt}]")
         return True
@@ -743,7 +774,7 @@ def validate_setup(setup: dict, model: str) -> str:
 
 
 # ── Śledzenie setupów (pending) ───────────────────────────────────────────────
-def save_pending(setup: dict, model: str, current_price: float):
+def save_pending(setup: dict, model: str, rejection: str, current_price: float):
     pending = []
     if os.path.exists(PENDING_FILE):
         with open(PENDING_FILE) as f:
@@ -768,6 +799,7 @@ def save_pending(setup: dict, model: str, current_price: float):
         "alert_time":      datetime.now(timezone.utc).isoformat(),
         "alert_timestamp": int(datetime.now(timezone.utc).timestamp()),
         "model":           model,
+        "rejection":       rejection or "OK",
         "type":            setup.get("type", setup.get("setup_type", "-")),
         "direction":       setup.get("direction", "-"),
         "score":           setup.get("total", setup.get("score", 0)),
@@ -817,7 +849,7 @@ def check_pending(candles_m15: list[dict]):
             if hit is None:
                 if age_h > ENTRY_TIMEOUT_H:
                     print(f"[pending] {s['model']} {d}: nie weszlo")
-                    if log_to_wyniki(s, "nie weszlo", None, None, 0):
+                    if log_to_wyniki(s, "nie weszlo", None, None, None, None, 0):
                         try:
                             send_telegram(
                                 f"⏳ <b>Nie weszło</b> [{s['model']}]\n"
@@ -917,7 +949,7 @@ def check_pending(candles_m15: list[dict]):
         if result:
             sign = "+" if move >= 0 else ""
             print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
-            if log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, move):
+            if log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, eff_entry, eff_exit, move):
                 icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
                 try:
                     send_telegram(
@@ -931,7 +963,7 @@ def check_pending(candles_m15: list[dict]):
                 print(f"[pending] Blad zapisu Wyniki — setup zostaje w pending, retry za 15 min")
                 still_pending.append(s)
         elif age_h > TRADE_TIMEOUT_H:
-            log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, 0)
+            log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, None, None, 0)
         else:
             still_pending.append(s)
 
@@ -1029,8 +1061,9 @@ def main():
         if not validate_setup(best_algo, "Algorytm"):
             pass
         elif not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
-            log_to_alerty("Algorytm", filter_passed, best_algo, current)
-            save_pending(best_algo, "Algorytm", current)
+            rejection = _rejection_reason(best_algo)
+            log_to_alerty("Algorytm", rejection, best_algo)
+            save_pending(best_algo, "Algorytm", rejection, current)
             save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
             if best_algo["total"] >= MIN_SCORE:
                 send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
@@ -1053,8 +1086,9 @@ def main():
             if not validate_setup(claude_result, "Claude"):
                 pass
             elif not was_alerted("Claude", level, direction):
-                log_to_alerty("Claude", filter_passed, claude_result, current)
-                save_pending(claude_result, "Claude", current)
+                rejection = _rejection_reason(claude_result)
+                log_to_alerty("Claude", rejection, claude_result)
+                save_pending(claude_result, "Claude", rejection, current)
                 save_alerted("Claude", level, direction)
                 if score >= MIN_SCORE:
                     send_telegram(format_alert("Claude", claude_result, current, filter_passed))
@@ -1079,8 +1113,9 @@ def main():
             if not validate_setup(gpt_result, "GPT"):
                 pass
             elif not was_alerted("GPT", level, direction):
-                log_to_alerty("GPT", filter_passed, gpt_result, current)
-                save_pending(gpt_result, "GPT", current)
+                rejection = _rejection_reason(gpt_result)
+                log_to_alerty("GPT", rejection, gpt_result)
+                save_pending(gpt_result, "GPT", rejection, current)
                 save_alerted("GPT", level, direction)
                 if score >= MIN_SCORE:
                     send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
@@ -1093,4 +1128,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reset", action="store_true",
+                        help="Wyczyść arkusze Alerty i Wyniki przed uruchomieniem")
+    args, _ = parser.parse_known_args()
+    if args.reset:
+        print("[reset] Czyszczenie arkuszy Alerty i Wyniki...")
+        _get_sheets(reset=True)
+        print("[reset] Gotowe.")
+    else:
+        main()
