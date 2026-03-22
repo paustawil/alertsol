@@ -706,31 +706,34 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float) -> bool:
 # ── Walidacja setupu ─────────────────────────────────────────────────────────
 MIN_TP1_DISTANCE = 0.50   # minimalna odleglosc W1-TP1 w USD
 
-def validate_setup(setup: dict, model: str) -> bool:
+def validate_setup(setup: dict, model: str) -> str:
+    """Zwraca pusty string jeśli setup jest OK, albo wszystkie powody odrzucenia oddzielone ' | '."""
     entries   = setup.get("entries", [])
     sl        = setup.get("sl")
     direction = setup.get("direction", "-")
+    reasons   = []
     if not entries or sl is None:
-        return True  # brak danych — przepuszczamy
+        return ""  # brak danych — przepuszczamy
     w1 = entries[0]
     if direction == "long" and sl >= w1:
-        print(f"[{model}] ODRZUCONY: SL ({sl}) >= W1 ({w1}) dla long")
-        return False
-    if direction == "short" and sl <= w1:
-        print(f"[{model}] ODRZUCONY: SL ({sl}) <= W1 ({w1}) dla short")
-        return False
-    sl_dist = abs(w1 - sl)
-    if sl_dist < MIN_SL_DISTANCE:
-        print(f"[{model}] ODRZUCONY: SL za blisko W1 (dist={sl_dist:.2f} < {MIN_SL_DISTANCE})")
-        return False
+        reasons.append(f"SL≥W1 ({sl}≥{w1})")
+    elif direction == "short" and sl <= w1:
+        reasons.append(f"SL≤W1 ({sl}≤{w1})")
+    else:
+        sl_dist = abs(w1 - sl)
+        if sl_dist < MIN_SL_DISTANCE:
+            reasons.append(f"SL<{MIN_SL_DISTANCE}$ (dist={sl_dist:.2f})")
     tps = setup.get("tps", [setup.get("tp1")])
     tp1 = tps[0] if tps else setup.get("tp1")
     if tp1 is not None:
         tp1_dist = abs(tp1 - w1)
         if tp1_dist < MIN_TP1_DISTANCE:
-            print(f"[{model}] ODRZUCONY: TP1 za blisko W1 (dist={tp1_dist:.2f} < {MIN_TP1_DISTANCE})")
-            return False
-    return True
+            reasons.append(f"TP1<{MIN_TP1_DISTANCE}$ (dist={tp1_dist:.2f})")
+    if reasons:
+        result = " | ".join(reasons)
+        print(f"[{model}] FILTR: {result}")
+        return result
+    return ""
 
 
 # ── Śledzenie setupów (pending) ───────────────────────────────────────────────
