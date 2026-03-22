@@ -157,18 +157,15 @@ One SL applies to both W1 and W2.
 ==================================================
 TARGET SIZE CONSTRAINTS
 ==================================================
-The target is a 1.0–1.5 USD move on SOL/USDT. These are HARD constraints:
-- TP1 must be at least 0.5 USD above W1 (long) or below W1 (short). If nearest level is closer than 0.5 USD, REJECT the setup.
-- TP2 must be 1.0–1.5 USD from W1 under normal conditions.
-- In a STRONG IMPULSE context (clear BOS on H1, multiple impulsive M15 candles in setup direction, aligned momentum): TP2 may extend to 2.0 USD from W1.
-- If the technically grounded TP2 level would be farther than 2.0 USD from W1, cap TP2 at 2.0 USD from W1 (do not reject for this reason).
-- If no level exists within the 1.0–2.0 USD window for TP2, REJECT the setup.
+- TP1 must be at least 0.5 USD from W1. If the nearest meaningful level is closer than 0.5 USD, REJECT the setup.
+- TP2 is placed at the next meaningful technical level in the setup direction. No hard distance cap — place it where the chart dictates.
+- TP2 must always be farther from W1 than TP1 in the trade direction.
 
 ==================================================
 TARGET LOGIC
 ==================================================
 TP1 = first realistic reaction point (nearest opposing intraday structure in setup direction, minimum 0.5 USD from W1).
-TP2 = main Forteca target — next meaningful level in setup direction, 1.0–1.5 USD from W1 (up to 2.0 USD in strong impulse). Used for RR calculation.
+TP2 = main Forteca target — next meaningful technical level in the setup direction. No hard distance cap. Used for RR calculation.
 TP2 must always be farther than TP1 in trade direction. Both targets must be technically grounded in the data.
 
 ==================================================
@@ -189,13 +186,10 @@ Return setup_found=false in any of these situations:
 - Price is between levels, not at a reaction zone.
 - H1 and M15 are materially conflicting.
 - Entry zone has already passed (too late, price already extended toward TP).
-- RR to TP2 does not reach 1.8 with a natural SL.
+- RR to TP2 does not reach 1.6 with a natural SL.
 - No clean technical invalidation level exists.
 - Setup logic is vague, uncertain, or "possible but not clear".
-- Level is only touched once with no proven historical reaction.
 - TP1 is less than 0.5 USD from W1.
-- No technically grounded level exists within the 1.0–2.0 USD window for TP2.
-- You need to bend or stretch any rule above to make the setup work.
 
 ==================================================
 OUTPUT FORMAT — return exactly one JSON object, no markdown, no extra text
@@ -331,18 +325,15 @@ Never tighten SL purely to improve RR.
 ==================================================
 TARGET SIZE CONSTRAINTS
 ==================================================
-The expected move is 1.0–1.5 USD on SOL/USDT. These are HARD constraints:
-- TP1 must be at least 0.5 USD from W1. If nearest level is closer, REJECT the setup.
-- TP2 must be 1.0–1.5 USD from W1 under normal conditions.
-- In a STRONG IMPULSE context (clear BOS on H1, multiple impulsive M15 candles, aligned momentum): TP2 may extend to 2.0 USD from W1.
-- If the technically grounded TP2 level would be farther than 2.0 USD from W1, cap TP2 at 2.0 USD (do not reject for this reason).
-- Reject if no technically grounded level exists within the 1.0–2.0 USD window.
+- TP1 must be at least 0.5 USD from W1. If the nearest meaningful level is closer than 0.5 USD, REJECT the setup.
+- TP2 is placed at the next meaningful technical level in the setup direction. No hard distance cap — place it where the chart dictates.
+- TP2 must always be farther from W1 than TP1 in the trade direction.
 
 ==================================================
 TARGET LOGIC
 ==================================================
 TP1 = first realistic reaction point (nearest opposing intraday structure, minimum 0.5 USD from W1).
-TP2 = main target, 1.0–1.5 USD from W1 (up to 2.0 USD in strong impulse). Used for RR calculation.
+TP2 = main target — next meaningful technical level in the setup direction. No hard distance cap. Used for RR calculation.
 TP2 must always be farther than TP1 in trade direction. Targets must be technically grounded.
 
 ==================================================
@@ -357,7 +348,7 @@ After TP1 is hit, the SL is moved to protect the trade. Calculate sl_after_tp1:
 ==================================================
 WHEN TO RETURN NO SETUP
 ==================================================
-Return setup_found=false if: market in messy consolidation, price between levels, H1/M15 materially conflicting, entry already late, RR to TP2 below 1.8, no clear invalidation level, TP1 less than 0.5 USD from W1, TP2 cannot be placed within 1.0–2.0 USD window at a real level, no clean Forteca setup among the 4 families.
+Return setup_found=false if: market in messy consolidation, price between levels, H1/M15 materially conflicting, entry already late, RR to TP2 below 1.6, no clear invalidation level, TP1 less than 0.5 USD from W1, no clean Forteca setup among the 4 families.
 
 ==================================================
 TECHNICAL NORMALIZATION RULES
