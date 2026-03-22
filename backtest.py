@@ -246,13 +246,15 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
 
 
 def simulate_tp1_only(setup: dict, future_candles: list[dict]) -> dict:
-    """Symuluje strategię TP1-only: wychodzi w całości na TP1 (ignoruje TP2)."""
+    """Symuluje strategię TP1-only: wychodzi w całości na TP1 (ignoruje TP2).
+    Jeśli trafione W1+W2 — używa średniego entry do PnL."""
     entries = setup.get("entries", [])
     sl      = setup.get("sl")
     tps     = setup.get("tps", [])
     tp1     = tps[0] if tps else None
     d       = setup.get("direction", "long")
     w1      = entries[0] if entries else None
+    w2      = entries[1] if len(entries) > 1 else None
 
     if not entries or sl is None or w1 is None or tp1 is None:
         return {"result": "brak_danych", "pnl": 0.0}
@@ -266,13 +268,22 @@ def simulate_tp1_only(setup: dict, future_candles: list[dict]) -> dict:
         return {"result": "nie_weszlo", "pnl": 0.0}
 
     after_entry = [c for c in future_candles if c["time"] > entry_ts]
+
+    # Sprawdzamy czy W2 też zostało trafione przed TP1/SL
+    w2_hit = False
     for c in after_entry[:TRADE_TIMEOUT_CANDLES]:
+        if w2 is not None and not w2_hit and _hits(c, w2, d, "entry"):
+            w2_hit = True
         if _hits(c, tp1, d, "tp"):
-            pnl = round((tp1 - w1) if d == "long" else (w1 - tp1), 2)
-            return {"result": "TP1", "pnl": pnl}
+            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl = round((tp1 - eff_entry) if d == "long" else (eff_entry - tp1), 2)
+            label = "W1+W2→TP1" if w2_hit else "TP1"
+            return {"result": label, "pnl": pnl}
         if _hits(c, sl, d, "sl"):
-            pnl = round((sl - w1) if d == "long" else (w1 - sl), 2)
-            return {"result": "SL", "pnl": pnl}
+            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl = round((sl - eff_entry) if d == "long" else (eff_entry - sl), 2)
+            label = "W1+W2→SL" if w2_hit else "SL"
+            return {"result": label, "pnl": pnl}
 
     return {"result": "timeout", "pnl": 0.0}
 
