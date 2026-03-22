@@ -246,7 +246,7 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
 
 
 # ── Google Sheets ──────────────────────────────────────────────────────────────
-def _get_test_sheets():
+def _get_test_sheets(reset: bool = False):
     creds  = Credentials.from_service_account_info(
         json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -271,8 +271,9 @@ def _get_test_sheets():
     ]:
         try:
             sh = wb.worksheet(name)
-            sh.clear()
-            sh.append_row(header)
+            if reset:
+                sh.clear()
+                sh.append_row(header)
         except gspread.WorksheetNotFound:
             sh = wb.add_worksheet(name, rows=rows, cols=20)
             sh.append_row(header)
@@ -460,15 +461,19 @@ def main():
     parser.add_argument("--session", choices=["afternoon", "morning", "full"],
                         default="full",
                         help="Sesja: afternoon (14–22) | morning (8–13) | full (obie, domyślnie)")
+    parser.add_argument("--reset", action="store_true",
+                        help="Wyczyść arkusze TEST przed zapisem (domyślnie: dopisuje)")
     args = parser.parse_args()
 
     dates_str = ", ".join(TEST_DATES)
     print(f"=== Backtest SOL | {dates_str} ===")
     if args.no_llm:
         print("Tryb: tylko algorytm (--no-llm)")
+    if args.reset:
+        print("Tryb: --reset — arkusze TEST zostaną wyczyszczone przed zapisem")
 
     print("\nOtwieram arkusze testowe...")
-    sh1, sh2 = _get_test_sheets()
+    sh1, sh2 = _get_test_sheets(reset=args.reset)
 
     # W trybie full: najpierw sesja afternoon (14–22), potem morning (8–13)
     sessions_to_run = (
