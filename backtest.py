@@ -298,11 +298,11 @@ def _get_test_sheets(reset: bool = False):
     wb     = client.open_by_key(SHEET_ID)
 
     ALERTY_HEADER = [
-        "Snapshot", "Model", "Filter", "Typ", "Kierunek", "Score",
+        "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
         "W1", "W2", "SL", "SL@TP1", "TP1", "TP2", "RR", "Reasoning",
     ]
     WYNIKI_HEADER = [
-        "Snapshot", "Model", "Typ", "Kierunek", "Score",
+        "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
         "W1", "W2", "SL", "TP1", "TP2", "RR",
         "Entries_hit", "Śr.Entry", "Śr.Exit",
         "Wejście o", "Wyjście o", "Wynik (TP1+TP2)", "PnL $ (TP1+TP2)",
@@ -334,13 +334,13 @@ def ts_to_str(ts: int | None) -> str:
     return datetime.fromtimestamp(ts, tz=TZ).strftime("%H:%M")
 
 
-def log_alert(sh1, snapshot_label: str, model: str, passed: bool, setup: dict):
+def log_alert(sh1, snapshot_label: str, model: str, rejection: str, setup: dict):
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [])
     sh1.append_row([
         snapshot_label,
         model,
-        "TAK" if passed else "NIE",
+        rejection or "OK",
         setup.get("type", setup.get("setup_type", "-")),
         setup.get("direction", "-"),
         setup.get("total", setup.get("score", "-")),
@@ -355,7 +355,7 @@ def log_alert(sh1, snapshot_label: str, model: str, passed: bool, setup: dict):
     ])
 
 
-def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict, sim_tp1: dict):
+def log_wynik(sh2, snapshot_label: str, model: str, rejection: str, setup: dict, sim: dict, sim_tp1: dict):
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [])
     eff_entry = f"{sim['eff_entry']:.2f}" if sim["eff_entry"] is not None else "-"
@@ -366,6 +366,7 @@ def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict, sim_
     sh2.append_row([
         snapshot_label,
         model,
+        rejection or "OK",
         setup.get("type", setup.get("setup_type", "-")),
         setup.get("direction", "-"),
         setup.get("total", setup.get("score", "-")),
@@ -436,18 +437,22 @@ def run_session(test_date: str, hours: list[int],
         algo_setups = algo_detect(m15_snap, h1_snap, rng)
         print(f"  [Algo]   {len(algo_setups)} setup(ów)")
         for s in algo_setups:
-            passed = validate_setup(s, "Algo") and s.get("total", 0) >= MIN_SCORE
-            log_alert(sh1, snap_label, "Algo", passed, s)
-            if passed:
-                sim      = simulate_result(s, future_m15)
-                sim_tp1  = simulate_tp1_only(s, future_m15)
-                log_wynik(sh2, snap_label, "Algo", s, sim, sim_tp1)
-                sign = "+" if sim["pnl"] >= 0 else ""
-                print(f"    {s['direction']:5s} {s['type']:12s} score={s['total']} "
-                      f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
-                      f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
-            else:
-                print(f"    {s['direction']:5s} {s['type']:12s} score={s.get('total',0)} → [odrzucony]")
+            reasons = []
+            val_reason = validate_setup(s, "Algo")
+            if val_reason:
+                reasons.append(val_reason)
+            if s.get("total", 0) < MIN_SCORE:
+                reasons.append(f"Score<{MIN_SCORE} ({s.get('total',0)})")
+            rejection = " | ".join(reasons)
+            log_alert(sh1, snap_label, "Algo", rejection, s)
+            sim     = simulate_result(s, future_m15)
+            sim_tp1 = simulate_tp1_only(s, future_m15)
+            log_wynik(sh2, snap_label, "Algo", rejection, s, sim, sim_tp1)
+            sign = "+" if sim["pnl"] >= 0 else ""
+            tag  = f"[FILTR: {rejection}] " if rejection else ""
+            print(f"    {s['direction']:5s} {s['type']:12s} score={s['total']} "
+                  f"{tag}→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                  f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
 
         time.sleep(0.5)
 
@@ -457,22 +462,20 @@ def run_session(test_date: str, hours: list[int],
             raw_c   = call_claude_hist(m15_snap, h1_snap, current_price)
             setup_c = normalize_llm_setup(raw_c)
             if setup_c:
-                passed = validate_setup(setup_c, "Claude")
-                log_alert(sh1, snap_label, "Claude", passed, setup_c)
-                if passed:
-                    sim     = simulate_result(setup_c, future_m15)
-                    sim_tp1 = simulate_tp1_only(setup_c, future_m15)
-                    log_wynik(sh2, snap_label, "Claude", setup_c, sim, sim_tp1)
-                    sign = "+" if sim["pnl"] >= 0 else ""
-                    print(f"    {setup_c['direction']:5s} {setup_c['type']:12s} "
-                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
-                          f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
-                else:
-                    print("    Setup Claude odrzucony przez walidację")
+                rejection = validate_setup(setup_c, "Claude")
+                log_alert(sh1, snap_label, "Claude", rejection, setup_c)
+                sim     = simulate_result(setup_c, future_m15)
+                sim_tp1 = simulate_tp1_only(setup_c, future_m15)
+                log_wynik(sh2, snap_label, "Claude", rejection, setup_c, sim, sim_tp1)
+                sign = "+" if sim["pnl"] >= 0 else ""
+                tag  = f"[FILTR: {rejection}] " if rejection else ""
+                print(f"    {setup_c['direction']:5s} {setup_c['type']:12s} "
+                      f"{tag}→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                      f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
             else:
                 print("    Brak setupu (setup_found=false lub błąd)")
                 if raw_c and not raw_c.get("setup_found"):
-                    log_alert(sh1, snap_label, "Claude", False,
+                    log_alert(sh1, snap_label, "Claude", "brak_setupu",
                               {"type": "-", "direction": "-", "entries": [],
                                "reasoning": raw_c.get("reasoning", "-")})
             time.sleep(1.0)
@@ -485,22 +488,20 @@ def run_session(test_date: str, hours: list[int],
             raw_g   = call_gpt_hist(m15_snap, h1_snap, current_price)
             setup_g = normalize_llm_setup(raw_g)
             if setup_g:
-                passed = validate_setup(setup_g, "GPT")
-                log_alert(sh1, snap_label, "GPT", passed, setup_g)
-                if passed:
-                    sim     = simulate_result(setup_g, future_m15)
-                    sim_tp1 = simulate_tp1_only(setup_g, future_m15)
-                    log_wynik(sh2, snap_label, "GPT", setup_g, sim, sim_tp1)
-                    sign = "+" if sim["pnl"] >= 0 else ""
-                    print(f"    {setup_g['direction']:5s} {setup_g['type']:12s} "
-                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
-                          f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
-                else:
-                    print("    Setup GPT odrzucony przez walidację")
+                rejection = validate_setup(setup_g, "GPT")
+                log_alert(sh1, snap_label, "GPT", rejection, setup_g)
+                sim     = simulate_result(setup_g, future_m15)
+                sim_tp1 = simulate_tp1_only(setup_g, future_m15)
+                log_wynik(sh2, snap_label, "GPT", rejection, setup_g, sim, sim_tp1)
+                sign = "+" if sim["pnl"] >= 0 else ""
+                tag  = f"[FILTR: {rejection}] " if rejection else ""
+                print(f"    {setup_g['direction']:5s} {setup_g['type']:12s} "
+                      f"{tag}→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                      f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
             else:
                 print("    Brak setupu (setup_found=false lub błąd)")
                 if raw_g and not raw_g.get("setup_found"):
-                    log_alert(sh1, snap_label, "GPT", False,
+                    log_alert(sh1, snap_label, "GPT", "brak_setupu",
                               {"type": "-", "direction": "-", "entries": [],
                                "reasoning": raw_g.get("reasoning", "-")})
             time.sleep(1.0)
