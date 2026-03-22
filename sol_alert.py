@@ -472,7 +472,7 @@ def _get_sheets():
     except gspread.WorksheetNotFound:
         sh2 = wb.add_worksheet("Wyniki", rows=1000, cols=13)
         sh2.append_row(["Data alertu", "Model", "Typ", "Kierunek", "Score",
-                         "W1", "SL", "TP1", "TP2", "RR", "Wejscie o", "Wyjscie o", "Wynik", "Ruch $"])
+                         "W1", "SL", "TP1", "TP2", "RR", "Wejscie o", "Wyjscie o", "Wynik", "Wejscia", "Ruch $"])
 
     return sh1, sh2
 
@@ -511,8 +511,8 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float) -> bool:
     try:
         _, sh2   = _get_sheets()
         alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
-        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else "-"
-        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else "-"
+        entry_dt = datetime.fromtimestamp(entry_ts, tz=timezone.utc).astimezone(TZ).strftime("%H:%M") if entry_ts else "-"
+        exit_dt  = datetime.fromtimestamp(exit_ts,  tz=timezone.utc).astimezone(TZ).strftime("%H:%M") if exit_ts  else "-"
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
         n_w = s.get("entries_hit", 1)
@@ -649,8 +649,9 @@ def check_pending(candles_m15: list[dict]):
                 send_telegram(
                     f"✅ <b>ENTRY HIT</b> [{s['model']}]\n"
                     f"Setup {s['type']} {d.upper()} aktywowany!\n"
-                    f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
-                    f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
+                    f"W1: ${w1:.2f} | SL: ${sl:.2f}"
+                    + (f" | TP1: ${tp1:.2f}" if tp1 else "")
+                    + (f" | TP2: ${tp2:.2f}" if tp2 else "")
                 )
             except Exception:
                 pass
