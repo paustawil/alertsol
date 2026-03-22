@@ -1,8 +1,20 @@
-name: Backtest SOL 22.03.2026
+name: Backtest SOL 16-20.03.2026
 
 on:
   workflow_dispatch:
     inputs:
+      session:
+        description: 'Sesja'
+        required: false
+        default: 'full'
+        type: choice
+        options: ['full', 'morning', 'afternoon']
+      reset:
+        description: 'Wyczyść arkusz przed zapisem'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
       no_llm:
         description: 'Pomiń Claude i GPT (tylko algorytm)'
         required: false
@@ -32,8 +44,7 @@ jobs:
           OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          if [ "${{ github.event.inputs.no_llm }}" = "true" ]; then
-            python backtest.py --no-llm
-          else
-            python backtest.py
-          fi
+          ARGS="--session ${{ github.event.inputs.session }}"
+          [ "${{ github.event.inputs.reset }}"  = "true" ] && ARGS="$ARGS --reset"
+          [ "${{ github.event.inputs.no_llm }}" = "true" ] && ARGS="$ARGS --no-llm"
+          python backtest.py $ARGS
