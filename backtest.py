@@ -79,7 +79,7 @@ from sol_alert import (
 
 TZ            = ZoneInfo("Europe/Warsaw")
 SYMBOL        = "SOLUSDT"
-ENABLE_GPT    = False   # ← tymczasowo wyłączone; zmień na True żeby włączyć GPT
+ENABLE_GPT    = True
 # Tydzień handlowy + sobota (pon–sob 17–22.03.2026)
 TEST_DATES     = ["2026-03-16", "2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20"]
 # Definicje sesji (godziny Warsaw)
