@@ -61,22 +61,30 @@ ENTRY_TIMEOUT_CANDLES = 16   # 4h
 TRADE_TIMEOUT_CANDLES = 96   # 24h
 
 
-# ── Fetch historycznych świec z CryptoCompare (z parametrem toTs) ──────────────
-def fetch_klines_at(symbol: str, interval: str, limit: int, to_ts: int) -> list[dict]:
-    """Pobiera `limit` świec kończących się <= to_ts."""
+# ── Fetch historycznych świec z CryptoCompare (z parametrem toTs i opcjonalnie fromTs) ──
+def fetch_klines_at(symbol: str, interval: str, limit: int, to_ts: int,
+                    from_ts: int | None = None) -> list[dict]:
+    """Pobiera świece z zakresu (from_ts, to_ts]. limit=2000 to max CryptoCompare."""
     endpoint, aggregate = {"15m": ("histominute", 15), "1h": ("histohour", 1)}[interval]
     fsym = symbol.replace("USDT", "").replace("USD", "")
+    params = {"fsym": fsym, "tsym": "USDT", "limit": limit,
+              "aggregate": aggregate, "toTs": to_ts}
+    if from_ts is not None:
+        params["fromTs"] = from_ts
     r = requests.get(
         f"https://min-api.cryptocompare.com/data/v2/{endpoint}",
-        params={"fsym": fsym, "tsym": "USDT", "limit": limit,
-                "aggregate": aggregate, "toTs": to_ts},
+        params=params,
         timeout=15,
     )
     r.raise_for_status()
+    raw = r.json()["Data"]["Data"]
+    # filtruj na wszelki wypadek — API może zwrócić więcej niż zakres
+    if from_ts is not None:
+        raw = [d for d in raw if d["time"] >= from_ts]
     return [
         {"time": d["time"], "open": float(d["open"]), "high": float(d["high"]),
          "low": float(d["low"]), "close": float(d["close"]), "volume": float(d["volumefrom"])}
-        for d in r.json()["Data"]["Data"]
+        for d in raw
     ]
 
 
@@ -559,14 +567,22 @@ def main():
         print(f"{'█'*55}")
 
         for test_date in dates:
-            # end_ts zawsze z zapasem — 22:00 + 25h pokrywa i przyszłe świece i pełny kontekst
-            end_ts = snapshot_ts(test_date, 22) + 25 * 3600
+            first_hour = min(sess_hours)
+            last_hour  = max(sess_hours)
+            # from_ts: 16h przed pierwszym snapshotem (kontekst historyczny)
+            # end_ts:  25h po ostatnim snapshocie (symulacja wyników trade)
+            from_ts = snapshot_ts(test_date, first_hour) - 16 * 3600
+            end_ts  = snapshot_ts(test_date, last_hour)  + 25 * 3600
+            # 2000 = max CryptoCompare histominute; z aggregate=15 to ~20 dni historii
+            m15_limit = 2000
+            h1_limit  = min(500, (end_ts - from_ts) // 3600 + 5)
+
             print(f"\n{'═'*55}")
             print(f"DZIEŃ: {test_date}")
             print("Pobieram dane M15 i H1...")
 
-            all_m15 = fetch_klines_at(SYMBOL, "15m", 500, end_ts)
-            all_h1  = fetch_klines_at(SYMBOL, "1h",  120, end_ts)
+            all_m15 = fetch_klines_at(SYMBOL, "15m", m15_limit, end_ts, from_ts)
+            all_h1  = fetch_klines_at(SYMBOL, "1h",  h1_limit,  end_ts, from_ts)
 
             if all_m15:
                 m15_from = datetime.fromtimestamp(all_m15[0]["time"],  tz=TZ).strftime("%d.%m %H:%M")
