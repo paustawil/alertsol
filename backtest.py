@@ -79,6 +79,7 @@ from sol_alert import (
 
 TZ            = ZoneInfo("Europe/Warsaw")
 SYMBOL        = "SOLUSDT"
+ENABLE_GPT    = False   # ← tymczasowo wyłączone; zmień na True żeby włączyć GPT
 # Tydzień handlowy + sobota (pon–sob 17–22.03.2026)
 TEST_DATES     = ["2026-03-16", "2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20"]
 # Definicje sesji (godziny Warsaw)
@@ -558,22 +559,29 @@ def run_session(test_date: str, hours: list[int],
                     print("    [Claude] BRAK ODPOWIEDZI (None) — błąd API lub timeout")
                 elif raw_c.get("_error"):
                     reason = f"błąd: {raw_c['_error']}"
-                    print(f"    [Claude] BŁĄD: {raw_c['_error']}")
+                    raw_text = raw_c.get("_raw", "")
+                    print(f"    [Claude] BŁĄD PARSOWANIA: {raw_c['_error']}")
+                    print(f"    [Claude] Surowa odpowiedź: {raw_text[:400]!r}")
                 elif not raw_c.get("setup_found"):
                     reason = "brak_setupu"
                     print(f"    [Claude] setup_found=false | {raw_c.get('reasoning', '-')[:120]}")
                 else:
                     reason = "brak_setupu"
                     print(f"    [Claude] Nieznany brak setupu: {str(raw_c)[:120]}")
+                # reasoning w arkuszu: przy błędzie pokaż surową odpowiedź Claude
+                if (raw_c or {}).get("_error"):
+                    log_reasoning = f"[{reason}] raw: {(raw_c or {}).get('_raw', '')[:200]}"
+                else:
+                    log_reasoning = (raw_c or {}).get("reasoning", reason)
                 log_alert(sh1, snap_label, "Claude", reason,
                           {"type": "-", "direction": "-", "entries": [],
-                           "reasoning": (raw_c or {}).get("reasoning", reason)})
+                           "reasoning": log_reasoning})
             time.sleep(1.0)
         elif not no_llm:
             print("  [Claude] Pominięty — brak klucza API")
 
         # ── 3. GPT ──
-        if not no_llm and not only_claude and OPENAI_KEY:
+        if ENABLE_GPT and not no_llm and not only_claude and OPENAI_KEY:
             print("  [GPT]    Wywołuję API...")
             raw_g   = call_gpt_hist(m15_snap, h1_snap, current_price)
             setup_g = normalize_llm_setup(raw_g)
@@ -605,6 +613,8 @@ def run_session(test_date: str, hours: list[int],
                           {"type": "-", "direction": "-", "entries": [],
                            "reasoning": (raw_g or {}).get("reasoning", reason)})
             time.sleep(1.0)
+        elif not ENABLE_GPT:
+            pass  # GPT wyłączone (ENABLE_GPT = False)
         elif not no_llm and not only_claude:
             print("  [GPT]    Pominięty — brak klucza API")
 
