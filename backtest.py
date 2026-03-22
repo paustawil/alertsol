@@ -377,11 +377,16 @@ def main():
         print(f"DZIEŃ: {test_date}")
         print(f"Pobieram dane M15 i H1...")
 
-        # ~300 świec M15 = 75h kontekstu wstecz + przyszłe
-        all_m15 = fetch_klines_at(SYMBOL, "15m", 300, end_ts)
+        # ~500 świec M15 = 125h kontekstu wstecz + przyszłe świece (pewny margines)
+        all_m15 = fetch_klines_at(SYMBOL, "15m", 500, end_ts)
         # ~120 świec H1 = 5 dób kontekstu
         all_h1  = fetch_klines_at(SYMBOL, "1h",  120, end_ts)
-        print(f"  M15: {len(all_m15)} swiec | H1: {len(all_h1)} swiec")
+        if all_m15:
+            m15_from = datetime.fromtimestamp(all_m15[0]["time"],  tz=TZ).strftime("%d.%m %H:%M")
+            m15_to   = datetime.fromtimestamp(all_m15[-1]["time"], tz=TZ).strftime("%d.%m %H:%M")
+        else:
+            m15_from = m15_to = "brak"
+        print(f"  M15: {len(all_m15)} swiec ({m15_from} → {m15_to}) | H1: {len(all_h1)} swiec")
 
         for hour in SNAPSHOT_HOURS:
             snap_ts    = snapshot_ts(test_date, hour)
