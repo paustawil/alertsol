@@ -3,6 +3,16 @@ name: Backtest SOL 16-20.03.2026
 on:
   workflow_dispatch:
     inputs:
+      date_from:
+        description: 'Od dnia (YYYY-MM-DD, puste = pierwszy dzień)'
+        required: false
+        default: ''
+        type: string
+      date_to:
+        description: 'Do dnia (YYYY-MM-DD, puste = ostatni dzień)'
+        required: false
+        default: ''
+        type: string
       session:
         description: 'Sesja'
         required: false
@@ -45,6 +55,8 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
           ARGS="--session ${{ github.event.inputs.session }}"
+          [ -n "${{ github.event.inputs.date_from }}" ] && ARGS="$ARGS --date-from ${{ github.event.inputs.date_from }}"
+          [ -n "${{ github.event.inputs.date_to }}"   ] && ARGS="$ARGS --date-to ${{ github.event.inputs.date_to }}"
           [ "${{ github.event.inputs.reset }}"  = "true" ] && ARGS="$ARGS --reset"
           [ "${{ github.event.inputs.no_llm }}" = "true" ] && ARGS="$ARGS --no-llm"
           python backtest.py $ARGS

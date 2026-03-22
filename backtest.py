@@ -519,9 +519,22 @@ def main():
                         help="Sesja: afternoon (14–22) | morning (8–13) | full (obie, domyślnie)")
     parser.add_argument("--reset", action="store_true",
                         help="Wyczyść arkusze TEST przed zapisem (domyślnie: dopisuje)")
+    parser.add_argument("--date-from", default=None,
+                        help="Pierwszy dzień zakresu YYYY-MM-DD (domyślnie: pierwszy z TEST_DATES)")
+    parser.add_argument("--date-to", default=None,
+                        help="Ostatni dzień zakresu YYYY-MM-DD (domyślnie: ostatni z TEST_DATES)")
     args = parser.parse_args()
 
-    dates_str = ", ".join(TEST_DATES)
+    dates = TEST_DATES
+    if args.date_from or args.date_to:
+        d_from = args.date_from or TEST_DATES[0]
+        d_to   = args.date_to   or TEST_DATES[-1]
+        dates  = [d for d in TEST_DATES if d_from <= d <= d_to]
+        if not dates:
+            print(f"Brak dat w zakresie {d_from}–{d_to}. Dostępne: {', '.join(TEST_DATES)}")
+            return
+
+    dates_str = ", ".join(dates)
     print(f"=== Backtest SOL | {dates_str} ===")
     if args.no_llm:
         print("Tryb: tylko algorytm (--no-llm)")
@@ -545,7 +558,7 @@ def main():
         print(f"  {label}")
         print(f"{'█'*55}")
 
-        for test_date in TEST_DATES:
+        for test_date in dates:
             # end_ts zawsze z zapasem — 22:00 + 25h pokrywa i przyszłe świece i pełny kontekst
             end_ts = snapshot_ts(test_date, 22) + 25 * 3600
             print(f"\n{'═'*55}")
