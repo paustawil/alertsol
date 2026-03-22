@@ -544,10 +544,10 @@ def main():
     print("\nOtwieram arkusze testowe...")
     sh1, sh2 = _get_test_sheets(reset=args.reset)
 
-    # W trybie full: najpierw sesja afternoon (14–22), potem morning (8–13)
+    # W trybie full: chronologicznie morning (8–13) → afternoon (14–22)
     sessions_to_run = (
-        [("afternoon", SESSION_HOURS["afternoon"]),
-         ("morning",   SESSION_HOURS["morning"])]
+        [("morning",   SESSION_HOURS["morning"]),
+         ("afternoon", SESSION_HOURS["afternoon"])]
         if args.session == "full"
         else [(args.session, SESSION_HOURS[args.session])]
     )
