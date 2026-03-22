@@ -470,7 +470,14 @@ def run_session(test_date: str, hours: list[int],
             raw_c   = call_claude_hist(m15_snap, h1_snap, current_price)
             setup_c = normalize_llm_setup(raw_c)
             if setup_c:
-                rejection = validate_setup(setup_c, "Claude")
+                reasons_c = []
+                val_c = validate_setup(setup_c, "Claude")
+                if val_c:
+                    reasons_c.append(val_c)
+                score_c = setup_c.get("total", setup_c.get("score", 0))
+                if score_c < MIN_SCORE:
+                    reasons_c.append(f"Score<{MIN_SCORE} ({score_c})")
+                rejection = " | ".join(reasons_c)
                 log_alert(sh1, snap_label, "Claude", rejection, setup_c)
                 sim     = simulate_result(setup_c, future_m15)
                 sim_tp1 = simulate_tp1_only(setup_c, future_m15)
@@ -496,7 +503,14 @@ def run_session(test_date: str, hours: list[int],
             raw_g   = call_gpt_hist(m15_snap, h1_snap, current_price)
             setup_g = normalize_llm_setup(raw_g)
             if setup_g:
-                rejection = validate_setup(setup_g, "GPT")
+                reasons_g = []
+                val_g = validate_setup(setup_g, "GPT")
+                if val_g:
+                    reasons_g.append(val_g)
+                score_g = setup_g.get("total", setup_g.get("score", 0))
+                if score_g < MIN_SCORE:
+                    reasons_g.append(f"Score<{MIN_SCORE} ({score_g})")
+                rejection = " | ".join(reasons_g)
                 log_alert(sh1, snap_label, "GPT", rejection, setup_g)
                 sim     = simulate_result(setup_g, future_m15)
                 sim_tp1 = simulate_tp1_only(setup_g, future_m15)
