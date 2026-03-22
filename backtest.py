@@ -48,8 +48,12 @@ TZ            = ZoneInfo("Europe/Warsaw")
 SYMBOL        = "SOLUSDT"
 # Tydzień handlowy + sobota (pon–sob 17–22.03.2026)
 TEST_DATES     = ["2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20", "2026-03-21", "2026-03-22"]
-# Sesje EU (8–17) i US (14–22) Warsaw — co godzinę
-SNAPSHOT_HOURS = list(range(8, 23))   # 8, 9, …, 22
+# Definicje sesji (godziny Warsaw)
+SESSION_HOURS = {
+    "afternoon": list(range(14, 23)),   # 14:00–22:00  sesja US
+    "morning":   list(range(8,  14)),   # 8:00–13:00   sesja EU (uzupełniająca)
+    "full":      list(range(8,  23)),   # 8:00–22:00   obie sesje
+}
 # Ile świec M15 do przodu sprawdzamy wyniki (24h * 4 = 96)
 FUTURE_CANDLES_LIMIT = 96
 # Timeout na wejście (w świecach M15, 4 = 1h)
@@ -241,8 +245,51 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
             "exit_ts": exit_ts, "pnl": pnl, "eff_entry": eff_entry, "eff_exit": eff_exit}
 
 
+def simulate_tp1_only(setup: dict, future_candles: list[dict]) -> dict:
+    """Symuluje strategię TP1-only: wychodzi w całości na TP1 (ignoruje TP2).
+    Jeśli trafione W1+W2 — używa średniego entry do PnL."""
+    entries = setup.get("entries", [])
+    sl      = setup.get("sl")
+    tps     = setup.get("tps", [])
+    tp1     = tps[0] if tps else None
+    d       = setup.get("direction", "long")
+    w1      = entries[0] if entries else None
+    w2      = entries[1] if len(entries) > 1 else None
+
+    if not entries or sl is None or w1 is None or tp1 is None:
+        return {"result": "brak_danych", "pnl": 0.0}
+
+    entry_ts = None
+    for c in future_candles[:ENTRY_TIMEOUT_CANDLES]:
+        if _hits(c, w1, d, "entry"):
+            entry_ts = c["time"]; break
+
+    if entry_ts is None:
+        return {"result": "nie_weszlo", "pnl": 0.0}
+
+    after_entry = [c for c in future_candles if c["time"] > entry_ts]
+
+    # Sprawdzamy czy W2 też zostało trafione przed TP1/SL
+    w2_hit = False
+    for c in after_entry[:TRADE_TIMEOUT_CANDLES]:
+        if w2 is not None and not w2_hit and _hits(c, w2, d, "entry"):
+            w2_hit = True
+        if _hits(c, tp1, d, "tp"):
+            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl = round((tp1 - eff_entry) if d == "long" else (eff_entry - tp1), 2)
+            label = "W1+W2→TP1" if w2_hit else "TP1"
+            return {"result": label, "pnl": pnl}
+        if _hits(c, sl, d, "sl"):
+            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl = round((sl - eff_entry) if d == "long" else (eff_entry - sl), 2)
+            label = "W1+W2→SL" if w2_hit else "SL"
+            return {"result": label, "pnl": pnl}
+
+    return {"result": "timeout", "pnl": 0.0}
+
+
 # ── Google Sheets ──────────────────────────────────────────────────────────────
-def _get_test_sheets():
+def _get_test_sheets(reset: bool = False):
     creds  = Credentials.from_service_account_info(
         json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -256,9 +303,10 @@ def _get_test_sheets():
     ]
     WYNIKI_HEADER = [
         "Snapshot", "Model", "Typ", "Kierunek", "Score",
-        "W1", "SL", "TP1", "TP2", "RR",
+        "W1", "W2", "SL", "TP1", "TP2", "RR",
         "Entries_hit", "Śr.Entry", "Śr.Exit",
-        "Wejście o", "Wyjście o", "Wynik", "PnL $",
+        "Wejście o", "Wyjście o", "Wynik (TP1+TP2)", "PnL $ (TP1+TP2)",
+        "Wynik (TP1 only)", "PnL $ (TP1 only)",
     ]
 
     for name, header, rows in [
@@ -267,8 +315,9 @@ def _get_test_sheets():
     ]:
         try:
             sh = wb.worksheet(name)
-            sh.clear()
-            sh.append_row(header)
+            if reset:
+                sh.clear()
+                sh.append_row(header)
         except gspread.WorksheetNotFound:
             sh = wb.add_worksheet(name, rows=rows, cols=20)
             sh.append_row(header)
@@ -306,12 +355,14 @@ def log_alert(sh1, snapshot_label: str, model: str, passed: bool, setup: dict):
     ])
 
 
-def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict):
+def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict, sim_tp1: dict):
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [])
     eff_entry = f"{sim['eff_entry']:.2f}" if sim["eff_entry"] is not None else "-"
     eff_exit  = f"{sim['eff_exit']:.2f}"  if sim["eff_exit"]  is not None else "-"
     n_w = sim["entries_hit"]
+    pnl_tp12  = sim["pnl"]     if sim["pnl"]     != 0.0 or sim["result"]     not in ("nie_weszlo", "brak_danych", "timeout") else "-"
+    pnl_tp1   = sim_tp1["pnl"] if sim_tp1["pnl"] != 0.0 or sim_tp1["result"] not in ("nie_weszlo", "brak_danych", "timeout") else "-"
     sh2.append_row([
         snapshot_label,
         model,
@@ -319,6 +370,7 @@ def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict):
         setup.get("direction", "-"),
         setup.get("total", setup.get("score", "-")),
         entries[0] if entries else "-",
+        entries[1] if len(entries) > 1 else "-",
         setup.get("sl", "-"),
         tps[0] if tps else setup.get("tp1", "-"),
         tps[1] if len(tps) > 1 else setup.get("tp2", "-"),
@@ -329,7 +381,9 @@ def log_wynik(sh2, snapshot_label: str, model: str, setup: dict, sim: dict):
         ts_to_str(sim["entry_ts"]),
         ts_to_str(sim["exit_ts"]),
         sim["result"],
-        sim["pnl"] if sim["pnl"] != 0.0 or sim["result"] not in ("nie_weszlo", "brak_danych", "timeout") else "-",
+        pnl_tp12,
+        sim_tp1["result"],
+        pnl_tp1,
     ])
 
 
@@ -355,123 +409,164 @@ def normalize_llm_setup(raw: dict) -> dict | None:
     }
 
 
+# ── Pętla po godzinach jednej sesji ───────────────────────────────────────────
+def run_session(test_date: str, hours: list[int],
+                all_m15: list[dict], all_h1: list[dict],
+                sh1, sh2, no_llm: bool) -> None:
+    for hour in hours:
+        snap_ts    = snapshot_ts(test_date, hour)
+        snap_label = f"{test_date} {hour:02d}:00"
+        print(f"\n{'─'*55}")
+        print(f"SNAPSHOT {snap_label}")
+
+        m15_snap = [c for c in all_m15 if c["time"] <= snap_ts][-60:]
+        h1_snap  = [c for c in all_h1  if c["time"] <= snap_ts][-24:]
+
+        if not m15_snap:
+            print("  Brak danych M15, pomijam.")
+            continue
+
+        current_price = m15_snap[-1]["close"]
+        print(f"  Cena: ${current_price:.2f}")
+
+        future_m15 = [c for c in all_m15 if c["time"] > snap_ts]
+
+        # ── 1. Algo ──
+        rng         = detect_range(m15_snap)
+        algo_setups = algo_detect(m15_snap, h1_snap, rng)
+        print(f"  [Algo]   {len(algo_setups)} setup(ów)")
+        for s in algo_setups:
+            passed = validate_setup(s, "Algo") and s.get("total", 0) >= MIN_SCORE
+            log_alert(sh1, snap_label, "Algo", passed, s)
+            if passed:
+                sim      = simulate_result(s, future_m15)
+                sim_tp1  = simulate_tp1_only(s, future_m15)
+                log_wynik(sh2, snap_label, "Algo", s, sim, sim_tp1)
+                sign = "+" if sim["pnl"] >= 0 else ""
+                print(f"    {s['direction']:5s} {s['type']:12s} score={s['total']} "
+                      f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                      f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
+            else:
+                print(f"    {s['direction']:5s} {s['type']:12s} score={s.get('total',0)} → [odrzucony]")
+
+        time.sleep(0.5)
+
+        # ── 2. Claude ──
+        if not no_llm and ANTHROPIC_KEY:
+            print("  [Claude] Wywołuję API...")
+            raw_c   = call_claude_hist(m15_snap, h1_snap, current_price)
+            setup_c = normalize_llm_setup(raw_c)
+            if setup_c:
+                passed = validate_setup(setup_c, "Claude")
+                log_alert(sh1, snap_label, "Claude", passed, setup_c)
+                if passed:
+                    sim     = simulate_result(setup_c, future_m15)
+                    sim_tp1 = simulate_tp1_only(setup_c, future_m15)
+                    log_wynik(sh2, snap_label, "Claude", setup_c, sim, sim_tp1)
+                    sign = "+" if sim["pnl"] >= 0 else ""
+                    print(f"    {setup_c['direction']:5s} {setup_c['type']:12s} "
+                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                          f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
+                else:
+                    print("    Setup Claude odrzucony przez walidację")
+            else:
+                print("    Brak setupu (setup_found=false lub błąd)")
+                if raw_c and not raw_c.get("setup_found"):
+                    log_alert(sh1, snap_label, "Claude", False,
+                              {"type": "-", "direction": "-", "entries": [],
+                               "reasoning": raw_c.get("reasoning", "-")})
+            time.sleep(1.0)
+        elif not no_llm:
+            print("  [Claude] Pominięty — brak klucza API")
+
+        # ── 3. GPT ──
+        if not no_llm and OPENAI_KEY:
+            print("  [GPT]    Wywołuję API...")
+            raw_g   = call_gpt_hist(m15_snap, h1_snap, current_price)
+            setup_g = normalize_llm_setup(raw_g)
+            if setup_g:
+                passed = validate_setup(setup_g, "GPT")
+                log_alert(sh1, snap_label, "GPT", passed, setup_g)
+                if passed:
+                    sim     = simulate_result(setup_g, future_m15)
+                    sim_tp1 = simulate_tp1_only(setup_g, future_m15)
+                    log_wynik(sh2, snap_label, "GPT", setup_g, sim, sim_tp1)
+                    sign = "+" if sim["pnl"] >= 0 else ""
+                    print(f"    {setup_g['direction']:5s} {setup_g['type']:12s} "
+                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
+                          f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
+                else:
+                    print("    Setup GPT odrzucony przez walidację")
+            else:
+                print("    Brak setupu (setup_found=false lub błąd)")
+                if raw_g and not raw_g.get("setup_found"):
+                    log_alert(sh1, snap_label, "GPT", False,
+                              {"type": "-", "direction": "-", "entries": [],
+                               "reasoning": raw_g.get("reasoning", "-")})
+            time.sleep(1.0)
+        elif not no_llm:
+            print("  [GPT]    Pominięty — brak klucza API")
+
+
 # ── Główna pętla backtestowa ───────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-llm", action="store_true",
                         help="Pomiń API Claude i GPT (tylko algo_detect)")
+    parser.add_argument("--session", choices=["afternoon", "morning", "full"],
+                        default="full",
+                        help="Sesja: afternoon (14–22) | morning (8–13) | full (obie, domyślnie)")
+    parser.add_argument("--reset", action="store_true",
+                        help="Wyczyść arkusze TEST przed zapisem (domyślnie: dopisuje)")
     args = parser.parse_args()
 
     dates_str = ", ".join(TEST_DATES)
-    print(f"=== Backtest SOL | {dates_str} | sesje EU/US ({SNAPSHOT_HOURS[0]}–{SNAPSHOT_HOURS[-1]} Warsaw) ===")
+    print(f"=== Backtest SOL | {dates_str} ===")
     if args.no_llm:
         print("Tryb: tylko algorytm (--no-llm)")
+    if args.reset:
+        print("Tryb: --reset — arkusze TEST zostaną wyczyszczone przed zapisem")
 
     print("\nOtwieram arkusze testowe...")
-    sh1, sh2 = _get_test_sheets()
+    sh1, sh2 = _get_test_sheets(reset=args.reset)
 
-    for test_date in TEST_DATES:
-        # Pobieramy dane do końca ostatniego snapshotu + bufor na przyszłe świece
-        end_ts = snapshot_ts(test_date, SNAPSHOT_HOURS[-1]) + 25 * 3600
-        print(f"\n{'═'*55}")
-        print(f"DZIEŃ: {test_date}")
-        print(f"Pobieram dane M15 i H1...")
+    # W trybie full: najpierw sesja afternoon (14–22), potem morning (8–13)
+    sessions_to_run = (
+        [("afternoon", SESSION_HOURS["afternoon"]),
+         ("morning",   SESSION_HOURS["morning"])]
+        if args.session == "full"
+        else [(args.session, SESSION_HOURS[args.session])]
+    )
 
-        # ~300 świec M15 = 75h kontekstu wstecz + przyszłe
-        all_m15 = fetch_klines_at(SYMBOL, "15m", 300, end_ts)
-        # ~120 świec H1 = 5 dób kontekstu
-        all_h1  = fetch_klines_at(SYMBOL, "1h",  120, end_ts)
-        print(f"  M15: {len(all_m15)} swiec | H1: {len(all_h1)} swiec")
+    for sess_name, sess_hours in sessions_to_run:
+        label = {"afternoon": "Sesja 14:00–22:00 (US)", "morning": "Sesja 8:00–13:00 (EU)"}[sess_name]
+        print(f"\n{'█'*55}")
+        print(f"  {label}")
+        print(f"{'█'*55}")
 
-        for hour in SNAPSHOT_HOURS:
-            snap_ts    = snapshot_ts(test_date, hour)
-            snap_label = f"{test_date} {hour:02d}:00"
-            print(f"\n{'─'*55}")
-            print(f"SNAPSHOT {snap_label}")
+        for test_date in TEST_DATES:
+            # end_ts zawsze z zapasem — 22:00 + 25h pokrywa i przyszłe świece i pełny kontekst
+            end_ts = snapshot_ts(test_date, 22) + 25 * 3600
+            print(f"\n{'═'*55}")
+            print(f"DZIEŃ: {test_date}")
+            print("Pobieram dane M15 i H1...")
 
-            m15_snap = [c for c in all_m15 if c["time"] <= snap_ts][-60:]
-            h1_snap  = [c for c in all_h1  if c["time"] <= snap_ts][-24:]
+            all_m15 = fetch_klines_at(SYMBOL, "15m", 500, end_ts)
+            all_h1  = fetch_klines_at(SYMBOL, "1h",  120, end_ts)
 
-            if not m15_snap:
-                print("  Brak danych M15, pomijam.")
-                continue
+            if all_m15:
+                m15_from = datetime.fromtimestamp(all_m15[0]["time"],  tz=TZ).strftime("%d.%m %H:%M")
+                m15_to   = datetime.fromtimestamp(all_m15[-1]["time"], tz=TZ).strftime("%d.%m %H:%M")
+            else:
+                m15_from = m15_to = "brak"
+            print(f"  M15: {len(all_m15)} swiec ({m15_from} → {m15_to}) | H1: {len(all_h1)} swiec")
 
-            current_price = m15_snap[-1]["close"]
-            print(f"  Cena: ${current_price:.2f}")
+            run_session(test_date, sess_hours, all_m15, all_h1, sh1, sh2, args.no_llm)
 
-            future_m15 = [c for c in all_m15 if c["time"] > snap_ts]
+            time.sleep(2.0)  # pauza między dniami
 
-            # ── 1. Algo ──
-            rng         = detect_range(m15_snap)
-            algo_setups = algo_detect(m15_snap, h1_snap, rng)
-            print(f"  [Algo]   {len(algo_setups)} setup(ów)")
-            for s in algo_setups:
-                passed = validate_setup(s, "Algo") and s.get("total", 0) >= MIN_SCORE
-                log_alert(sh1, snap_label, "Algo", passed, s)
-                if passed:
-                    sim = simulate_result(s, future_m15)
-                    log_wynik(sh2, snap_label, "Algo", s, sim)
-                    sign = "+" if sim["pnl"] >= 0 else ""
-                    print(f"    {s['direction']:5s} {s['type']:12s} score={s['total']} "
-                          f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$")
-                else:
-                    print(f"    {s['direction']:5s} {s['type']:12s} score={s.get('total',0)} → [odrzucony]")
-
-            time.sleep(0.5)
-
-            # ── 2. Claude ──
-            if not args.no_llm and ANTHROPIC_KEY:
-                print("  [Claude] Wywołuję API...")
-                raw_c   = call_claude_hist(m15_snap, h1_snap, current_price)
-                setup_c = normalize_llm_setup(raw_c)
-                if setup_c:
-                    passed = validate_setup(setup_c, "Claude")
-                    log_alert(sh1, snap_label, "Claude", passed, setup_c)
-                    if passed:
-                        sim = simulate_result(setup_c, future_m15)
-                        log_wynik(sh2, snap_label, "Claude", setup_c, sim)
-                        sign = "+" if sim["pnl"] >= 0 else ""
-                        print(f"    {setup_c['direction']:5s} {setup_c['type']:12s} "
-                              f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$")
-                    else:
-                        print("    Setup Claude odrzucony przez walidację")
-                else:
-                    print("    Brak setupu (setup_found=false lub błąd)")
-                    if raw_c and not raw_c.get("setup_found"):
-                        log_alert(sh1, snap_label, "Claude", False,
-                                  {"type": "-", "direction": "-", "entries": [],
-                                   "reasoning": raw_c.get("reasoning", "-")})
-                time.sleep(1.0)
-            elif not args.no_llm:
-                print("  [Claude] Pominięty — brak klucza API")
-
-            # ── 3. GPT ──
-            if not args.no_llm and OPENAI_KEY:
-                print("  [GPT]    Wywołuję API...")
-                raw_g   = call_gpt_hist(m15_snap, h1_snap, current_price)
-                setup_g = normalize_llm_setup(raw_g)
-                if setup_g:
-                    passed = validate_setup(setup_g, "GPT")
-                    log_alert(sh1, snap_label, "GPT", passed, setup_g)
-                    if passed:
-                        sim = simulate_result(setup_g, future_m15)
-                        log_wynik(sh2, snap_label, "GPT", setup_g, sim)
-                        sign = "+" if sim["pnl"] >= 0 else ""
-                        print(f"    {setup_g['direction']:5s} {setup_g['type']:12s} "
-                              f"→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$")
-                    else:
-                        print("    Setup GPT odrzucony przez walidację")
-                else:
-                    print("    Brak setupu (setup_found=false lub błąd)")
-                    if raw_g and not raw_g.get("setup_found"):
-                        log_alert(sh1, snap_label, "GPT", False,
-                                  {"type": "-", "direction": "-", "entries": [],
-                                   "reasoning": raw_g.get("reasoning", "-")})
-                time.sleep(1.0)
-            elif not args.no_llm:
-                print("  [GPT]    Pominięty — brak klucza API")
-
-        time.sleep(2.0)  # pauza między dniami
+        print(f"\n{'─'*55}")
+        print(f"  {label} — zakończona.")
 
     print(f"\n{'='*55}")
     print("Backtest zakończony. Arkusze: Alerty_TEST, Wyniki_TEST")
