@@ -34,6 +34,39 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
 
+
+def _extract_first_json(text: str) -> dict:
+    """Wyodrębnij pierwszy kompletny obiekt JSON z tekstu (śledzi głębokość nawiasów).
+
+    Bezpieczniejsze niż greedy regex r"\\{.*\\}" z re.DOTALL, który lapie
+    od pierwszego { do OSTATNIEGO } — i sypie się gdy Claude doda coś po JSON.
+    """
+    start = text.find('{')
+    if start == -1:
+        raise ValueError("Brak '{' w odpowiedzi")
+    depth = 0
+    in_str = False
+    escape = False
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_str:
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:i + 1])
+    raise ValueError("Niekompletny obiekt JSON (niezamknięty '{')")
+
 # ── Importujemy logikę z sol_alert ────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
 from sol_alert import (
@@ -118,12 +151,12 @@ def call_claude_hist(candles_m15: list[dict], candles_h1: list[dict],
             system=FORTECA_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
-        text  = response.content[0].text.strip()
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        print(f"[claude] Brak JSON w odpowiedzi: {text[:300]!r}")
-        return {"_error": "no_json", "_raw": text[:300]}
+        text = response.content[0].text.strip()
+        try:
+            return _extract_first_json(text)
+        except (ValueError, json.JSONDecodeError) as exc:
+            print(f"[claude] Błąd parsowania JSON: {exc}\nRaw (300 zn.): {text[:300]!r}")
+            return {"_error": str(exc), "_raw": text[:300]}
     except Exception as e:
         print(f"[claude] Blad API: {e}")
         return {"_error": str(e)}
@@ -153,12 +186,12 @@ def call_gpt_hist(candles_m15: list[dict], candles_h1: list[dict],
                 {"role": "user",   "content": user_msg},
             ],
         )
-        text  = response.choices[0].message.content.strip()
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        print(f"[gpt] Brak JSON w odpowiedzi: {text[:300]!r}")
-        return {"_error": "no_json", "_raw": text[:300]}
+        text = response.choices[0].message.content.strip()
+        try:
+            return _extract_first_json(text)
+        except (ValueError, json.JSONDecodeError) as exc:
+            print(f"[gpt] Błąd parsowania JSON: {exc}\nRaw (300 zn.): {text[:300]!r}")
+            return {"_error": str(exc), "_raw": text[:300]}
     except Exception as e:
         print(f"[gpt] Blad: {e}")
     return None
@@ -466,7 +499,7 @@ def forteca_violations(setup: dict) -> str:
 # ── Pętla po godzinach jednej sesji ───────────────────────────────────────────
 def run_session(test_date: str, hours: list[int],
                 all_m15: list[dict], all_h1: list[dict],
-                sh1, sh2, no_llm: bool) -> None:
+                sh1, sh2, no_llm: bool, only_claude: bool = False) -> None:
     for hour in hours:
         snap_ts    = snapshot_ts(test_date, hour)
         snap_label = f"{test_date} {hour:02d}:00"
@@ -540,7 +573,7 @@ def run_session(test_date: str, hours: list[int],
             print("  [Claude] Pominięty — brak klucza API")
 
         # ── 3. GPT ──
-        if not no_llm and OPENAI_KEY:
+        if not no_llm and not only_claude and OPENAI_KEY:
             print("  [GPT]    Wywołuję API...")
             raw_g   = call_gpt_hist(m15_snap, h1_snap, current_price)
             setup_g = normalize_llm_setup(raw_g)
@@ -572,7 +605,7 @@ def run_session(test_date: str, hours: list[int],
                           {"type": "-", "direction": "-", "entries": [],
                            "reasoning": (raw_g or {}).get("reasoning", reason)})
             time.sleep(1.0)
-        elif not no_llm:
+        elif not no_llm and not only_claude:
             print("  [GPT]    Pominięty — brak klucza API")
 
 
@@ -581,6 +614,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-llm", action="store_true",
                         help="Pomiń API Claude i GPT (tylko algo_detect)")
+    parser.add_argument("--only-claude", action="store_true",
+                        help="Wywołuj tylko Claude (pomiń GPT)")
     parser.add_argument("--session", choices=["afternoon", "morning", "full"],
                         default="full",
                         help="Sesja: afternoon (14–22) | morning (8–13) | full (obie, domyślnie)")
@@ -605,6 +640,8 @@ def main():
     print(f"=== Backtest SOL | {dates_str} ===")
     if args.no_llm:
         print("Tryb: tylko algorytm (--no-llm)")
+    if args.only_claude:
+        print("Tryb: tylko Claude (--only-claude, GPT pominięty)")
     if args.reset:
         print("Tryb: --reset — arkusze TEST zostaną wyczyszczone przed zapisem")
 
@@ -650,7 +687,8 @@ def main():
                 m15_from = m15_to = "brak"
             print(f"  M15: {len(all_m15)} swiec ({m15_from} → {m15_to}) | H1: {len(all_h1)} swiec")
 
-            run_session(test_date, sess_hours, all_m15, all_h1, sh1, sh2, args.no_llm)
+            run_session(test_date, sess_hours, all_m15, all_h1, sh1, sh2,
+                        args.no_llm, only_claude=args.only_claude)
 
             time.sleep(2.0)  # pauza między dniami
 

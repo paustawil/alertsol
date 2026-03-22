@@ -192,8 +192,12 @@ Return setup_found=false in any of these situations:
 - TP1 is less than 0.5 USD from W1.
 
 ==================================================
-OUTPUT FORMAT — return exactly one JSON object, no markdown, no extra text
+OUTPUT FORMAT — CRITICAL
 ==================================================
+
+Your ENTIRE response MUST be a single JSON object — nothing else.
+Start your response with { and end with }. No text before, no text after, no markdown, no code fences.
+If you write anything outside the JSON, the system will fail. JSON only.
 
 Write "reasoning" and "invalidation" values in Polish.
 
