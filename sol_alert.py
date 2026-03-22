@@ -115,7 +115,7 @@ IMPORTANT: Never accept a setup if Level < 2.
 0 = momentum clearly against setup direction
 
 5. RR (reward/risk ratio, computed to TP2 from average layered entry)
-average_entry = mean(W1, W2, W3)
+average_entry = mean(W1, W2)
 risk = |average_entry - SL|
 reward = |TP2 - average_entry|
 rr = reward / risk
@@ -139,11 +139,12 @@ Return setup_found=true ONLY if ALL of the following are true:
 Score guide: 10-11 = acceptable, 12-13 = strong, 14-15 = exceptional (rare, do not overuse).
 
 ==================================================
-ENTRY MODEL — W1 / W2 / W3
+ENTRY MODEL — W1 / W2 (two layers only)
 ==================================================
-For long: W1 = highest entry (top of buy zone), W2 = middle, W3 = lowest (deepest). List highest to lowest.
-For short: W1 = lowest entry (bottom of sell zone), W2 = middle, W3 = highest (deepest). List lowest to highest.
-Use three entries only if a real zone exists. Keep the zone tight enough to represent one idea.
+For long: W1 = higher entry (first/aggressive entry near current price or zone top), W2 = deeper entry (at zone bottom or structural confluence). List W1 first (closer to current price), W2 second (deeper).
+For short: W1 = lower entry (first/aggressive entry), W2 = higher entry (deeper). List W1 first, W2 second.
+Use both layers only if a real zone justifies two distinct entry points. Keep the zone tight enough to represent one idea.
+average_entry for RR purposes = mean(W1, W2).
 
 ==================================================
 STOP LOSS LOGIC
@@ -151,13 +152,34 @@ STOP LOSS LOGIC
 Long: SL below the structural low / support that defines the setup idea.
 Short: SL above the structural high / resistance that defines the setup idea.
 SL must be at the true invalidation point — where the setup logic is broken. Never use fixed pip/ATR distance as SL.
+One SL applies to both W1 and W2.
+
+==================================================
+TARGET SIZE CONSTRAINTS
+==================================================
+The target is a 1.0–1.5 USD move on SOL/USDT. These are HARD constraints:
+- TP1 must be at least 0.5 USD above W1 (long) or below W1 (short). If nearest level is closer than 0.5 USD, REJECT the setup.
+- TP2 must be 1.0–1.5 USD from W1 under normal conditions.
+- In a STRONG IMPULSE context (clear BOS on H1, multiple impulsive M15 candles in setup direction, aligned momentum): TP2 may extend to 2.0 USD from W1.
+- Never place TP2 farther than 2.0 USD from W1 regardless of conditions.
+- If no level exists within the 1.0–1.5 USD window for TP2, REJECT the setup unless strong impulse context justifies 1.5–2.0 USD.
 
 ==================================================
 TARGET LOGIC
 ==================================================
-TP1 = first realistic reaction point (nearest opposing intraday structure in setup direction).
-TP2 = main Forteca target — next meaningful level in setup direction; used for RR calculation.
+TP1 = first realistic reaction point (nearest opposing intraday structure in setup direction, minimum 0.5 USD from W1).
+TP2 = main Forteca target — next meaningful level in setup direction, 1.0–1.5 USD from W1 (up to 2.0 USD in strong impulse). Used for RR calculation.
 TP2 must always be farther than TP1 in trade direction. Both targets must be technically grounded in the data.
+
+==================================================
+POSITION MANAGEMENT — sl_after_tp1
+==================================================
+After TP1 is hit, the SL is moved to protect the trade. Calculate sl_after_tp1 as follows:
+- Identify the most recent structural support (long) or resistance (short) that formed between W1/W2 and TP1.
+- If such a level exists and is above W1 (long) or below W1 (short): use it as sl_after_tp1.
+- If no clear structural level exists between entry and TP1, or if the level is not in profit territory: use W1 as sl_after_tp1 (break-even).
+- sl_after_tp1 must always be: above W1 for long (in profit or at BE), below W1 for short (in profit or at BE).
+- sl_after_tp1 is the SL level used for TP2 monitoring after TP1 is hit. Include it in the output.
 
 ==================================================
 WHEN TO RETURN NO SETUP
@@ -171,6 +193,8 @@ Return setup_found=false in any of these situations:
 - No clean technical invalidation level exists.
 - Setup logic is vague, uncertain, or "possible but not clear".
 - Level is only touched once with no proven historical reaction.
+- TP1 is less than 0.5 USD from W1.
+- TP2 cannot be placed within 1.0–2.0 USD from W1 at a technically grounded level.
 - You need to bend or stretch any rule above to make the setup work.
 
 ==================================================
@@ -178,7 +202,7 @@ OUTPUT FORMAT — return exactly one JSON object, no markdown, no extra text
 ==================================================
 
 If setup found:
-{"setup_found":true,"setup_type":"setup family name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70,88.45],"sl":88.10,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"brief Forteca-based justification referencing specific levels from the data","invalidation":"specific condition that breaks the setup logic"}
+{"setup_found":true,"setup_type":"setup family name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70],"sl":88.10,"sl_after_tp1":88.95,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"brief Forteca-based justification referencing specific levels from the data","invalidation":"specific condition that breaks the setup logic"}
 
 If no setup:
 {"setup_found":false,"reasoning":"specific reason why no valid Forteca setup exists right now"}"""
@@ -269,7 +293,7 @@ Note: A setup should almost never be accepted if Level < 2.
 Favor impulsive moves in setup direction. Favor visible slowdown/stalling against opposing side.
 
 5. RR (reward-to-risk to TP2 from average layered entry)
-Compute: average_entry = mean(W1,W2,W3), risk = |average_entry - SL|, reward = |TP2 - average_entry|, rr = reward/risk
+Compute: average_entry = mean(W1,W2), risk = |average_entry - SL|, reward = |TP2 - average_entry|, rr = reward/risk
 0 = rr < 1.2
 1 = rr 1.2 to 1.79
 2 = rr 1.8 to 2.49
@@ -289,11 +313,12 @@ Return setup_found=true ONLY if ALL are true:
 Score 10-11 = acceptable. Score 12-13 = strong. Score 14-15 = exceptional and rare. Do not overuse 14-15.
 
 ==================================================
-ENTRY MODEL — W1 / W2 / W3
+ENTRY MODEL — W1 / W2 (two layers only)
 ==================================================
-For long: W1 = top of buy zone (highest), W2 = middle, W3 = deepest (lowest). Entries listed highest to lowest.
-For short: W1 = bottom of sell zone (lowest), W2 = middle, W3 = deepest (highest). Entries listed lowest to highest.
-Use three entries only if a real zone exists. Keep zone tight enough to represent one idea.
+For long: W1 = higher entry (first/aggressive entry, zone top or nearest level), W2 = deeper entry (zone bottom or structural confluence). List W1 first, W2 second.
+For short: W1 = lower entry (first/aggressive), W2 = higher entry (deeper). List W1 first, W2 second.
+Use both layers only when a real zone justifies two distinct entry points. Keep zone tight enough to represent one idea.
+average_entry for RR = mean(W1, W2). One SL applies to both layers.
 
 ==================================================
 STOP LOSS LOGIC
@@ -304,16 +329,35 @@ Short: SL above the resistance/retest/structural high defining the setup.
 Never tighten SL purely to improve RR.
 
 ==================================================
+TARGET SIZE CONSTRAINTS
+==================================================
+The expected move is 1.0–1.5 USD on SOL/USDT. These are HARD constraints:
+- TP1 must be at least 0.5 USD from W1. If nearest level is closer, REJECT the setup.
+- TP2 must be 1.0–1.5 USD from W1 under normal conditions.
+- In a STRONG IMPULSE context (clear BOS on H1, multiple impulsive M15 candles, aligned momentum): TP2 may extend to 2.0 USD from W1.
+- Never place TP2 farther than 2.0 USD from W1 regardless of conditions.
+- Reject if no technically grounded level exists within the required TP2 window.
+
+==================================================
 TARGET LOGIC
 ==================================================
-TP1 = first realistic reaction point (nearest opposing intraday structure).
-TP2 = main Forteca target, next meaningful level in setup direction, real payoff target for RR calculation.
+TP1 = first realistic reaction point (nearest opposing intraday structure, minimum 0.5 USD from W1).
+TP2 = main target, 1.0–1.5 USD from W1 (up to 2.0 USD in strong impulse). Used for RR calculation.
 TP2 must always be farther than TP1 in trade direction. Targets must be technically grounded.
+
+==================================================
+POSITION MANAGEMENT — sl_after_tp1
+==================================================
+After TP1 is hit, the SL is moved to protect the trade. Calculate sl_after_tp1:
+- Find the most recent structural support (long) or resistance (short) between W1/W2 and TP1.
+- If it exists and is in profit territory (above W1 for long, below W1 for short): use it.
+- Otherwise: use W1 (break-even).
+- sl_after_tp1 must always be at or above W1 (long) or at or below W1 (short).
 
 ==================================================
 WHEN TO RETURN NO SETUP
 ==================================================
-Return setup_found=false if: market in messy consolidation, price between levels, H1/M15 materially conflicting, entry already late, RR to TP2 below 1.8, no clear invalidation level, no clean Forteca setup among the 4 families.
+Return setup_found=false if: market in messy consolidation, price between levels, H1/M15 materially conflicting, entry already late, RR to TP2 below 1.8, no clear invalidation level, TP1 less than 0.5 USD from W1, TP2 cannot be placed within 1.0–2.0 USD window at a real level, no clean Forteca setup among the 4 families.
 
 ==================================================
 TECHNICAL NORMALIZATION RULES
@@ -331,7 +375,7 @@ OUTPUT FORMAT
 Return exactly one JSON object. No markdown. No extra commentary. No alternative scenarios.
 
 If setup found:
-{"setup_found":true,"setup_type":"setup name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70,88.45],"sl":88.10,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"short Forteca-based justification","invalidation":"condition that breaks the idea"}
+{"setup_found":true,"setup_type":"setup name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70],"sl":88.10,"sl_after_tp1":88.95,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"short Forteca-based justification","invalidation":"condition that breaks the idea"}
 
 If no setup:
 {"setup_found":false,"reasoning":"why no setup exists"}"""
@@ -433,32 +477,36 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
     # Long przy wsparciu
     if trend != "bearish" and near <= current - rng["support"] <= far and is_moving_toward(candles_m15, "down"):
         base    = rng["support"]
-        entries = [round(base + 0.05, 2), round(base - 0.20, 2), round(base - 0.40, 2)]
-        sl      = round(base - 0.65, 2)
+        entries = [round(base + 0.05, 2), round(base - 0.25, 2)]
+        sl      = round(base - 0.55, 2)
         tp1     = round((rng["support"] + rng["resistance"]) / 2, 2)
         tp2     = round(rng["resistance"] - 0.10, 2)
-        rr      = rr_calc(entries[0], sl, tp2)
-        if rr >= 1.5:
-            scores = build_scores(rng["s_touches"], size, trend, "long", rr, candles_m15)
-            total  = sum(scores.values())
-            setups.append({"type": "Range", "direction": "long", "level": base,
-                           "pillars": scores, "total": total,
-                           "entries": entries, "sl": sl, "tps": [tp1, tp2], "rr": rr})
+        if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+            rr = rr_calc(sum(entries) / len(entries), sl, tp2)
+            if rr >= 1.5:
+                scores = build_scores(rng["s_touches"], size, trend, "long", rr, candles_m15)
+                total  = sum(scores.values())
+                setups.append({"type": "Range", "direction": "long", "level": base,
+                               "pillars": scores, "total": total,
+                               "entries": entries, "sl": sl, "sl_after_tp1": entries[0],
+                               "tps": [tp1, tp2], "rr": rr})
 
     # Short przy oporze
     if trend != "bullish" and near <= rng["resistance"] - current <= far and is_moving_toward(candles_m15, "up"):
         base    = rng["resistance"]
-        entries = [round(base - 0.05, 2), round(base + 0.20, 2), round(base + 0.40, 2)]
-        sl      = round(base + 0.65, 2)
+        entries = [round(base - 0.05, 2), round(base + 0.25, 2)]
+        sl      = round(base + 0.55, 2)
         tp1     = round((rng["support"] + rng["resistance"]) / 2, 2)
         tp2     = round(rng["support"] + 0.10, 2)
-        rr      = rr_calc(entries[0], sl, tp2)
-        if rr >= 1.5:
-            scores = build_scores(rng["r_touches"], size, trend, "short", rr, candles_m15)
-            total  = sum(scores.values())
-            setups.append({"type": "Range", "direction": "short", "level": base,
-                           "pillars": scores, "total": total,
-                           "entries": entries, "sl": sl, "tps": [tp1, tp2], "rr": rr})
+        if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+            rr = rr_calc(sum(entries) / len(entries), sl, tp2)
+            if rr >= 1.5:
+                scores = build_scores(rng["r_touches"], size, trend, "short", rr, candles_m15)
+                total  = sum(scores.values())
+                setups.append({"type": "Range", "direction": "short", "level": base,
+                               "pillars": scores, "total": total,
+                               "entries": entries, "sl": sl, "sl_after_tp1": entries[0],
+                               "tps": [tp1, tp2], "rr": rr})
 
     # Breakout retest
     lookback = candles_m15[-12:-1]
@@ -469,14 +517,18 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
             if c["close"] > rng["resistance"] and c["close"] > c["open"]:
                 if abs(current - rng["resistance"]) <= zone:
                     base    = rng["resistance"]
-                    entries = [round(base + 0.05, 2), round(base - 0.20, 2), round(base - 0.40, 2)]
-                    sl, tp1, tp2 = round(base - 0.70, 2), round(base + size * 0.5, 2), round(base + size, 2)
-                    rr      = rr_calc(entries[0], sl, tp2)
-                    if rr >= 1.5:
-                        scores = build_scores(rng["r_touches"], size, trend, "long", rr, candles_m15)
-                        setups.append({"type": "Breakout Retest", "direction": "long", "level": base,
-                                       "pillars": scores, "total": sum(scores.values()),
-                                       "entries": entries, "sl": sl, "tps": [tp1, tp2], "rr": rr})
+                    entries = [round(base + 0.05, 2), round(base - 0.25, 2)]
+                    sl      = round(base - 0.65, 2)
+                    tp1     = round(base + max(size * 0.5, 0.5), 2)
+                    tp2     = round(base + min(size, 1.5), 2)
+                    if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+                        rr = rr_calc(sum(entries) / len(entries), sl, tp2)
+                        if rr >= 1.5:
+                            scores = build_scores(rng["r_touches"], size, trend, "long", rr, candles_m15)
+                            setups.append({"type": "Breakout Retest", "direction": "long", "level": base,
+                                           "pillars": scores, "total": sum(scores.values()),
+                                           "entries": entries, "sl": sl, "sl_after_tp1": entries[0],
+                                           "tps": [tp1, tp2], "rr": rr})
                 break
 
     if trend != "bullish":
@@ -484,14 +536,18 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
             if c["close"] < rng["support"] and c["open"] > c["close"]:
                 if abs(current - rng["support"]) <= zone:
                     base    = rng["support"]
-                    entries = [round(base - 0.05, 2), round(base + 0.20, 2), round(base + 0.40, 2)]
-                    sl, tp1, tp2 = round(base + 0.70, 2), round(base - size * 0.5, 2), round(base - size, 2)
-                    rr      = rr_calc(entries[0], sl, tp2)
-                    if rr >= 1.5:
-                        scores = build_scores(rng["s_touches"], size, trend, "short", rr, candles_m15)
-                        setups.append({"type": "Breakout Retest", "direction": "short", "level": base,
-                                       "pillars": scores, "total": sum(scores.values()),
-                                       "entries": entries, "sl": sl, "tps": [tp1, tp2], "rr": rr})
+                    entries = [round(base - 0.05, 2), round(base + 0.25, 2)]
+                    sl      = round(base + 0.65, 2)
+                    tp1     = round(base - max(size * 0.5, 0.5), 2)
+                    tp2     = round(base - min(size, 1.5), 2)
+                    if abs(tp1 - entries[0]) >= 0.5 and 1.0 <= abs(tp2 - entries[0]) <= 2.0:
+                        rr = rr_calc(sum(entries) / len(entries), sl, tp2)
+                        if rr >= 1.5:
+                            scores = build_scores(rng["s_touches"], size, trend, "short", rr, candles_m15)
+                            setups.append({"type": "Breakout Retest", "direction": "short", "level": base,
+                                           "pillars": scores, "total": sum(scores.values()),
+                                           "entries": entries, "sl": sl, "sl_after_tp1": entries[0],
+                                           "tps": [tp1, tp2], "rr": rr})
                 break
 
     return setups
@@ -653,6 +709,8 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts, move: float) -> bool:
 
 
 # ── Walidacja setupu ─────────────────────────────────────────────────────────
+MIN_TP1_DISTANCE = 0.50   # minimalna odleglosc W1-TP1 w USD
+
 def validate_setup(setup: dict, model: str) -> bool:
     entries   = setup.get("entries", [])
     sl        = setup.get("sl")
@@ -670,6 +728,13 @@ def validate_setup(setup: dict, model: str) -> bool:
     if sl_dist < MIN_SL_DISTANCE:
         print(f"[{model}] ODRZUCONY: SL za blisko W1 (dist={sl_dist:.2f} < {MIN_SL_DISTANCE})")
         return False
+    tps = setup.get("tps", [setup.get("tp1")])
+    tp1 = tps[0] if tps else setup.get("tp1")
+    if tp1 is not None:
+        tp1_dist = abs(tp1 - w1)
+        if tp1_dist < MIN_TP1_DISTANCE:
+            print(f"[{model}] ODRZUCONY: TP1 za blisko W1 (dist={tp1_dist:.2f} < {MIN_TP1_DISTANCE})")
+            return False
     return True
 
 
@@ -705,10 +770,12 @@ def save_pending(setup: dict, model: str, current_price: float):
         "price_at_alert":  round(current_price, 2),
         "entries":         entries,
         "sl":              setup.get("sl"),
+        "sl_after_tp1":    setup.get("sl_after_tp1"),
         "tps":             tps,
         "rr":              setup.get("rr", 0),
         "entry_hit_at":    None,
         "tp1_hit_at":      None,
+        "sl_adjusted":     False,
         "entries_hit":     1,
     })
 
@@ -771,13 +838,16 @@ def check_pending(candles_m15: list[dict]):
             except Exception:
                 pass
 
-        after_entry  = [c for c in candles_m15 if c["time"] > s["entry_hit_at"]]
-        result, move = None, 0.0
-        exit_ts      = None
-        tp1_hit_at   = s.get("tp1_hit_at")   # może być ustawione z poprzedniego cyklu
+        after_entry   = [c for c in candles_m15 if c["time"] > s["entry_hit_at"]]
+        result, move  = None, 0.0
+        exit_ts       = None
+        tp1_hit_at    = s.get("tp1_hit_at")   # może być ustawione z poprzedniego cyklu
+        sl_after_tp1  = s.get("sl_after_tp1")
+        # Jeśli SL był już przesunięty w poprzednim cyklu, używamy sl_after_tp1 od razu
+        effective_sl  = sl_after_tp1 if s.get("sl_adjusted") and sl_after_tp1 is not None else sl
 
         for c in after_entry:
-            sl_hit  = _hits(c, sl,  d, "sl")
+            sl_hit  = _hits(c, effective_sl, d, "sl")
             tp2_hit = tp2 and _hits(c, tp2, d, "tp")
             tp1_now = tp1 and _hits(c, tp1, d, "tp")
 
@@ -788,17 +858,34 @@ def check_pending(candles_m15: list[dict]):
             if tp1_now and sl_hit and tp1_hit_at is None:
                 result, move, exit_ts = "SL", round(abs(sl - w1), 2), c["time"]; break
 
-            # TP1 trafiony po raz pierwszy — zapisz i monitoruj dalej
+            # TP1 trafiony po raz pierwszy — zapisz, wyślij powiadomienie, przestaw SL
             if tp1_now and tp1_hit_at is None:
                 tp1_hit_at = c["time"]
                 s["tp1_hit_at"] = tp1_hit_at
+                if sl_after_tp1 is not None and not s.get("sl_adjusted"):
+                    effective_sl   = sl_after_tp1
+                    s["sl_adjusted"] = True
+                    try:
+                        be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
+                        send_telegram(
+                            f"📌 <b>TP1 HIT — SL przesunięty</b> [{s['model']}]\n"
+                            f"Setup {s['type']} {d.upper()}\n"
+                            f"TP1: ${tp1:.2f} osiągnięty ✅\n"
+                            f"Nowy SL: ${sl_after_tp1:.2f} ({be_label})\n"
+                            + (f"Cel: TP2 ${tp2:.2f}" if tp2 else "")
+                        )
+                    except Exception:
+                        pass
                 continue
 
             if sl_hit:
                 if tp1_hit_at is not None:
-                    result, move, exit_ts = "TP1+SL", round(abs(sl - w1), 2), c["time"]
+                    # Po TP1 — wynik zależy od nowego SL
+                    lock = round(abs(effective_sl - w1), 2)
+                    label = "TP1+BE" if s.get("sl_adjusted") and abs(effective_sl - w1) < 0.05 else "TP1+SL"
+                    result, move, exit_ts = label, lock, c["time"]
                 else:
-                    result, move, exit_ts = "SL",     round(abs(sl - w1), 2), c["time"]
+                    result, move, exit_ts = "SL", round(abs(sl - w1), 2), c["time"]
                 break
 
         # Które W zostały trafione podczas trwania pozycji
@@ -880,13 +967,20 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
     tps_txt     = "\n".join(f"  TP{i+1}: ${t:.2f}  (+${abs(t - entries[0]):.2f})" for i, t in enumerate(tps)) if entries else "-"
     reasoning   = setup.get("reasoning", "")
 
+    sl_after_tp1     = setup.get("sl_after_tp1")
+    sl_after_tp1_txt = ""
+    if sl_after_tp1 is not None and entries:
+        be_label = "BE" if abs(sl_after_tp1 - entries[0]) < 0.05 else f"+${abs(sl_after_tp1 - entries[0]):.2f}"
+        sl_after_tp1_txt = f"<b>SL po TP1:</b>  ${sl_after_tp1:.2f}  ({be_label})\n"
+
     return (
         f"🎯 <b>SOL/USDT [{score}/15] — {model}</b>\n"
         f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}  |  {filtr}\n\n"
         f"Cena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejscia)\n\n"
         f"<b>Ustaw zlecenia:</b>\n{entries_txt}\n\n"
-        f"<b>SL:</b>  ${sl:.2f}\n\n"
-        f"<b>Cele:</b>\n{tps_txt}\n\n"
+        f"<b>SL:</b>  ${sl:.2f}\n"
+        + sl_after_tp1_txt
+        + f"\n<b>Cele:</b>\n{tps_txt}\n\n"
         f"<b>RR:</b>  {rr:.1f}:1\n"
         + (f"\n<i>{reasoning}</i>\n" if reasoning else "")
         + f"\n⚠️ <i>Decyzja nalezy do Ciebie.</i>"
