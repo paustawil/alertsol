@@ -47,7 +47,7 @@ from sol_alert import (
 TZ            = ZoneInfo("Europe/Warsaw")
 SYMBOL        = "SOLUSDT"
 # Tydzień handlowy + sobota (pon–sob 17–22.03.2026)
-TEST_DATES     = ["2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20", "2026-03-21", "2026-03-22"]
+TEST_DATES     = ["2026-03-16", "2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20"]
 # Definicje sesji (godziny Warsaw)
 SESSION_HOURS = {
     "afternoon": list(range(14, 23)),   # 14:00–22:00  sesja US
