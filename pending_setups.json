@@ -21,5 +21,28 @@
     "entry_hit_at": 1774163700,
     "tp1_hit_at": null,
     "entries_hit": 1
+  },
+  {
+    "alert_time": "2026-03-22T08:15:32.155502+00:00",
+    "alert_timestamp": 1774167332,
+    "model": "Algorytm",
+    "type": "Range",
+    "direction": "long",
+    "score": 10,
+    "price_at_alert": 87.49,
+    "entries": [
+      87.03,
+      86.78,
+      86.58
+    ],
+    "sl": 86.33,
+    "tps": [
+      88.09,
+      89.09
+    ],
+    "rr": 2.94,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "entries_hit": 1
   }
 ]
