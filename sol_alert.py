@@ -712,8 +712,10 @@ def validate_setup(setup: dict, model: str) -> str:
     sl        = setup.get("sl")
     direction = setup.get("direction", "-")
     reasons   = []
-    if not entries or sl is None:
-        return ""  # brak danych — przepuszczamy
+    if not entries:
+        return "brak_W1"
+    if sl is None:
+        return "brak_SL"
     w1 = entries[0]
     if direction == "long" and sl >= w1:
         reasons.append(f"SL≥W1 ({sl}≥{w1})")
