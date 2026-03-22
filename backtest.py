@@ -249,9 +249,11 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
     else:                        # TP1+BE lub TP1+SL
         exit_prices = [tp1, eff_sl_exit] if tp1 else [eff_sl_exit]
 
-    eff_exit = sum(exit_prices) / len(exit_prices)
-    pnl      = round((eff_exit - eff_entry) if d == "long"
-                     else (eff_entry - eff_exit), 2)
+    eff_exit   = sum(exit_prices) / len(exit_prices)
+    pnl_unit   = round((eff_exit - eff_entry) if d == "long"
+                       else (eff_entry - eff_exit), 2)
+    stake_mult = 2 if entries_hit == 2 else 1
+    pnl        = round(pnl_unit * stake_mult, 2)
 
     return {"result": result, "entries_hit": entries_hit, "entry_ts": entry_ts,
             "exit_ts": exit_ts, "pnl": pnl, "eff_entry": eff_entry, "eff_exit": eff_exit}
@@ -287,15 +289,17 @@ def simulate_tp1_only(setup: dict, future_candles: list[dict]) -> dict:
         if w2 is not None and not w2_hit and _hits(c, w2, d, "entry"):
             w2_hit = True
         if _hits(c, tp1, d, "tp"):
-            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
-            pnl = round((tp1 - eff_entry) if d == "long" else (eff_entry - tp1), 2)
-            label = "W1+W2→TP1" if w2_hit else "TP1"
-            return {"result": label, "pnl": pnl}
+            eff_entry  = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl_unit   = round((tp1 - eff_entry) if d == "long" else (eff_entry - tp1), 2)
+            stake_mult = 2 if w2_hit else 1
+            label      = "W1+W2→TP1" if w2_hit else "TP1"
+            return {"result": label, "pnl": round(pnl_unit * stake_mult, 2)}
         if _hits(c, sl, d, "sl"):
-            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
-            pnl = round((sl - eff_entry) if d == "long" else (eff_entry - sl), 2)
-            label = "W1+W2→SL" if w2_hit else "SL"
-            return {"result": label, "pnl": pnl}
+            eff_entry  = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl_unit   = round((sl - eff_entry) if d == "long" else (eff_entry - sl), 2)
+            stake_mult = 2 if w2_hit else 1
+            label      = "W1+W2→SL" if w2_hit else "SL"
+            return {"result": label, "pnl": round(pnl_unit * stake_mult, 2)}
 
     return {"result": "timeout", "pnl": 0.0}
 
