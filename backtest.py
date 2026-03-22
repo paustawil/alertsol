@@ -16,6 +16,16 @@ Uruchamianie:
 """
 
 import os, sys, json, re, time, argparse
+
+# Workaround: system cryptography (Debian) jest zepsute — używamy lokalnej kopii
+_CRYPTO_FIX = "/tmp/cryptofix"
+if _CRYPTO_FIX not in sys.path:
+    os.makedirs(_CRYPTO_FIX, exist_ok=True)
+    import subprocess
+    subprocess.run([sys.executable, "-m", "pip", "install", "cryptography",
+                    "--target", _CRYPTO_FIX, "-q"], check=False)
+    sys.path.insert(0, _CRYPTO_FIX)
+
 import requests
 import anthropic
 import openai
