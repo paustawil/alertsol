@@ -415,7 +415,44 @@ def normalize_llm_setup(raw: dict) -> dict | None:
         "score":        raw.get("score", 0),
         "total":        raw.get("score", 0),
         "reasoning":    raw.get("reasoning", "-"),
+        "pillars":      raw.get("pillars", {}),
     }
+
+
+# ── Sprawdzenie kryteriów FORTeca (do Filtr_powód) ────────────────────────────
+MIN_RR_THRESHOLD    = 1.6
+MIN_LEVEL_PILLAR    = 2
+
+def forteca_violations(setup: dict) -> str:
+    """
+    Zwraca wszystkie naruszone kryteria FORTeca oddzielone ' | '.
+    Pusty string = setup spełnia wszystkie kryteria (pełne OK).
+    Sprawdza: Score, Level pillar, RR, plus geometrię SL/TP.
+    """
+    reasons = []
+
+    # 1. Score
+    score = setup.get("total", setup.get("score", 0))
+    if score < MIN_SCORE:
+        reasons.append(f"Score<{MIN_SCORE} ({score})")
+
+    # 2. Level pillar >= 2
+    pillars = setup.get("pillars", {})
+    lv = pillars.get("level", -1)
+    if isinstance(lv, int) and lv >= 0 and lv < MIN_LEVEL_PILLAR:
+        reasons.append(f"Level<{MIN_LEVEL_PILLAR} ({lv})")
+
+    # 3. RR >= 1.6
+    rr = setup.get("rr", 0)
+    if isinstance(rr, (int, float)) and rr > 0 and rr < MIN_RR_THRESHOLD:
+        reasons.append(f"RR<{MIN_RR_THRESHOLD} ({rr:.2f})")
+
+    # 4. Geometria SL/TP (validate_setup)
+    geo = validate_setup(setup, "")
+    if geo:
+        reasons.append(geo)
+
+    return " | ".join(reasons)
 
 
 # ── Pętla po godzinach jednej sesji ───────────────────────────────────────────
@@ -445,13 +482,7 @@ def run_session(test_date: str, hours: list[int],
         algo_setups = algo_detect(m15_snap, h1_snap, rng)
         print(f"  [Algo]   {len(algo_setups)} setup(ów)")
         for s in algo_setups:
-            reasons = []
-            val_reason = validate_setup(s, "Algo")
-            if val_reason:
-                reasons.append(val_reason)
-            if s.get("total", 0) < MIN_SCORE:
-                reasons.append(f"Score<{MIN_SCORE} ({s.get('total',0)})")
-            rejection = " | ".join(reasons)
+            rejection = forteca_violations(s)
             log_alert(sh1, snap_label, "Algo", rejection, s)
             sim     = simulate_result(s, future_m15)
             sim_tp1 = simulate_tp1_only(s, future_m15)
@@ -470,14 +501,7 @@ def run_session(test_date: str, hours: list[int],
             raw_c   = call_claude_hist(m15_snap, h1_snap, current_price)
             setup_c = normalize_llm_setup(raw_c)
             if setup_c:
-                reasons_c = []
-                val_c = validate_setup(setup_c, "Claude")
-                if val_c:
-                    reasons_c.append(val_c)
-                score_c = setup_c.get("total", setup_c.get("score", 0))
-                if score_c < MIN_SCORE:
-                    reasons_c.append(f"Score<{MIN_SCORE} ({score_c})")
-                rejection = " | ".join(reasons_c)
+                rejection = forteca_violations(setup_c)
                 log_alert(sh1, snap_label, "Claude", rejection, setup_c)
                 sim     = simulate_result(setup_c, future_m15)
                 sim_tp1 = simulate_tp1_only(setup_c, future_m15)
@@ -503,14 +527,7 @@ def run_session(test_date: str, hours: list[int],
             raw_g   = call_gpt_hist(m15_snap, h1_snap, current_price)
             setup_g = normalize_llm_setup(raw_g)
             if setup_g:
-                reasons_g = []
-                val_g = validate_setup(setup_g, "GPT")
-                if val_g:
-                    reasons_g.append(val_g)
-                score_g = setup_g.get("total", setup_g.get("score", 0))
-                if score_g < MIN_SCORE:
-                    reasons_g.append(f"Score<{MIN_SCORE} ({score_g})")
-                rejection = " | ".join(reasons_g)
+                rejection = forteca_violations(setup_g)
                 log_alert(sh1, snap_label, "GPT", rejection, setup_g)
                 sim     = simulate_result(setup_g, future_m15)
                 sim_tp1 = simulate_tp1_only(setup_g, future_m15)
