@@ -258,17 +258,21 @@ def _get_test_sheets():
         "Wejście o", "Wyjście o", "Wynik", "PnL $",
     ]
 
-    try:
-        sh1 = wb.worksheet("Alerty_TEST")
-    except gspread.WorksheetNotFound:
-        sh1 = wb.add_worksheet("Alerty_TEST", rows=500, cols=20)
-        sh1.append_row(ALERTY_HEADER)
-
-    try:
-        sh2 = wb.worksheet("Wyniki_TEST")
-    except gspread.WorksheetNotFound:
-        sh2 = wb.add_worksheet("Wyniki_TEST", rows=500, cols=20)
-        sh2.append_row(WYNIKI_HEADER)
+    for name, header, rows in [
+        ("Alerty_TEST", ALERTY_HEADER, 500),
+        ("Wyniki_TEST", WYNIKI_HEADER, 500),
+    ]:
+        try:
+            sh = wb.worksheet(name)
+            sh.clear()
+            sh.append_row(header)
+        except gspread.WorksheetNotFound:
+            sh = wb.add_worksheet(name, rows=rows, cols=20)
+            sh.append_row(header)
+        if name == "Alerty_TEST":
+            sh1 = sh
+        else:
+            sh2 = sh
 
     return sh1, sh2
 

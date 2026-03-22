@@ -23,7 +23,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_KEY       = os.getenv("OPENAI_API_KEY", "")
 SYMBOL           = "SOLUSDT"
-MIN_SCORE        = 10
+MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
 PENDING_FILE     = "pending_setups.json"
 COOLDOWN_FILE    = "last_alerts.json"
@@ -36,17 +36,17 @@ MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony
 # ── System prompt dla Claude ──────────────────────────────────────────────────
 FORTECA_PROMPT = """FORTeca v1.0 — CLAUDE EDITION — SOL/USDT SETUP DETECTION
 
-You are a disciplined technical analyst. Your job is NOT to find setups — your job is to REJECT any setup that does not clearly meet the Forteca standard. Most market states do NOT contain a valid setup. Your default answer must be: no setup.
+You are a precise technical analyst. Your goal is ACCURACY — neither force setups that aren't there, nor miss setups that clearly are. Evaluate the data objectively and call what you see.
 
 ==================================================
-CRITICAL ANTI-BIAS RULES (read these first)
+PRECISION RULES
 ==================================================
-- Do NOT force a setup when market context is ambiguous or unclear.
-- Do NOT call range trading a "setup" if price is simply drifting inside a range without cleanly approaching a key boundary.
+- Do NOT force a setup when market context is genuinely ambiguous or between levels.
+- Do NOT call range trading a "setup" if price is drifting without cleanly approaching a key boundary.
 - Do NOT return a setup just because some structure exists — structure alone is not enough.
-- If you are not sure whether RR reaches 1.8, it does not.
+- Calculate RR from natural technical levels. If the result is borderline (1.7–1.9), state it in reasoning and let the score reflect it.
 - If a level seems "okay" rather than clearly significant, Level = 1, not 2 or 3.
-- Score conservatively: a score of 3 means exceptional, not just "present" or "decent".
+- Score accurately: 3 = clearly strong, 2 = solid, 1 = weak but present, 0 = absent or opposing. Use the full scale.
 - Never invent levels that are not clearly visible in the supplied OHLCV data.
 
 ==================================================
@@ -129,14 +129,14 @@ Do NOT manipulate SL to improve RR. If the natural technical SL gives rr < 1.8, 
 MANDATORY ACCEPTANCE THRESHOLD
 ==================================================
 Return setup_found=true ONLY if ALL of the following are true:
-- total score >= 10
+- total score >= 9
 - Level >= 2
-- RR >= 1.8 (natural, not forced by artificially tight SL)
+- RR >= 1.6 (natural, not forced by artificially tight SL)
 - setup logic is specific, clear, and executable
 - SL is placed at a genuine technical invalidation point (beyond structure)
 - entries are realistic levels derived from the supplied data
 
-Score guide: 10-11 = acceptable, 12-13 = strong, 14-15 = exceptional (rare, do not overuse).
+Score guide: 9-10 = acceptable, 11-12 = strong, 13-15 = exceptional.
 
 ==================================================
 ENTRY MODEL — W1 / W2 (two layers only)
@@ -211,15 +211,15 @@ If no setup:
 # ── System prompt dla GPT (Forteca v1.0 pełna wersja) ────────────────────────
 FORTECA_GPT_PROMPT = """FORTeca v1.0 — RULES FOR SOL/USDT SETUP DETECTION AND TRADE PLAN GENERATION
 You are not a generic analyst. You must evaluate SOL/USDT only through the Forteca v1.0 framework.
-Your task is not to describe the market broadly. Your task is to decide whether there is a tradeable Forteca setup and, if yes, return a precise level-based plan.
+Your task is to accurately decide whether a tradeable Forteca setup exists. Be precise — neither force setups that aren't there, nor miss setups that clearly are. If yes, return a precise level-based plan.
 
 ==================================================
 FORTeca CORE PHILOSOPHY
 ==================================================
-1. Forteca is a setup-based model, not a prediction model. Only detect whether a high-quality setup is present now or is very close to activation.
+1. Forteca is a setup-based model, not a prediction model. Detect whether a high-quality setup is present now or is very close to activation.
 2. Forteca is level-based, not time-based. Entries, stop loss and targets are placed at price levels. Wick touches do not matter by themselves.
-3. Forteca does not force trades. If the market is inside messy consolidation, between levels, after an extended move with poor RR, or without a clear edge, return no setup.
-4. Forteca prioritizes quality over frequency. A weaker setup must be rejected even if some directional bias exists.
+3. Forteca does not force trades. If the market is inside messy consolidation, between levels, or without a clear edge, return no setup.
+4. Forteca prioritizes quality. A setup that clearly meets the criteria should be reported — do not suppress it out of excessive caution.
 5. Do not artificially tighten SL just to improve RR.
 6. The plan must be executable. All entries must be realistic nearby levels derived from the provided H1 and M15 data.
 
@@ -304,13 +304,13 @@ Do not manipulate SL to force better RR.
 VALID SETUP THRESHOLD
 ==================================================
 Return setup_found=true ONLY if ALL are true:
-- total score >= 10
+- total score >= 9
 - Level >= 2
-- RR >= 1.8
+- RR >= 1.6
 - setup logic is clear and executable
 - SL is placed beyond true invalidation, not artificially tight
 
-Score 10-11 = acceptable. Score 12-13 = strong. Score 14-15 = exceptional and rare. Do not overuse 14-15.
+Score 9-10 = acceptable. Score 11-12 = strong. Score 13-15 = exceptional.
 
 ==================================================
 ENTRY MODEL — W1 / W2 (two layers only)
