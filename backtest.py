@@ -122,9 +122,11 @@ def call_claude_hist(candles_m15: list[dict], candles_h1: list[dict],
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
+        print(f"[claude] Brak JSON w odpowiedzi: {text[:300]!r}")
+        return {"_error": "no_json", "_raw": text[:300]}
     except Exception as e:
-        print(f"[claude] Blad: {e}")
-    return None
+        print(f"[claude] Blad API: {e}")
+        return {"_error": str(e)}
 
 
 def call_gpt_hist(candles_m15: list[dict], candles_h1: list[dict],
@@ -155,6 +157,8 @@ def call_gpt_hist(candles_m15: list[dict], candles_h1: list[dict],
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
+        print(f"[gpt] Brak JSON w odpowiedzi: {text[:300]!r}")
+        return {"_error": "no_json", "_raw": text[:300]}
     except Exception as e:
         print(f"[gpt] Blad: {e}")
     return None
@@ -245,9 +249,11 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
     else:                        # TP1+BE lub TP1+SL
         exit_prices = [tp1, eff_sl_exit] if tp1 else [eff_sl_exit]
 
-    eff_exit = sum(exit_prices) / len(exit_prices)
-    pnl      = round((eff_exit - eff_entry) if d == "long"
-                     else (eff_entry - eff_exit), 2)
+    eff_exit   = sum(exit_prices) / len(exit_prices)
+    pnl_unit   = round((eff_exit - eff_entry) if d == "long"
+                       else (eff_entry - eff_exit), 2)
+    stake_mult = 2 if entries_hit == 2 else 1
+    pnl        = round(pnl_unit * stake_mult, 2)
 
     return {"result": result, "entries_hit": entries_hit, "entry_ts": entry_ts,
             "exit_ts": exit_ts, "pnl": pnl, "eff_entry": eff_entry, "eff_exit": eff_exit}
@@ -283,15 +289,17 @@ def simulate_tp1_only(setup: dict, future_candles: list[dict]) -> dict:
         if w2 is not None and not w2_hit and _hits(c, w2, d, "entry"):
             w2_hit = True
         if _hits(c, tp1, d, "tp"):
-            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
-            pnl = round((tp1 - eff_entry) if d == "long" else (eff_entry - tp1), 2)
-            label = "W1+W2→TP1" if w2_hit else "TP1"
-            return {"result": label, "pnl": pnl}
+            eff_entry  = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl_unit   = round((tp1 - eff_entry) if d == "long" else (eff_entry - tp1), 2)
+            stake_mult = 2 if w2_hit else 1
+            label      = "W1+W2→TP1" if w2_hit else "TP1"
+            return {"result": label, "pnl": round(pnl_unit * stake_mult, 2)}
         if _hits(c, sl, d, "sl"):
-            eff_entry = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
-            pnl = round((sl - eff_entry) if d == "long" else (eff_entry - sl), 2)
-            label = "W1+W2→SL" if w2_hit else "SL"
-            return {"result": label, "pnl": pnl}
+            eff_entry  = (w1 + w2) / 2 if w2_hit and w2 is not None else w1
+            pnl_unit   = round((sl - eff_entry) if d == "long" else (eff_entry - sl), 2)
+            stake_mult = 2 if w2_hit else 1
+            label      = "W1+W2→SL" if w2_hit else "SL"
+            return {"result": label, "pnl": round(pnl_unit * stake_mult, 2)}
 
     return {"result": "timeout", "pnl": 0.0}
 
@@ -366,8 +374,8 @@ def log_alert(sh1, snapshot_label: str, model: str, rejection: str, setup: dict)
 def log_wynik(sh2, snapshot_label: str, model: str, rejection: str, setup: dict, sim: dict, sim_tp1: dict):
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [])
-    eff_entry = f"{sim['eff_entry']:.2f}" if sim["eff_entry"] is not None else "-"
-    eff_exit  = f"{sim['eff_exit']:.2f}"  if sim["eff_exit"]  is not None else "-"
+    eff_entry = round(sim["eff_entry"], 2) if sim["eff_entry"] is not None else "-"
+    eff_exit  = round(sim["eff_exit"],  2) if sim["eff_exit"]  is not None else "-"
     n_w = sim["entries_hit"]
     pnl_tp12  = sim["pnl"]     if sim["pnl"]     != 0.0 or sim["result"]     not in ("nie_weszlo", "brak_danych", "timeout") else "-"
     pnl_tp1   = sim_tp1["pnl"] if sim_tp1["pnl"] != 0.0 or sim_tp1["result"] not in ("nie_weszlo", "brak_danych", "timeout") else "-"
@@ -512,11 +520,21 @@ def run_session(test_date: str, hours: list[int],
                       f"{tag}→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
                       f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
             else:
-                print("    Brak setupu (setup_found=false lub błąd)")
-                if raw_c and not raw_c.get("setup_found"):
-                    log_alert(sh1, snap_label, "Claude", "brak_setupu",
-                              {"type": "-", "direction": "-", "entries": [],
-                               "reasoning": raw_c.get("reasoning", "-")})
+                if raw_c is None:
+                    reason = "błąd_API (None)"
+                    print("    [Claude] BRAK ODPOWIEDZI (None) — błąd API lub timeout")
+                elif raw_c.get("_error"):
+                    reason = f"błąd: {raw_c['_error']}"
+                    print(f"    [Claude] BŁĄD: {raw_c['_error']}")
+                elif not raw_c.get("setup_found"):
+                    reason = "brak_setupu"
+                    print(f"    [Claude] setup_found=false | {raw_c.get('reasoning', '-')[:120]}")
+                else:
+                    reason = "brak_setupu"
+                    print(f"    [Claude] Nieznany brak setupu: {str(raw_c)[:120]}")
+                log_alert(sh1, snap_label, "Claude", reason,
+                          {"type": "-", "direction": "-", "entries": [],
+                           "reasoning": (raw_c or {}).get("reasoning", reason)})
             time.sleep(1.0)
         elif not no_llm:
             print("  [Claude] Pominięty — brak klucza API")
@@ -538,11 +556,21 @@ def run_session(test_date: str, hours: list[int],
                       f"{tag}→ {sim['result']:8s} {sign}{sim['pnl']:.2f}$ "
                       f"| TP1only: {sim_tp1['result']} {sim_tp1['pnl']:+.2f}$")
             else:
-                print("    Brak setupu (setup_found=false lub błąd)")
-                if raw_g and not raw_g.get("setup_found"):
-                    log_alert(sh1, snap_label, "GPT", "brak_setupu",
-                              {"type": "-", "direction": "-", "entries": [],
-                               "reasoning": raw_g.get("reasoning", "-")})
+                if raw_g is None:
+                    reason = "błąd_API (None)"
+                    print("    [GPT] BRAK ODPOWIEDZI (None) — błąd API lub timeout")
+                elif raw_g.get("_error"):
+                    reason = f"błąd: {raw_g['_error']}"
+                    print(f"    [GPT] BŁĄD: {raw_g['_error']}")
+                elif not raw_g.get("setup_found"):
+                    reason = "brak_setupu"
+                    print(f"    [GPT] setup_found=false | {raw_g.get('reasoning', '-')[:120]}")
+                else:
+                    reason = "brak_setupu"
+                    print(f"    [GPT] Nieznany brak setupu: {str(raw_g)[:120]}")
+                log_alert(sh1, snap_label, "GPT", reason,
+                          {"type": "-", "direction": "-", "entries": [],
+                           "reasoning": (raw_g or {}).get("reasoning", reason)})
             time.sleep(1.0)
         elif not no_llm:
             print("  [GPT]    Pominięty — brak klucza API")
