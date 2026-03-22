@@ -2,6 +2,11 @@ name: SOL Alert
 
 on:
   workflow_dispatch:           # Ręczne uruchomienie (przycisk w GitHub)
+    inputs:
+      reset:
+        description: 'Wyczyść arkusze Alerty i Wyniki przed startem'
+        type: boolean
+        default: false
   repository_dispatch:         # Trigger z cron-job.org (co 15 min)
     types: [sol-alert-trigger]
 
@@ -30,7 +35,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: python sol_alert.py
+        run: python sol_alert.py ${{ inputs.reset == true && '--reset' || '' }}
 
       - name: Zapisz stan do repozytorium
         if: always()
