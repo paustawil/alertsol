@@ -374,8 +374,8 @@ def log_alert(sh1, snapshot_label: str, model: str, rejection: str, setup: dict)
 def log_wynik(sh2, snapshot_label: str, model: str, rejection: str, setup: dict, sim: dict, sim_tp1: dict):
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [])
-    eff_entry = f"{sim['eff_entry']:.2f}" if sim["eff_entry"] is not None else "-"
-    eff_exit  = f"{sim['eff_exit']:.2f}"  if sim["eff_exit"]  is not None else "-"
+    eff_entry = round(sim["eff_entry"], 2) if sim["eff_entry"] is not None else "-"
+    eff_exit  = round(sim["eff_exit"],  2) if sim["eff_exit"]  is not None else "-"
     n_w = sim["entries_hit"]
     pnl_tp12  = sim["pnl"]     if sim["pnl"]     != 0.0 or sim["result"]     not in ("nie_weszlo", "brak_danych", "timeout") else "-"
     pnl_tp1   = sim_tp1["pnl"] if sim_tp1["pnl"] != 0.0 or sim_tp1["result"] not in ("nie_weszlo", "brak_danych", "timeout") else "-"
