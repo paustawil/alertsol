@@ -195,11 +195,13 @@ Return setup_found=false in any of these situations:
 OUTPUT FORMAT — return exactly one JSON object, no markdown, no extra text
 ==================================================
 
+Write "reasoning" and "invalidation" values in Polish.
+
 If setup found:
-{"setup_found":true,"setup_type":"setup family name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70],"sl":88.10,"sl_after_tp1":88.95,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"brief Forteca-based justification referencing specific levels from the data","invalidation":"specific condition that breaks the setup logic"}
+{"setup_found":true,"setup_type":"setup family name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70],"sl":88.10,"sl_after_tp1":88.95,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"krótkie uzasadnienie po polsku z konkretnymi poziomami z danych","invalidation":"warunek unieważnienia setupu po polsku"}
 
 If no setup:
-{"setup_found":false,"reasoning":"specific reason why no valid Forteca setup exists right now"}"""
+{"setup_found":false,"reasoning":"konkretny powód braku setupu po polsku"}"""
 
 
 # ── System prompt dla GPT (Forteca v1.0 pełna wersja) ────────────────────────
@@ -365,11 +367,13 @@ OUTPUT FORMAT
 ==================================================
 Return exactly one JSON object. No markdown. No extra commentary. No alternative scenarios.
 
+Write "reasoning" and "invalidation" values in Polish.
+
 If setup found:
-{"setup_found":true,"setup_type":"setup name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70],"sl":88.10,"sl_after_tp1":88.95,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"short Forteca-based justification","invalidation":"condition that breaks the idea"}
+{"setup_found":true,"setup_type":"setup name","direction":"long","score":12,"pillars":{"trend":3,"structure":2,"level":3,"momentum":2,"rr":2},"entries":[88.95,88.70],"sl":88.10,"sl_after_tp1":88.95,"tp1":89.80,"tp2":90.60,"rr":2.3,"reasoning":"krótkie uzasadnienie po polsku z konkretnymi poziomami z danych","invalidation":"warunek unieważnienia setupu po polsku"}
 
 If no setup:
-{"setup_found":false,"reasoning":"why no setup exists"}"""
+{"setup_found":false,"reasoning":"konkretny powód braku setupu po polsku"}"""
 
 
 # ── CryptoCompare API ─────────────────────────────────────────────────────────
