@@ -123,7 +123,7 @@ rr = reward / risk
 2 = rr 1.8 to 2.49
 1 = rr 1.2 to 1.79
 0 = rr < 1.2
-Do NOT manipulate SL to improve RR. If the natural technical SL gives rr < 1.8, reject the setup.
+Do NOT manipulate SL to improve RR. If the natural technical SL gives rr < 1.6, reject the setup.
 
 ==================================================
 MANDATORY ACCEPTANCE THRESHOLD
@@ -603,7 +603,7 @@ def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: flo
         client   = openai.OpenAI(api_key=OPENAI_KEY)
         response = client.chat.completions.create(
             model="gpt-4o",
-            max_tokens=1024,
+            max_tokens=2048,
             messages=[
                 {"role": "system", "content": FORTECA_GPT_PROMPT},
                 {"role": "user",   "content": user_msg}
@@ -1095,9 +1095,12 @@ def main():
             else:
                 print(f"[claude] Duplikat w cooldown, pomijam.")
         else:
-            print(f"[claude] Brak setupu: {claude_result.get('reasoning', '')}")
+            reasoning = claude_result.get('reasoning', '')
+            print(f"[claude] Brak setupu: {reasoning}")
+            log_to_alerty("Claude", "brak_setupu", {"reasoning": reasoning})
     else:
         print("[claude] Brak odpowiedzi.")
+        log_to_alerty("Claude", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
 
     # ── 3. GPT ────────────────────────────────────────────────────────────────
     print("[gpt] Wysylam dane do analizy...")
@@ -1122,9 +1125,12 @@ def main():
             else:
                 print(f"[gpt] Duplikat w cooldown, pomijam.")
         else:
-            print(f"[gpt] Brak setupu: {gpt_result.get('reasoning', '')}")
+            reasoning = gpt_result.get('reasoning', '')
+            print(f"[gpt] Brak setupu: {reasoning}")
+            log_to_alerty("GPT", "brak_setupu", {"reasoning": reasoning})
     else:
         print("[gpt] Brak odpowiedzi.")
+        log_to_alerty("GPT", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
 
 
 if __name__ == "__main__":
