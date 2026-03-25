@@ -678,7 +678,7 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
 
         client = XaiClient(api_key=XAI_KEY)
         chat   = client.chat.create(
-            model="grok-3",
+            model="grok-4",
             tools=[web_search()],
         )
         chat.append(xai_system(GROK_PROMPT))
