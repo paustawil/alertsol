@@ -672,17 +672,19 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
             f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
         )
 
-        client   = openai.OpenAI(base_url="https://api.x.ai/v1", api_key=XAI_KEY)
-        response = client.chat.completions.create(
+        from xai_sdk import Client as XaiClient
+        from xai_sdk.chat import system as xai_system, user as xai_user
+        from xai_sdk.tools import web_search
+
+        client = XaiClient(api_key=XAI_KEY)
+        chat   = client.chat.create(
             model="grok-3",
-            max_tokens=2048,
-            messages=[
-                {"role": "system", "content": GROK_PROMPT},
-                {"role": "user",   "content": user_msg}
-            ],
-            extra_body={"search_parameters": {"mode": "auto"}}
+            tools=[web_search()],
         )
-        text  = response.choices[0].message.content.strip()
+        chat.append(xai_system(GROK_PROMPT))
+        chat.append(xai_user(user_msg))
+        result = chat.sample()
+        text   = result.message.content.strip()
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
