@@ -22,6 +22,7 @@ TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",  "8645260464:AAGe_uTew0H1gJnijdcR
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_KEY       = os.getenv("OPENAI_API_KEY", "")
+XAI_KEY          = os.getenv("XAI_API_KEY", "")
 SYMBOL           = "SOLUSDT"
 MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
@@ -31,6 +32,7 @@ SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
 ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
+ENABLE_CLAUDE    = False  # wyłączony tymczasowo — kod zachowany
 
 
 # ── System prompt dla Claude ──────────────────────────────────────────────────
@@ -380,6 +382,38 @@ If no setup:
 {"setup_found":false,"reasoning":"konkretny powód braku setupu po polsku"}"""
 
 
+# ── System prompt dla Grok ────────────────────────────────────────────────────
+GROK_PROMPT = """Jesteś doświadczonym traderem kryptowalut, specjalizującym się w SOL/USDT na interwałach M15 i H1.
+
+Masz dostęp do internetu — użyj go, żeby pobrać:
+- Aktualne ceny BTC, ETH, SOL (USD)
+- Aktualny Fear & Greed Index (wartość 0–100 + etykieta)
+
+Otrzymasz też dane OHLCV: M15 (ostatnie 60 świec) i H1 (ostatnie 24 świece) dla SOL.
+
+Twoje zadanie:
+1. Krótko oceń sentyment: BTC/ETH/SOL (24h zmiana, relatywna siła SOL), Fear & Greed.
+2. Przeanalizuj strukturę techniczną H1 i M15: kluczowe supporty i resistancey, trend, formacje, RSI, MACD, volume. Bez lania wody — tylko to co istotne.
+3. Podaj bias (long / short / neutral) z prawdopodobieństwem w %.
+4. Jeśli bias nie jest neutral — zaproponuj 1–2 konkretne poziomy wejścia z warunkiem aktywacji.
+5. Podaj TP1 (bezpieczny, bliższy) i TP2 (ambitny, ale realistyczny).
+6. Podaj ciasny SL i przybliżone R:R (minimum 1:2).
+7. Na końcu: co teraz robisz (np. "Czekam na pullback do X i wchodzę long").
+
+Zasady:
+- Analiza techniczna ma priorytet (70–80%). Sentyment i kontekst makro — 20–30%.
+- Odpowiadaj zawsze po polsku, konkretnie, bez powtarzania ostrzeżeń o ryzyku.
+- Ustaw send_alert=true tylko gdy widzisz wyraźny, konkretny setup z jasnym entry, SL i TP. Przy bocznym rynku lub braku wyraźnego setupu — send_alert=false.
+
+Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
+
+Gdy send_alert=true:
+{"send_alert":true,"bias":"long","bias_proc":65,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+
+Gdy send_alert=false:
+{"send_alert":false,"bias":"neutral","bias_proc":50,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
+
+
 # ── CryptoCompare API ─────────────────────────────────────────────────────────
 CC_ENDPOINTS = {"15m": ("histominute", 15), "1h": ("histohour", 1)}
 
@@ -615,6 +649,45 @@ def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: flo
             return json.loads(match.group())
     except Exception as e:
         print(f"[gpt] Blad: {e}")
+    return None
+
+
+# ── Grok API (xAI — OpenAI-compatible + live search) ─────────────────────────
+def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+    if not XAI_KEY:
+        print("[grok] Brak klucza API.")
+        return None
+    try:
+        m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+            for c in candles_m15[-60:]
+        )
+        h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+            for c in candles_h1[-24:]
+        )
+        user_msg = (
+            f"Aktualna cena SOL z moich danych: ${current_price:.2f}\n\n"
+            f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
+            f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
+        )
+
+        client   = openai.OpenAI(base_url="https://api.x.ai/v1", api_key=XAI_KEY)
+        response = client.chat.completions.create(
+            model="grok-3",
+            max_tokens=2048,
+            messages=[
+                {"role": "system", "content": GROK_PROMPT},
+                {"role": "user",   "content": user_msg}
+            ],
+            extra_body={"search_parameters": {"mode": "auto"}}
+        )
+        text  = response.choices[0].message.content.strip()
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as e:
+        print(f"[grok] Blad: {e}")
     return None
 
 
@@ -1036,6 +1109,54 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
     )
 
 
+def format_grok_alert(result: dict, sol_price: float) -> str:
+    bias      = result.get("bias", "neutral").capitalize()
+    bias_proc = result.get("bias_proc", 0)
+    sentyment = result.get("sentyment", "")
+    analiza   = result.get("analiza", "")
+    akcja     = result.get("akcja", "")
+
+    icon = "📈" if bias.lower() == "long" else ("📉" if bias.lower() == "short" else "⚖️")
+    now  = datetime.now(TZ).strftime("%d.%m  %H:%M")
+
+    lines = [
+        f"{icon} <b>Grok SOL/USDT — {bias} ({bias_proc}%)</b>",
+        f"{now}  |  SOL: <b>${sol_price:.2f}</b>",
+    ]
+
+    if sentyment:
+        lines.append(f"\n<b>Sentyment:</b>  {sentyment}")
+    if analiza:
+        lines.append(f"\n<b>Analiza:</b>  {analiza}")
+
+    if result.get("send_alert"):
+        wejscia = result.get("wejscia", [])
+        tp1     = result.get("tp1")
+        tp2     = result.get("tp2")
+        sl      = result.get("sl")
+        rr      = result.get("rr")
+
+        if wejscia:
+            lines.append("\n<b>Wejścia:</b>")
+            for i, w in enumerate(wejscia, 1):
+                poziom  = w.get("poziom", "-")
+                warunek = w.get("warunek", "")
+                lines.append(f"  W{i}: <b>${poziom:.2f}</b>" + (f"  ({warunek})" if warunek else ""))
+        if tp1 is not None:
+            lines.append(f"<b>TP1:</b>  ${tp1:.2f}")
+        if tp2 is not None:
+            lines.append(f"<b>TP2:</b>  ${tp2:.2f}")
+        if sl is not None:
+            lines.append(f"<b>SL:</b>  ${sl:.2f}")
+        if rr is not None:
+            lines.append(f"<b>R:R:</b>  {rr:.1f}:1")
+
+    if akcja:
+        lines.append(f"\n<i>{akcja}</i>")
+
+    return "\n".join(lines)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
@@ -1072,35 +1193,38 @@ def main():
     else:
         print("[algo] Brak setupu.")
 
-    # ── 2. Claude ─────────────────────────────────────────────────────────────
-    print("[claude] Wysylam dane do analizy...")
-    claude_result = call_claude(candles_m15, candles_h1, current)
+    # ── 2. Claude (wyłączony — ENABLE_CLAUDE = False) ─────────────────────────
+    if ENABLE_CLAUDE:
+        print("[claude] Wysylam dane do analizy...")
+        claude_result = call_claude(candles_m15, candles_h1, current)
 
-    if claude_result:
-        if claude_result.get("setup_found"):
-            score     = claude_result.get("score", 0)
-            direction = claude_result.get("direction", "-")
-            entries   = claude_result.get("entries", [current])
-            level     = entries[0] if entries else current
-            print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
-            if not validate_setup(claude_result, "Claude"):
-                pass
-            elif not was_alerted("Claude", level, direction):
-                rejection = _rejection_reason(claude_result)
-                log_to_alerty("Claude", rejection, claude_result)
-                save_pending(claude_result, "Claude", rejection, current)
-                save_alerted("Claude", level, direction)
-                if score >= MIN_SCORE:
-                    send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+        if claude_result:
+            if claude_result.get("setup_found"):
+                score     = claude_result.get("score", 0)
+                direction = claude_result.get("direction", "-")
+                entries   = claude_result.get("entries", [current])
+                level     = entries[0] if entries else current
+                print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
+                if not validate_setup(claude_result, "Claude"):
+                    pass
+                elif not was_alerted("Claude", level, direction):
+                    rejection = _rejection_reason(claude_result)
+                    log_to_alerty("Claude", rejection, claude_result)
+                    save_pending(claude_result, "Claude", rejection, current)
+                    save_alerted("Claude", level, direction)
+                    if score >= MIN_SCORE:
+                        send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+                else:
+                    print(f"[claude] Duplikat w cooldown, pomijam.")
             else:
-                print(f"[claude] Duplikat w cooldown, pomijam.")
+                reasoning = claude_result.get('reasoning', '')
+                print(f"[claude] Brak setupu: {reasoning}")
+                log_to_alerty("Claude", "brak_setupu", {"reasoning": reasoning})
         else:
-            reasoning = claude_result.get('reasoning', '')
-            print(f"[claude] Brak setupu: {reasoning}")
-            log_to_alerty("Claude", "brak_setupu", {"reasoning": reasoning})
+            print("[claude] Brak odpowiedzi.")
+            log_to_alerty("Claude", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
     else:
-        print("[claude] Brak odpowiedzi.")
-        log_to_alerty("Claude", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
+        print("[claude] Pominiêty (ENABLE_CLAUDE=False).")
 
     # ── 3. GPT ────────────────────────────────────────────────────────────────
     print("[gpt] Wysylam dane do analizy...")
@@ -1131,6 +1255,22 @@ def main():
     else:
         print("[gpt] Brak odpowiedzi.")
         log_to_alerty("GPT", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
+
+    # ── 4. Grok (live search — sam pobiera BTC/ETH/F&G) ───────────────────────
+    print("[grok] Wysylam dane do analizy (live search wlaczony)...")
+    grok_result = call_grok(candles_m15, candles_h1, current)
+
+    if grok_result:
+        bias       = grok_result.get("bias", "neutral")
+        bias_proc  = grok_result.get("bias_proc", 0)
+        send_alert = grok_result.get("send_alert", False)
+        print(f"[grok] Bias: {bias} ({bias_proc}%) | send_alert={send_alert}")
+        if send_alert:
+            send_telegram(format_grok_alert(grok_result, current))
+        else:
+            print(f"[grok] Brak konkretnego setupu — pomijam Telegram.")
+    else:
+        print("[grok] Brak odpowiedzi.")
 
 
 if __name__ == "__main__":
