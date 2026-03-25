@@ -382,6 +382,37 @@ If no setup:
 {"setup_found":false,"reasoning":"konkretny powód braku setupu po polsku"}"""
 
 
+# ── System prompt dla Grok ────────────────────────────────────────────────────
+GROK_PROMPT = """Jesteś doświadczonym traderem kryptowalut, specjalizującym się w SOL/USDT na interwałach M15 i H1.
+
+Otrzymasz:
+- Aktualne ceny BTC, ETH, SOL (USD)
+- Fear & Greed Index (wartość 0–100 + etykieta)
+- Dane OHLCV: M15 (ostatnie 60 świec) i H1 (ostatnie 24 świece) dla SOL
+
+Twoje zadanie:
+1. Krótko oceń sentyment: BTC/ETH/SOL (zmiana na podstawie danych), Fear & Greed, relatywna siła SOL względem BTC i ETH.
+2. Przeanalizuj strukturę techniczną H1 i M15: kluczowe supporty i resistancey, trend, formacje, RSI, MACD, volume. Bez lania wody — tylko to co istotne.
+3. Podaj bias (long / short / neutral) z prawdopodobieństwem w %.
+4. Jeśli bias nie jest neutral — zaproponuj 1–2 konkretne poziomy wejścia z warunkiem aktywacji.
+5. Podaj TP1 (bezpieczny, bliższy) i TP2 (ambitny, ale realistyczny).
+6. Podaj ciasny SL i przybliżone R:R (minimum 1:2).
+7. Na końcu: co teraz robisz (np. "Czekam na pullback do X i wchodzę long").
+
+Zasady:
+- Analiza techniczna ma priorytet (70–80%). Sentyment i kontekst makro — 20–30%.
+- Odpowiadaj zawsze po polsku, konkretnie, bez powtarzania ostrzeżeń o ryzyku.
+- Ustaw send_alert=true tylko gdy widzisz wyraźny, konkretny setup z jasnym entry, SL i TP. Przy bocznym rynku lub braku wyraźnego setupu — send_alert=false.
+
+Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
+
+Gdy send_alert=true:
+{"send_alert":true,"bias":"long","bias_proc":65,"sentyment":"krótka ocena BTC/ETH/SOL + F&G","analiza":"konkretna analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+
+Gdy send_alert=false:
+{"send_alert":false,"bias":"neutral","bias_proc":50,"sentyment":"krótka ocena BTC/ETH/SOL + F&G","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
+
+
 # ── CryptoCompare API ─────────────────────────────────────────────────────────
 CC_ENDPOINTS = {"15m": ("histominute", 15), "1h": ("histohour", 1)}
 
@@ -399,6 +430,33 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
          "low": float(d["low"]), "close": float(d["close"]), "volume": float(d["volumefrom"])}
         for d in r.json()["Data"]["Data"]
     ]
+
+
+def fetch_crypto_price(fsym: str) -> float:
+    """Pobiera aktualną cenę spot z CryptoCompare."""
+    try:
+        r = requests.get(
+            "https://min-api.cryptocompare.com/data/price",
+            params={"fsym": fsym, "tsyms": "USDT"},
+            timeout=5
+        )
+        r.raise_for_status()
+        return float(r.json()["USDT"])
+    except Exception as e:
+        print(f"[price] Blad {fsym}: {e}")
+        return 0.0
+
+
+def fetch_fear_greed() -> dict:
+    """Pobiera aktualny Fear & Greed Index z alternative.me."""
+    try:
+        r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
+        r.raise_for_status()
+        d = r.json()["data"][0]
+        return {"value": int(d["value"]), "label": d["value_classification"]}
+    except Exception as e:
+        print(f"[fear_greed] Blad: {e}")
+        return {"value": 50, "label": "Neutral"}
 
 
 # ── Wskaźniki techniczne ──────────────────────────────────────────────────────
@@ -621,7 +679,8 @@ def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: flo
 
 
 # ── Grok API (xAI — OpenAI-compatible) ───────────────────────────────────────
-def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float,
+              btc_price: float, eth_price: float, fear_greed: dict) -> dict | None:
     if not XAI_KEY:
         print("[grok] Brak klucza API.")
         return None
@@ -634,14 +693,21 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
             f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
             for c in candles_h1[-24:]
         )
-        user_msg = f"Aktualna cena SOL: ${current_price:.2f}\n\nM15 (ostatnie 60 swiec):\n{m15_csv}\n\nH1 (ostatnie 24 swiece):\n{h1_csv}"
+        fg_val   = fear_greed.get("value", 50)
+        fg_label = fear_greed.get("label", "Neutral")
+        user_msg = (
+            f"BTC: ${btc_price:.2f} | ETH: ${eth_price:.2f} | SOL: ${current_price:.2f}\n"
+            f"Fear & Greed Index: {fg_val}/100 ({fg_label})\n\n"
+            f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
+            f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
+        )
 
         client   = openai.OpenAI(base_url="https://api.x.ai/v1", api_key=XAI_KEY)
         response = client.chat.completions.create(
             model="grok-3",
             max_tokens=2048,
             messages=[
-                {"role": "system", "content": FORTECA_GPT_PROMPT},
+                {"role": "system", "content": GROK_PROMPT},
                 {"role": "user",   "content": user_msg}
             ]
         )
@@ -1072,6 +1138,57 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
     )
 
 
+def format_grok_alert(result: dict, btc_price: float, eth_price: float, sol_price: float, fear_greed: dict) -> str:
+    bias      = result.get("bias", "neutral").capitalize()
+    bias_proc = result.get("bias_proc", 0)
+    sentyment = result.get("sentyment", "")
+    analiza   = result.get("analiza", "")
+    akcja     = result.get("akcja", "")
+    fg_val    = fear_greed.get("value", 50)
+    fg_label  = fear_greed.get("label", "Neutral")
+
+    icon = "📈" if bias.lower() == "long" else ("📉" if bias.lower() == "short" else "⚖️")
+    now  = datetime.now(TZ).strftime("%d.%m  %H:%M")
+
+    lines = [
+        f"{icon} <b>Grok SOL/USDT — {bias} ({bias_proc}%)</b>",
+        f"{now}  |  F&amp;G: {fg_val}/100 ({fg_label})",
+        f"\nBTC: <b>${btc_price:.0f}</b>  |  ETH: <b>${eth_price:.0f}</b>  |  SOL: <b>${sol_price:.2f}</b>",
+    ]
+
+    if sentyment:
+        lines.append(f"\n<b>Sentyment:</b>  {sentyment}")
+    if analiza:
+        lines.append(f"\n<b>Analiza:</b>  {analiza}")
+
+    if result.get("send_alert"):
+        wejscia = result.get("wejscia", [])
+        tp1     = result.get("tp1")
+        tp2     = result.get("tp2")
+        sl      = result.get("sl")
+        rr      = result.get("rr")
+
+        if wejscia:
+            lines.append("\n<b>Wejścia:</b>")
+            for i, w in enumerate(wejscia, 1):
+                poziom  = w.get("poziom", "-")
+                warunek = w.get("warunek", "")
+                lines.append(f"  W{i}: <b>${poziom:.2f}</b>" + (f"  ({warunek})" if warunek else ""))
+        if tp1 is not None:
+            lines.append(f"<b>TP1:</b>  ${tp1:.2f}")
+        if tp2 is not None:
+            lines.append(f"<b>TP2:</b>  ${tp2:.2f}")
+        if sl is not None:
+            lines.append(f"<b>SL:</b>  ${sl:.2f}")
+        if rr is not None:
+            lines.append(f"<b>R:R:</b>  {rr:.1f}:1")
+
+    if akcja:
+        lines.append(f"\n<i>{akcja}</i>")
+
+    return "\n".join(lines)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
@@ -1172,34 +1289,26 @@ def main():
         log_to_alerty("GPT", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
 
     # ── 4. Grok ───────────────────────────────────────────────────────────────
+    print("[grok] Pobieram dane zewnetrzne (BTC, ETH, F&G)...")
+    btc_price  = fetch_crypto_price("BTC")
+    eth_price  = fetch_crypto_price("ETH")
+    fear_greed = fetch_fear_greed()
+    print(f"[grok] BTC=${btc_price:.0f} ETH=${eth_price:.0f} F&G={fear_greed['value']} ({fear_greed['label']})")
+
     print("[grok] Wysylam dane do analizy...")
-    grok_result = call_grok(candles_m15, candles_h1, current)
+    grok_result = call_grok(candles_m15, candles_h1, current, btc_price, eth_price, fear_greed)
 
     if grok_result:
-        if grok_result.get("setup_found"):
-            score     = grok_result.get("score", 0)
-            direction = grok_result.get("direction", "-")
-            entries   = grok_result.get("entries", [current])
-            level     = entries[0] if entries else current
-            print(f"[grok] Setup: {grok_result.get('setup_type')} {direction} [{score}/15]")
-            if not validate_setup(grok_result, "Grok"):
-                pass
-            elif not was_alerted("Grok", level, direction):
-                rejection = _rejection_reason(grok_result)
-                log_to_alerty("Grok", rejection, grok_result)
-                save_pending(grok_result, "Grok", rejection, current)
-                save_alerted("Grok", level, direction)
-                if score >= MIN_SCORE:
-                    send_telegram(format_alert("Grok", grok_result, current, filter_passed))
-            else:
-                print(f"[grok] Duplikat w cooldown, pomijam.")
+        bias      = grok_result.get("bias", "neutral")
+        bias_proc = grok_result.get("bias_proc", 0)
+        send_alert = grok_result.get("send_alert", False)
+        print(f"[grok] Bias: {bias} ({bias_proc}%) | send_alert={send_alert}")
+        if send_alert:
+            send_telegram(format_grok_alert(grok_result, btc_price, eth_price, current, fear_greed))
         else:
-            reasoning = grok_result.get('reasoning', '')
-            print(f"[grok] Brak setupu: {reasoning}")
-            log_to_alerty("Grok", "brak_setupu", {"reasoning": reasoning})
+            print(f"[grok] Brak konkretnego setupu — pomijam Telegram.")
     else:
         print("[grok] Brak odpowiedzi.")
-        log_to_alerty("Grok", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
 
 
 if __name__ == "__main__":
