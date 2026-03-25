@@ -684,7 +684,7 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
         chat.append(xai_system(GROK_PROMPT))
         chat.append(xai_user(user_msg))
         result = chat.sample()
-        text   = result.message.content.strip()
+        text   = result.content.strip()
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
