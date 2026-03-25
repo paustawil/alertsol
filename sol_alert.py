@@ -22,6 +22,7 @@ TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",  "8645260464:AAGe_uTew0H1gJnijdcR
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_KEY       = os.getenv("OPENAI_API_KEY", "")
+XAI_KEY          = os.getenv("XAI_API_KEY", "")
 SYMBOL           = "SOLUSDT"
 MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
@@ -31,6 +32,7 @@ SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
 ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
+ENABLE_CLAUDE    = False  # wyłączony tymczasowo — kod zachowany
 
 
 # ── System prompt dla Claude ──────────────────────────────────────────────────
@@ -618,6 +620,40 @@ def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: flo
     return None
 
 
+# ── Grok API (xAI — OpenAI-compatible) ───────────────────────────────────────
+def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+    if not XAI_KEY:
+        print("[grok] Brak klucza API.")
+        return None
+    try:
+        m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+            for c in candles_m15[-60:]
+        )
+        h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+            for c in candles_h1[-24:]
+        )
+        user_msg = f"Aktualna cena SOL: ${current_price:.2f}\n\nM15 (ostatnie 60 swiec):\n{m15_csv}\n\nH1 (ostatnie 24 swiece):\n{h1_csv}"
+
+        client   = openai.OpenAI(base_url="https://api.x.ai/v1", api_key=XAI_KEY)
+        response = client.chat.completions.create(
+            model="grok-3",
+            max_tokens=2048,
+            messages=[
+                {"role": "system", "content": FORTECA_GPT_PROMPT},
+                {"role": "user",   "content": user_msg}
+            ]
+        )
+        text  = response.choices[0].message.content.strip()
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as e:
+        print(f"[grok] Blad: {e}")
+    return None
+
+
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 ALERTY_HEADER = [
     "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
@@ -1072,35 +1108,38 @@ def main():
     else:
         print("[algo] Brak setupu.")
 
-    # ── 2. Claude ─────────────────────────────────────────────────────────────
-    print("[claude] Wysylam dane do analizy...")
-    claude_result = call_claude(candles_m15, candles_h1, current)
+    # ── 2. Claude (wyłączony — ENABLE_CLAUDE = False) ─────────────────────────
+    if ENABLE_CLAUDE:
+        print("[claude] Wysylam dane do analizy...")
+        claude_result = call_claude(candles_m15, candles_h1, current)
 
-    if claude_result:
-        if claude_result.get("setup_found"):
-            score     = claude_result.get("score", 0)
-            direction = claude_result.get("direction", "-")
-            entries   = claude_result.get("entries", [current])
-            level     = entries[0] if entries else current
-            print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
-            if not validate_setup(claude_result, "Claude"):
-                pass
-            elif not was_alerted("Claude", level, direction):
-                rejection = _rejection_reason(claude_result)
-                log_to_alerty("Claude", rejection, claude_result)
-                save_pending(claude_result, "Claude", rejection, current)
-                save_alerted("Claude", level, direction)
-                if score >= MIN_SCORE:
-                    send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+        if claude_result:
+            if claude_result.get("setup_found"):
+                score     = claude_result.get("score", 0)
+                direction = claude_result.get("direction", "-")
+                entries   = claude_result.get("entries", [current])
+                level     = entries[0] if entries else current
+                print(f"[claude] Setup: {claude_result.get('setup_type')} {direction} [{score}/15]")
+                if not validate_setup(claude_result, "Claude"):
+                    pass
+                elif not was_alerted("Claude", level, direction):
+                    rejection = _rejection_reason(claude_result)
+                    log_to_alerty("Claude", rejection, claude_result)
+                    save_pending(claude_result, "Claude", rejection, current)
+                    save_alerted("Claude", level, direction)
+                    if score >= MIN_SCORE:
+                        send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+                else:
+                    print(f"[claude] Duplikat w cooldown, pomijam.")
             else:
-                print(f"[claude] Duplikat w cooldown, pomijam.")
+                reasoning = claude_result.get('reasoning', '')
+                print(f"[claude] Brak setupu: {reasoning}")
+                log_to_alerty("Claude", "brak_setupu", {"reasoning": reasoning})
         else:
-            reasoning = claude_result.get('reasoning', '')
-            print(f"[claude] Brak setupu: {reasoning}")
-            log_to_alerty("Claude", "brak_setupu", {"reasoning": reasoning})
+            print("[claude] Brak odpowiedzi.")
+            log_to_alerty("Claude", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
     else:
-        print("[claude] Brak odpowiedzi.")
-        log_to_alerty("Claude", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
+        print("[claude] Pominiêty (ENABLE_CLAUDE=False).")
 
     # ── 3. GPT ────────────────────────────────────────────────────────────────
     print("[gpt] Wysylam dane do analizy...")
@@ -1131,6 +1170,36 @@ def main():
     else:
         print("[gpt] Brak odpowiedzi.")
         log_to_alerty("GPT", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
+
+    # ── 4. Grok ───────────────────────────────────────────────────────────────
+    print("[grok] Wysylam dane do analizy...")
+    grok_result = call_grok(candles_m15, candles_h1, current)
+
+    if grok_result:
+        if grok_result.get("setup_found"):
+            score     = grok_result.get("score", 0)
+            direction = grok_result.get("direction", "-")
+            entries   = grok_result.get("entries", [current])
+            level     = entries[0] if entries else current
+            print(f"[grok] Setup: {grok_result.get('setup_type')} {direction} [{score}/15]")
+            if not validate_setup(grok_result, "Grok"):
+                pass
+            elif not was_alerted("Grok", level, direction):
+                rejection = _rejection_reason(grok_result)
+                log_to_alerty("Grok", rejection, grok_result)
+                save_pending(grok_result, "Grok", rejection, current)
+                save_alerted("Grok", level, direction)
+                if score >= MIN_SCORE:
+                    send_telegram(format_alert("Grok", grok_result, current, filter_passed))
+            else:
+                print(f"[grok] Duplikat w cooldown, pomijam.")
+        else:
+            reasoning = grok_result.get('reasoning', '')
+            print(f"[grok] Brak setupu: {reasoning}")
+            log_to_alerty("Grok", "brak_setupu", {"reasoning": reasoning})
+    else:
+        print("[grok] Brak odpowiedzi.")
+        log_to_alerty("Grok", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
 
 
 if __name__ == "__main__":
