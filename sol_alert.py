@@ -33,6 +33,7 @@ ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
 ENABLE_CLAUDE    = False  # wyłączony tymczasowo — kod zachowany
+ENABLE_GPT       = False  # wyłączony tymczasowo — kod zachowany
 
 
 # ── System prompt dla Claude ──────────────────────────────────────────────────
@@ -696,11 +697,11 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 ALERTY_HEADER = [
     "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
-    "W1", "W2", "SL", "SL@TP1", "TP1", "TP2", "RR", "Reasoning",
+    "Kurs", "W1", "W2", "Warunek", "SL", "SL@TP1", "TP1", "TP2", "RR", "Reasoning",
 ]
 WYNIKI_HEADER = [
     "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
-    "W1", "W2", "SL", "TP1", "TP2", "RR",
+    "Kurs", "W1", "W2", "Warunek", "SL", "TP1", "TP2", "RR",
     "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik", "PnL $",
 ]
 
@@ -756,17 +757,21 @@ def log_to_alerty(model: str, rejection: str, setup: dict):
         entries = setup.get("entries", [])
         tps     = setup.get("tps", [])
         now     = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
+        raw_score = setup.get("total", setup.get("score", 0))
+        score_val = f"{raw_score}%" if model == "Grok" else raw_score
         sh1.append_row([
             now,
             model,
-            rejection or "OK",
-            setup.get("type", setup.get("setup_type", "-")),
+            rejection or "",
+            setup.get("type", setup.get("setup_type", "")) or "",
             setup.get("direction", "-"),
-            setup.get("total", setup.get("score", 0)),
+            score_val,
+            setup.get("kurs", setup.get("price_at_alert", "-")),
             entries[0] if len(entries) > 0 else "-",
             entries[1] if len(entries) > 1 else "-",
+            setup.get("warunek", "-"),
             setup.get("sl", "-"),
-            setup.get("sl_after_tp1", "-"),
+            setup.get("sl_after_tp1", "-") if setup.get("sl_after_tp1") is not None else "-",
             tps[0] if tps else setup.get("tp1", "-"),
             tps[1] if len(tps) > 1 else setup.get("tp2", "-"),
             setup.get("rr", "-"),
@@ -788,15 +793,20 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
         n_w      = s.get("entries_hit", 1)
+        model     = s.get("model", "-")
+        raw_score = s.get("score", s.get("total", 0))
+        score_val = f"{raw_score}%" if model == "Grok" else raw_score
         sh2.append_row([
             alert_dt,
-            s.get("model", "-"),
-            s.get("rejection", "OK"),
-            s.get("type", s.get("setup_type", "-")),
+            model,
+            s.get("rejection", "") or "",
+            s.get("type", s.get("setup_type", "")) or "",
             s.get("direction", "-"),
-            s.get("score", s.get("total", 0)),
+            score_val,
+            s.get("kurs", s.get("price_at_alert", "-")),
             entries[0] if entries else "-",
             entries[1] if len(entries) > 1 else "-",
+            s.get("warunek", "-"),
             s.get("sl", "-"),
             tps[0] if tps else "-",
             tps[1] if len(tps) > 1 else "-",
@@ -870,15 +880,28 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
             print(f"[pending] Duplikat pominiêty: {model} {direction} ~${new_level:.2f}")
             return
 
+    # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
+    w1_lvl    = entries[0] if entries else current_price
+    direction = setup.get("direction", "-")
+    if direction == "long":
+        entry_trigger = "rising" if w1_lvl > current_price else "falling"
+    elif direction == "short":
+        entry_trigger = "falling" if w1_lvl < current_price else "rising"
+    else:
+        entry_trigger = "falling"
+
     pending.append({
         "alert_time":      datetime.now(timezone.utc).isoformat(),
         "alert_timestamp": int(datetime.now(timezone.utc).timestamp()),
         "model":           model,
-        "rejection":       rejection or "OK",
-        "type":            setup.get("type", setup.get("setup_type", "-")),
-        "direction":       setup.get("direction", "-"),
+        "rejection":       rejection or "",
+        "type":            setup.get("type", setup.get("setup_type", "")) or "",
+        "direction":       direction,
         "score":           setup.get("total", setup.get("score", 0)),
+        "kurs":            round(current_price, 2),
         "price_at_alert":  round(current_price, 2),
+        "warunek":         setup.get("warunek", "-"),
+        "entry_trigger":   entry_trigger,
         "entries":         entries,
         "sl":              setup.get("sl"),
         "sl_after_tp1":    setup.get("sl_after_tp1"),
@@ -894,8 +917,11 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
         json.dump(pending, f, indent=2)
 
 
-def _hits(candle: dict, price: float, direction: str, side: str) -> bool:
-    if side in ("entry", "sl"):
+def _hits(candle: dict, price: float, direction: str, side: str, entry_trigger: str = None) -> bool:
+    if side == "entry":
+        trigger = entry_trigger or ("falling" if direction == "long" else "rising")
+        return candle["low"] <= price if trigger == "falling" else candle["high"] >= price
+    if side == "sl":
         return candle["low"] <= price if direction == "long" else candle["high"] >= price
     if side == "tp":
         return candle["high"] >= price if direction == "long" else candle["low"] <= price
@@ -920,7 +946,8 @@ def check_pending(candles_m15: list[dict]):
         d           = s["direction"]
 
         if s["entry_hit_at"] is None:
-            hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry")), None)
+            et  = s.get("entry_trigger")
+            hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry", et)), None)
             if hit is None:
                 if age_h > ENTRY_TIMEOUT_H:
                     print(f"[pending] {s['model']} {d}: nie weszlo")
@@ -1228,35 +1255,38 @@ def main():
     else:
         print("[claude] Pominiêty (ENABLE_CLAUDE=False).")
 
-    # ── 3. GPT ────────────────────────────────────────────────────────────────
-    print("[gpt] Wysylam dane do analizy...")
-    gpt_result = call_gpt(candles_m15, candles_h1, current)
+    # ── 3. GPT (wyłączony — ENABLE_GPT = False) ───────────────────────────────
+    if ENABLE_GPT:
+        print("[gpt] Wysylam dane do analizy...")
+        gpt_result = call_gpt(candles_m15, candles_h1, current)
 
-    if gpt_result:
-        if gpt_result.get("setup_found"):
-            score     = gpt_result.get("score", 0)
-            direction = gpt_result.get("direction", "-")
-            entries   = gpt_result.get("entries", [current])
-            level     = entries[0] if entries else current
-            print(f"[gpt] Setup: {gpt_result.get('setup_type')} {direction} [{score}/15]")
-            if not validate_setup(gpt_result, "GPT"):
-                pass
-            elif not was_alerted("GPT", level, direction):
-                rejection = _rejection_reason(gpt_result)
-                log_to_alerty("GPT", rejection, gpt_result)
-                save_pending(gpt_result, "GPT", rejection, current)
-                save_alerted("GPT", level, direction)
-                if score >= MIN_SCORE:
-                    send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+        if gpt_result:
+            if gpt_result.get("setup_found"):
+                score     = gpt_result.get("score", 0)
+                direction = gpt_result.get("direction", "-")
+                entries   = gpt_result.get("entries", [current])
+                level     = entries[0] if entries else current
+                print(f"[gpt] Setup: {gpt_result.get('setup_type')} {direction} [{score}/15]")
+                if not validate_setup(gpt_result, "GPT"):
+                    pass
+                elif not was_alerted("GPT", level, direction):
+                    rejection = _rejection_reason(gpt_result)
+                    log_to_alerty("GPT", rejection, gpt_result)
+                    save_pending(gpt_result, "GPT", rejection, current)
+                    save_alerted("GPT", level, direction)
+                    if score >= MIN_SCORE:
+                        send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+                else:
+                    print(f"[gpt] Duplikat w cooldown, pomijam.")
             else:
-                print(f"[gpt] Duplikat w cooldown, pomijam.")
+                reasoning = gpt_result.get('reasoning', '')
+                print(f"[gpt] Brak setupu: {reasoning}")
+                log_to_alerty("GPT", "brak_setupu", {"reasoning": reasoning})
         else:
-            reasoning = gpt_result.get('reasoning', '')
-            print(f"[gpt] Brak setupu: {reasoning}")
-            log_to_alerty("GPT", "brak_setupu", {"reasoning": reasoning})
+            print("[gpt] Brak odpowiedzi.")
+            log_to_alerty("GPT", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
     else:
-        print("[gpt] Brak odpowiedzi.")
-        log_to_alerty("GPT", "brak_odpowiedzi", {"reasoning": "API nie zwróciło odpowiedzi"})
+        print("[gpt] Pominięty (ENABLE_GPT=False).")
 
     # ── 4. Grok (live search — sam pobiera BTC/ETH/F&G) ───────────────────────
     print("[grok] Wysylam dane do analizy (live search wlaczony)...")
@@ -1267,10 +1297,43 @@ def main():
         bias_proc  = grok_result.get("bias_proc", 0)
         send_alert = grok_result.get("send_alert", False)
         print(f"[grok] Bias: {bias} ({bias_proc}%) | send_alert={send_alert}")
-        if send_alert:
+
+        if send_alert and bias != "neutral":
+            wejscia = grok_result.get("wejscia", [])
+            entries = [w["poziom"] for w in wejscia if "poziom" in w]
+            if entries:
+                # Ustal warunek wejścia na podstawie tekstu akcji
+                akcja_lower = grok_result.get("akcja", "").lower()
+                if "pullback" in akcja_lower:
+                    warunek = "pullback"
+                elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
+                    warunek = "przebicie"
+                else:
+                    w1_lvl = entries[0]
+                    if bias == "short":
+                        warunek = "przebicie" if w1_lvl < current else "pullback"
+                    else:
+                        warunek = "przebicie" if w1_lvl > current else "pullback"
+
+                grok_setup = {
+                    "type":         "",
+                    "direction":    bias,
+                    "score":        bias_proc,
+                    "kurs":         round(current, 2),
+                    "entries":      entries,
+                    "warunek":      warunek,
+                    "sl":           grok_result.get("sl"),
+                    "sl_after_tp1": None,
+                    "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
+                    "rr":           grok_result.get("rr", 0),
+                    "reasoning":    grok_result.get("akcja", "-"),
+                }
+                log_to_alerty("Grok", "", grok_setup)
+                save_pending(grok_setup, "Grok", "", current)
+
             send_telegram(format_grok_alert(grok_result, current))
         else:
-            print(f"[grok] Brak konkretnego setupu — pomijam Telegram.")
+            print(f"[grok] Brak konkretnego setupu — pomijam Telegram i arkusz.")
     else:
         print("[grok] Brak odpowiedzi.")
 
