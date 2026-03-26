@@ -1,1 +1,29 @@
-[]
+[
+  {
+    "alert_time": "2026-03-26T08:16:15.926104+00:00",
+    "alert_timestamp": 1774512975,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "short",
+    "score": 75,
+    "kurs": 88.75,
+    "price_at_alert": 88.75,
+    "warunek": "przebicie",
+    "entry_trigger": "falling",
+    "entries": [
+      88.5
+    ],
+    "sl": 89.5,
+    "sl_after_tp1": null,
+    "tps": [
+      87.0,
+      85.5
+    ],
+    "rr": 2.5,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1
+  }
+]
