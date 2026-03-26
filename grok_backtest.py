@@ -291,9 +291,9 @@ def insert_alerty(setups: list[dict], dry_run: bool):
         sh     = wb.worksheet("Alerty")
         for s in setups:
             ts  = datetime.fromisoformat(s["alert_time"]).astimezone(TZ).strftime("%Y-%m-%d %H:%M")
-            w1  = s["entries"][0] if s["entries"] else "-"
-            tp1 = s["tps"][0] if s["tps"] else "-"
-            tp2 = s["tps"][1] if len(s["tps"]) > 1 else "-"
+            w1  = s["entries"][0] if s["entries"] else ""
+            tp1 = s["tps"][0] if s["tps"] else ""
+            tp2 = s["tps"][1] if len(s["tps"]) > 1 else ""
             sh.append_row([
                 ts,
                 "Grok",
@@ -303,10 +303,10 @@ def insert_alerty(setups: list[dict], dry_run: bool):
                 f"{s['score']}%",
                 s["kurs"],
                 w1,
-                "-",
+                "",
                 s["warunek"],
                 s["sl"],
-                "-",
+                "",
                 tp1,
                 tp2,
                 s["rr"],
