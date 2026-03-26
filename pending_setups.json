@@ -162,33 +162,6 @@
     "entries_hit": 1
   },
   {
-    "alert_time": "2026-03-26T18:16:16.867299+00:00",
-    "alert_timestamp": 1774548976,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
-    "score": 70,
-    "kurs": 86.48,
-    "price_at_alert": 86.48,
-    "warunek": "przebicie",
-    "entry_trigger": "falling",
-    "entries": [
-      86.4
-    ],
-    "sl": 87.0,
-    "sl_after_tp1": null,
-    "tps": [
-      85.0,
-      84.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": 1774549800,
-    "tp1_hit_at": null,
-    "sl_adjusted": false,
-    "entries_hit": 1
-  },
-  {
     "alert_time": "2026-03-26T18:31:35.996483+00:00",
     "alert_timestamp": 1774549895,
     "model": "Grok",
@@ -210,61 +183,34 @@
       83.0
     ],
     "rr": 2.5,
-    "entry_hit_at": null,
+    "entry_hit_at": 1774555200,
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1
   },
   {
-    "alert_time": "2026-03-26T18:46:39.748666+00:00",
-    "alert_timestamp": 1774550799,
+    "alert_time": "2026-03-26T20:16:22.731577+00:00",
+    "alert_timestamp": 1774556182,
     "model": "Grok",
     "rejection": "",
     "type": "",
-    "direction": "short",
-    "score": 70,
-    "kurs": 85.96,
-    "price_at_alert": 85.96,
-    "warunek": "przebicie",
-    "entry_trigger": "falling",
-    "entries": [
-      85.8
-    ],
-    "sl": 86.5,
-    "sl_after_tp1": null,
-    "tps": [
-      84.5,
-      83.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": 1774552500,
-    "tp1_hit_at": null,
-    "sl_adjusted": false,
-    "entries_hit": 1
-  },
-  {
-    "alert_time": "2026-03-26T19:31:50.664289+00:00",
-    "alert_timestamp": 1774553510,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
+    "direction": "long",
     "score": 65,
-    "kurs": 85.62,
-    "price_at_alert": 85.62,
+    "kurs": 86.67,
+    "price_at_alert": 86.67,
     "warunek": "przebicie",
-    "entry_trigger": "falling",
+    "entry_trigger": "rising",
     "entries": [
-      85.5
+      86.8
     ],
-    "sl": 86.5,
+    "sl": 85.5,
     "sl_after_tp1": null,
     "tps": [
-      84.0,
-      82.0
+      88.0,
+      90.0
     ],
     "rr": 2.5,
-    "entry_hit_at": 1774554300,
+    "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1
