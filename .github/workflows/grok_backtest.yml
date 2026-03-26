@@ -7,6 +7,10 @@ on:
         description: 'Tylko wydrukuj wyniki — nie zapisuj do arkusza'
         type: boolean
         default: false
+      results_only:
+        description: 'Pomiń wstawianie do Alerty (przy ponownym uruchomieniu)'
+        type: boolean
+        default: false
 
 jobs:
   grok-backtest:
@@ -30,4 +34,8 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: python grok_backtest.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
+        run: |
+          ARGS=""
+          [ "${{ inputs.dry_run }}" = "true" ]      && ARGS="$ARGS --dry-run"
+          [ "${{ inputs.results_only }}" = "true" ] && ARGS="$ARGS --results-only"
+          python grok_backtest.py $ARGS

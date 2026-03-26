@@ -323,6 +323,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true",
                         help="Tylko wydrukuj wyniki — nie zapisuj do arkusza")
+    parser.add_argument("--results-only", action="store_true",
+                        help="Pomiń wstawianie alertów do Alerty (przy ponownym uruchomieniu)")
     args = parser.parse_args()
 
     print("Pobieranie danych M15 (ostatnie 300 świec ≈ 75h)...")
@@ -331,8 +333,11 @@ def main():
           f"{datetime.utcfromtimestamp(candles[0]['time']).strftime('%m-%d %H:%M')} – "
           f"{datetime.utcfromtimestamp(candles[-1]['time']).strftime('%m-%d %H:%M')} UTC")
 
-    # Wstaw alerty do arkusza Alerty (jednorazowo)
-    insert_alerty(GROK_SETUPS, args.dry_run)
+    # Wstaw alerty do arkusza Alerty (jednorazowo — pomiń przy --results-only)
+    if not args.results_only:
+        insert_alerty(GROK_SETUPS, args.dry_run)
+    else:
+        print("[alerty] Pominięto wstawianie do Alerty (--results-only)")
 
     print("\n{'='*72}")
     print(f"{'Czas alert':14} {'Kier':6} {'Score':6} {'Kurs':7} {'W1':7} {'Warunek':12} {'Wynik':12} {'Entry':7} {'Exit':7} {'PnL':>7}")
