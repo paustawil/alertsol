@@ -764,18 +764,18 @@ def log_to_alerty(model: str, rejection: str, setup: dict):
             model,
             rejection or "",
             setup.get("type", setup.get("setup_type", "")) or "",
-            setup.get("direction", "-"),
+            setup.get("direction", ""),
             score_val,
-            setup.get("kurs", setup.get("price_at_alert", "-")),
-            entries[0] if len(entries) > 0 else "-",
-            entries[1] if len(entries) > 1 else "-",
-            setup.get("warunek", "-"),
-            setup.get("sl", "-"),
-            setup.get("sl_after_tp1", "-") if setup.get("sl_after_tp1") is not None else "-",
-            tps[0] if tps else setup.get("tp1", "-"),
-            tps[1] if len(tps) > 1 else setup.get("tp2", "-"),
-            setup.get("rr", "-"),
-            setup.get("reasoning", "-"),
+            setup.get("kurs", setup.get("price_at_alert", "")) or "",
+            entries[0] if len(entries) > 0 else "",
+            entries[1] if len(entries) > 1 else "",
+            setup.get("warunek", "") or "",
+            setup.get("sl", "") or "",
+            setup.get("sl_after_tp1", "") or "",
+            tps[0] if tps else setup.get("tp1", "") or "",
+            tps[1] if len(tps) > 1 else setup.get("tp2", "") or "",
+            setup.get("rr", "") or "",
+            setup.get("reasoning", "") or "",
         ])
         print(f"[sheets] Alerty: {model} {setup.get('direction')} [{setup.get('total', setup.get('score'))}]")
     except Exception as e:
@@ -788,12 +788,12 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
     try:
         _, sh2   = _get_sheets()
         alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
-        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else "-"
-        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else "-"
+        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
+        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
         n_w      = s.get("entries_hit", 1)
-        model     = s.get("model", "-")
+        model     = s.get("model", "")
         raw_score = s.get("score", s.get("total", 0))
         score_val = f"{raw_score}%" if model == "Grok" else raw_score
         sh2.append_row([
@@ -801,19 +801,19 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
             model,
             s.get("rejection", "") or "",
             s.get("type", s.get("setup_type", "")) or "",
-            s.get("direction", "-"),
+            s.get("direction", ""),
             score_val,
-            s.get("kurs", s.get("price_at_alert", "-")),
-            entries[0] if entries else "-",
-            entries[1] if len(entries) > 1 else "-",
-            s.get("warunek", "-"),
-            s.get("sl", "-"),
-            tps[0] if tps else "-",
-            tps[1] if len(tps) > 1 else "-",
-            s.get("rr", "-"),
-            "+".join(f"W{i+1}" for i in range(n_w)) if n_w > 0 else "-",
-            round(eff_entry, 2) if eff_entry is not None else "-",
-            round(eff_exit,  2) if eff_exit  is not None else "-",
+            s.get("kurs", s.get("price_at_alert", "")) or "",
+            entries[0] if entries else "",
+            entries[1] if len(entries) > 1 else "",
+            s.get("warunek", "") or "",
+            s.get("sl", "") or "",
+            tps[0] if tps else "",
+            tps[1] if len(tps) > 1 else "",
+            s.get("rr", "") or "",
+            "+".join(f"W{i+1}" for i in range(n_w)) if n_w > 0 else "",
+            round(eff_entry, 2) if eff_entry is not None else "",
+            round(eff_exit,  2) if eff_exit  is not None else "",
             entry_dt, exit_dt, result, round(move, 2),
         ])
         print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f} [{entry_dt}-{exit_dt}]")
@@ -1326,7 +1326,7 @@ def main():
                     "sl_after_tp1": None,
                     "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
                     "rr":           grok_result.get("rr", 0),
-                    "reasoning":    grok_result.get("akcja", "-"),
+                    "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
                 }
                 log_to_alerty("Grok", "", grok_setup)
                 save_pending(grok_setup, "Grok", "", current)
