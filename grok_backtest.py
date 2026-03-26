@@ -218,7 +218,8 @@ def simulate_setup(s: dict, candles: list[dict]) -> tuple[str, float | None, flo
 
     if entry_ts is None:
         age_h = (candles[-1]["time"] - s["alert_timestamp"]) / 3600
-        return ("nie weszlo" if age_h > ENTRY_TIMEOUT_H else "nieokreslone"), None, None, None, None, None, False
+        status = "nie weszlo" if age_h > ENTRY_TIMEOUT_H else "czeka na wejście"
+        return status, None, None, None, None, None, False
 
     after_entry = [c for c in candles if c["time"] > entry_ts]
     result, exit_ts = None, None
@@ -251,7 +252,10 @@ def simulate_setup(s: dict, candles: list[dict]) -> tuple[str, float | None, flo
 
     if result is None:
         age_h = (candles[-1]["time"] - entry_ts) / 3600
-        result = "nieokreslone" if age_h <= TRADE_TIMEOUT_H else "nieokreslone"
+        if tp1_hit_at:
+            result = "TP1, otwarty"   # TP1 trafiony, trade wciąż trwa
+        else:
+            result = "otwarty"        # weszło, czeka na TP1/SL
 
     # PnL
     eff_entry, eff_exit = None, None
@@ -368,13 +372,16 @@ def main():
     else:
         print("[alerty] Pominięto wstawianie do Alerty (--results-only)")
 
-    print("\n{'='*72}")
-    print(f"{'Czas alert':14} {'Kier':6} {'Score':6} {'Kurs':7} {'W1':7} {'Warunek':12} {'Wynik':12} {'Entry':7} {'Exit':7} {'PnL':>7}")
-    print("-" * 90)
+    OTWARTE = {"otwarty", "TP1, otwarty", "czeka na wejście"}
+    ZAMKNIETE = {"TP2", "TP1+SL", "TP1+BE", "SL", "nie weszlo"}
+
+    print()
+    print(f"{'Alert':14} {'Kier':6} {'W1':7} {'SL':7} {'TP1':7} {'TP2':7} {'Warunek':12} {'Wynik':16} {'Entry':6} {'Exit':6} {'PnL':>7}")
+    print("-" * 105)
 
     total_pnl = 0.0
     results_for_sheet = []
-    open_setups       = []   # entry hit, brak wyniku — do przekazania do pending
+    open_setups       = []
 
     for s in GROK_SETUPS:
         result, eff_entry, eff_exit, entry_ts, exit_ts, tp1_hit_at, sl_adjusted = simulate_setup(s, candles)
@@ -382,38 +389,39 @@ def main():
         alert_dt  = datetime.fromisoformat(s["alert_time"]).astimezone(TZ).strftime("%m-%d %H:%M")
         entry_str = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else "-"
         exit_str  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else "-"
-        move      = round((s["entries"][0] - eff_exit) if s["direction"] == "short" and eff_exit else
-                          (eff_exit - s["entries"][0]) if eff_exit else 0, 2) if eff_exit else 0
+        w1  = s["entries"][0]
+        sl  = s["sl"]
+        tp1 = s["tps"][0] if s["tps"] else "-"
+        tp2 = s["tps"][1] if len(s["tps"]) > 1 else "-"
+        move = round((w1 - eff_exit) if s["direction"] == "short" and eff_exit
+                     else (eff_exit - w1) if eff_exit else 0, 2) if eff_exit else 0
 
         sign = "+" if move > 0 else ""
-        print(f"{alert_dt:14} {s['direction']:6} {s['score']:>4}%  ${s['kurs']:.2f}  "
-              f"${s['entries'][0]:.2f}  {s['warunek']:12} {result:12} {entry_str:7} {exit_str:7} "
-              f"{sign}${move:.2f}" if eff_exit else
-              f"{alert_dt:14} {s['direction']:6} {s['score']:>4}%  ${s['kurs']:.2f}  "
-              f"${s['entries'][0]:.2f}  {s['warunek']:12} {result:12} {entry_str:7} {exit_str:7}   -")
+        pnl_str = f"{sign}${move:.2f}" if eff_exit else "-"
+        print(f"{alert_dt:14} {s['direction']:6} ${w1:<6.2f} ${sl:<6.2f} ${tp1:<6.2f} ${tp2:<6.2f} "
+              f"{s['warunek']:12} {result:16} {entry_str:6} {exit_str:6} {pnl_str:>7}")
 
         total_pnl += move
         results_for_sheet.append((s, result, eff_entry, eff_exit, entry_ts, exit_ts, move))
 
-        # Zbierz otwarte pozycje (weszło, ale nie zamknęło się jeszcze)
-        if result == "nieokreslone" and entry_ts is not None:
-            pending_entry = {**s,
-                "entry_hit_at":  entry_ts,
-                "tp1_hit_at":    tp1_hit_at,
-                "sl_adjusted":   sl_adjusted,
-            }
-            open_setups.append(pending_entry)
+        if result in OTWARTE and entry_ts is not None:
+            open_setups.append({**s,
+                "entry_hit_at": entry_ts,
+                "tp1_hit_at":   tp1_hit_at,
+                "sl_adjusted":  sl_adjusted,
+            })
 
     sign = "+" if total_pnl >= 0 else ""
-    print("-" * 90)
-    print(f"{'ŁĄCZNIE':>76}  {sign}${total_pnl:.2f}")
+    print("-" * 105)
+    print(f"{'ŁĄCZNIE (zamknięte)':>98}  {sign}${total_pnl:.2f}")
+    print(f"\nOtwarte: {sum(1 for _,r,*_ in results_for_sheet if r in OTWARTE)} | "
+          f"Zamknięte: {sum(1 for _,r,*_ in results_for_sheet if r in ZAMKNIETE)}")
 
     if not args.dry_run:
-        # Zapisz wyniki zamkniętych setupów do arkusza Wyniki
         print("\nZapisuję wyniki do arkusza Wyniki...")
         ok, fail = 0, 0
         for s, result, eff_entry, eff_exit, entry_ts, exit_ts, move in results_for_sheet:
-            if result not in ("nieokreslone",) and eff_entry is not None:
+            if result in ZAMKNIETE and eff_entry is not None:
                 if log_to_wyniki(s, result, entry_ts, exit_ts, eff_entry, eff_exit, move):
                     ok += 1
                 else:
@@ -425,9 +433,8 @@ def main():
                     fail += 1
         print(f"Wyniki: {ok} zapisanych, {fail} błędów.")
 
-        # Otwarte pozycje → pending_setups.json (główny bot przejmie śledzenie)
         if open_setups:
-            print(f"\nOtwarte pozycje ({len(open_setups)}) → przekazuję do pending_setups.json...")
+            print(f"\nOtwarte pozycje ({len(open_setups)}) → pending_setups.json...")
             save_open_to_pending(open_setups)
         else:
             print("\nBrak otwartych pozycji — pending_setups.json bez zmian.")
