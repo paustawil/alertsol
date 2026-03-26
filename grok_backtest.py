@@ -21,7 +21,7 @@ from google.oauth2.service_account import Credentials
 sys.path.insert(0, os.path.dirname(__file__))
 from sol_alert import (
     SHEET_ID, TZ, TRADE_TIMEOUT_H, ENTRY_TIMEOUT_H,
-    _hits, log_to_wyniki,
+    PENDING_FILE, _hits, log_to_wyniki,
 )
 
 # ── Historyczne alerty Groka (26.03.2026, czas warszawski = UTC+1) ────────────
@@ -218,7 +218,7 @@ def simulate_setup(s: dict, candles: list[dict]) -> tuple[str, float | None, flo
 
     if entry_ts is None:
         age_h = (candles[-1]["time"] - s["alert_timestamp"]) / 3600
-        return ("nie weszlo" if age_h > ENTRY_TIMEOUT_H else "nieokreslone"), None, None, None, None
+        return ("nie weszlo" if age_h > ENTRY_TIMEOUT_H else "nieokreslone"), None, None, None, None, None, False
 
     after_entry = [c for c in candles if c["time"] > entry_ts]
     result, exit_ts = None, None
@@ -271,7 +271,36 @@ def simulate_setup(s: dict, candles: list[dict]) -> tuple[str, float | None, flo
     if eff_entry and eff_exit:
         move = round((eff_entry - eff_exit) if d == "short" else (eff_exit - eff_entry), 2)
 
-    return result, eff_entry, eff_exit, entry_ts, exit_ts
+    return result, eff_entry, eff_exit, entry_ts, exit_ts, tp1_hit_at, (effective_sl != sl)
+
+
+# ── Zapis otwartych setupów do pending_setups.json ───────────────────────────
+
+def save_open_to_pending(open_setups: list[dict]):
+    """Dodaje otwarte setupy (entry hit, brak wyniku) do pending_setups.json."""
+    pending = []
+    if os.path.exists(PENDING_FILE):
+        with open(PENDING_FILE) as f:
+            pending = json.load(f)
+
+    added = 0
+    for s in open_setups:
+        # Pomiń jeśli już jest w pending (ten sam model/kierunek/poziom/entry_hit_at)
+        w1 = s["entries"][0] if s["entries"] else 0
+        duplicate = any(
+            p["model"] == "Grok"
+            and p["direction"] == s["direction"]
+            and abs((p["entries"][0] if p["entries"] else 0) - w1) < 0.5
+            and p.get("entry_hit_at") == s.get("entry_hit_at")
+            for p in pending
+        )
+        if not duplicate:
+            pending.append(s)
+            added += 1
+
+    with open(PENDING_FILE, "w") as f:
+        json.dump(pending, f, indent=2)
+    print(f"[pending] Dodano {added} otwartych setupów do {PENDING_FILE}.")
 
 
 # ── Zapis do arkusza Alerty (jednorazowe wstawienie historycznych wierszy) ───
@@ -345,9 +374,10 @@ def main():
 
     total_pnl = 0.0
     results_for_sheet = []
+    open_setups       = []   # entry hit, brak wyniku — do przekazania do pending
 
     for s in GROK_SETUPS:
-        result, eff_entry, eff_exit, entry_ts, exit_ts = simulate_setup(s, candles)
+        result, eff_entry, eff_exit, entry_ts, exit_ts, tp1_hit_at, sl_adjusted = simulate_setup(s, candles)
 
         alert_dt  = datetime.fromisoformat(s["alert_time"]).astimezone(TZ).strftime("%m-%d %H:%M")
         entry_str = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else "-"
@@ -365,12 +395,21 @@ def main():
         total_pnl += move
         results_for_sheet.append((s, result, eff_entry, eff_exit, entry_ts, exit_ts, move))
 
+        # Zbierz otwarte pozycje (weszło, ale nie zamknęło się jeszcze)
+        if result == "nieokreslone" and entry_ts is not None:
+            pending_entry = {**s,
+                "entry_hit_at":  entry_ts,
+                "tp1_hit_at":    tp1_hit_at,
+                "sl_adjusted":   sl_adjusted,
+            }
+            open_setups.append(pending_entry)
+
     sign = "+" if total_pnl >= 0 else ""
     print("-" * 90)
     print(f"{'ŁĄCZNIE':>76}  {sign}${total_pnl:.2f}")
 
-    # Zapisz wyniki do arkusza Wyniki
     if not args.dry_run:
+        # Zapisz wyniki zamkniętych setupów do arkusza Wyniki
         print("\nZapisuję wyniki do arkusza Wyniki...")
         ok, fail = 0, 0
         for s, result, eff_entry, eff_exit, entry_ts, exit_ts, move in results_for_sheet:
@@ -379,14 +418,23 @@ def main():
                     ok += 1
                 else:
                     fail += 1
-            elif result in ("nie weszlo",):
+            elif result == "nie weszlo":
                 if log_to_wyniki(s, result, None, None, None, None, 0):
                     ok += 1
                 else:
                     fail += 1
         print(f"Wyniki: {ok} zapisanych, {fail} błędów.")
+
+        # Otwarte pozycje → pending_setups.json (główny bot przejmie śledzenie)
+        if open_setups:
+            print(f"\nOtwarte pozycje ({len(open_setups)}) → przekazuję do pending_setups.json...")
+            save_open_to_pending(open_setups)
+        else:
+            print("\nBrak otwartych pozycji — pending_setups.json bez zmian.")
     else:
         print("\n[dry-run] Wyniki nie zostały zapisane do arkusza.")
+        if open_setups:
+            print(f"[dry-run] {len(open_setups)} otwartych pozycji zostałoby dodanych do pending.")
 
 
 if __name__ == "__main__":

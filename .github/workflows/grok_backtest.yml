@@ -39,3 +39,12 @@ jobs:
           [ "${{ inputs.dry_run }}" = "true" ]      && ARGS="$ARGS --dry-run"
           [ "${{ inputs.results_only }}" = "true" ] && ARGS="$ARGS --results-only"
           python grok_backtest.py $ARGS
+
+      - name: Zapisz pending_setups.json do repozytorium
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          git config user.name "SOL Alert Bot"
+          git config user.email "bot@alertsol.com"
+          git add pending_setups.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: grok backtest — update pending setups [skip ci]"
+          git push || true
