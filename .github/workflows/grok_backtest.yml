@@ -1,0 +1,33 @@
+name: Grok Backtest (historyczny 26.03.2026)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Tylko wydrukuj wyniki — nie zapisuj do arkusza'
+        type: boolean
+        default: false
+
+jobs:
+  grok-backtest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zaleznosci
+        run: pip install -r requirements.txt
+
+      - name: Uruchom Grok backtest
+        env:
+          TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python grok_backtest.py ${{ inputs.dry_run == true && '--dry-run' || '' }}
