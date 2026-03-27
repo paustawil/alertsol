@@ -1,47 +1,47 @@
 #!/usr/bin/env python3
 """
-Exchange Trader — Binance USDT-M Futures
-Obsługuje SOLUSDT z dźwignią 20x
-
+Exchange Trader — Bitget USDT-M Futures (SOLUSDT Perpetual)
 Wywoływany przez sol_alert.py co 15 minut.
-Zarządza conditional orderami (nie blokują margin), TP1/TP2 i SL.
 
-Typy conditional orderów:
-  Long  + falling (pullback): TAKE_PROFIT BUY  — trigger gdy cena spada do W1
-  Long  + rising  (breakout): STOP        BUY  — trigger gdy cena rośnie do W1
-  Short + rising  (pullback): TAKE_PROFIT SELL — trigger gdy cena rośnie do W1
-  Short + falling (breakdown):STOP        SELL — trigger gdy cena spada do W1
+Bitget używa "plan orders" jako conditional orderów — nie blokują margin
+do momentu aktywacji (triggerPrice = W1).
+
+Wymagane zmienne środowiskowe:
+  BITGET_API_KEY       — klucz API
+  BITGET_API_SECRET    — sekret API
+  BITGET_PASSPHRASE    — hasło API (Bitget wymaga 3 składowych)
+  BITGET_DEMO          — "true" = demo trading (domyślnie true)
 """
 
 import os
 import json
 import math
 import time
+import hmac
+import hashlib
+import base64
 import logging
-
-try:
-    from binance.um_futures import UMFutures
-    BINANCE_AVAILABLE = True
-except ImportError:
-    BINANCE_AVAILABLE = False
+import requests
 
 log = logging.getLogger("exchange")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 # ── Konfiguracja ───────────────────────────────────────────────────────────────
-SYMBOL       = "SOLUSDT"
-LEVERAGE     = 20        # zmień jeśli konto ma inny limit
-TRADE_USDT   = 100.0     # kwota margin na jeden trade
-QTY_STEP     = 0.1       # minimalny krok qty dla SOLUSDT
-PRICE_DEC    = 2         # miejsca po przecinku dla ceny
-PENDING_FILE = "pending_setups.json"
-TESTNET_URL  = "https://testnet.binancefuture.com"
+SYMBOL        = "SOLUSDT"
+PRODUCT_TYPE  = "USDT-FUTURES"
+MARGIN_COIN   = "USDT"
+MARGIN_MODE   = "crossed"       # cross margin
+LEVERAGE      = 20
+TRADE_USDT    = 100.0           # kwota margin na jeden trade
+QTY_STEP      = 0.1             # minimalny krok qty dla SOLUSDT
+PRICE_DEC     = 2               # miejsca po przecinku ceny
+BASE_URL      = "https://api.bitget.com"
+PENDING_FILE  = "pending_setups.json"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _round_qty(qty: float) -> float:
-    """Zaokrągla qty w dół do najbliższego kroku QTY_STEP."""
     return max(math.floor(qty / QTY_STEP) * QTY_STEP, QTY_STEP)
 
 
@@ -65,189 +65,235 @@ def _save_pending(pending: list[dict]):
         json.dump(pending, f, indent=2)
 
 
-def _client():
-    """Tworzy klienta Binance Futures. Zwraca None jeśli brak kluczy."""
-    if not BINANCE_AVAILABLE:
-        print("[exchange] binance-futures-connector nie zainstalowany — pomijam.")
+# ── Klient Bitget REST API ─────────────────────────────────────────────────────
+
+class BitgetClient:
+    def __init__(self, key: str, secret: str, passphrase: str, demo: bool = True):
+        self.key        = key
+        self.secret     = secret
+        self.passphrase = passphrase
+        self.demo       = demo
+
+    def _sign(self, ts: str, method: str, path: str, body: str) -> str:
+        msg = ts + method.upper() + path + (body or "")
+        mac = hmac.new(self.secret.encode(), msg.encode(), hashlib.sha256)
+        return base64.b64encode(mac.digest()).decode()
+
+    def _headers(self, method: str, path: str, body: str = "") -> dict:
+        ts = str(int(time.time() * 1000))
+        h  = {
+            "ACCESS-KEY":       self.key,
+            "ACCESS-SIGN":      self._sign(ts, method, path, body),
+            "ACCESS-TIMESTAMP": ts,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type":     "application/json",
+            "locale":           "en-US",
+        }
+        if self.demo:
+            h["paptrading"] = "1"
+        return h
+
+    def post(self, path: str, params: dict) -> dict:
+        body = json.dumps(params)
+        resp = requests.post(
+            BASE_URL + path,
+            headers=self._headers("POST", path, body),
+            data=body,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get(self, path: str, params: dict | None = None) -> dict:
+        qs   = ""
+        if params:
+            qs = "?" + "&".join(f"{k}={v}" for k, v in params.items())
+        resp = requests.get(
+            BASE_URL + path + qs,
+            headers=self._headers("GET", path + qs),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _client() -> BitgetClient | None:
+    key        = os.getenv("BITGET_API_KEY", "")
+    secret     = os.getenv("BITGET_API_SECRET", "")
+    passphrase = os.getenv("BITGET_PASSPHRASE", "")
+    if not key or not secret or not passphrase:
+        print("[exchange] Brak BITGET_API_KEY/BITGET_API_SECRET/BITGET_PASSPHRASE — pomijam.")
         return None
-    key    = os.getenv("BINANCE_API_KEY", "")
-    secret = os.getenv("BINANCE_API_SECRET", "")
-    if not key or not secret:
-        print("[exchange] Brak BINANCE_API_KEY/BINANCE_API_SECRET — pomijam.")
-        return None
-    testnet = os.getenv("BINANCE_TESTNET", "true").lower() != "false"
-    env_label = "TESTNET" if testnet else "PRODUKCJA"
-    base_url = TESTNET_URL if testnet else None  # None = domyślny prod URL
-    print(f"[exchange] Sesja Binance {env_label} | {SYMBOL} | {LEVERAGE}x | {TRADE_USDT} USDT/trade")
-    return UMFutures(key=key, secret=secret, base_url=base_url)
+    demo = os.getenv("BITGET_DEMO", "true").lower() != "false"
+    env_label = "DEMO" if demo else "PRODUKCJA"
+    print(f"[exchange] Sesja Bitget {env_label} | {SYMBOL} | {LEVERAGE}x | {TRADE_USDT} USDT/trade")
+    return BitgetClient(key, secret, passphrase, demo=demo)
 
 
-def _set_leverage(client) -> bool:
-    """Ustawia dźwignię na SYMBOL."""
-    try:
-        client.change_leverage(symbol=SYMBOL, leverage=LEVERAGE)
-        return True
-    except Exception as e:
-        # Binance rzuca wyjątek gdy dźwignia już ustawiona na tę wartość
-        if "No need to change leverage" in str(e):
-            return True
-        log.warning(f"[exchange] set_leverage: {e}")
-        return False
+# ── Dźwignia ──────────────────────────────────────────────────────────────────
 
-
-# ── Wybór typu conditional order ───────────────────────────────────────────────
-
-def _conditional_order_type(direction: str, entry_trigger: str) -> str:
-    """
-    Zwraca typ Binance Futures dla conditional entry order.
-    STOP       = triggeruje gdy cena idzie W KIERUNKU zlecenia (breakout/breakdown)
-    TAKE_PROFIT = triggeruje gdy cena idzie PRZECIWNIE (pullback)
-    """
-    if direction == "long":
-        return "STOP" if entry_trigger == "rising" else "TAKE_PROFIT"
-    else:  # short
-        return "STOP" if entry_trigger == "falling" else "TAKE_PROFIT"
+def _set_leverage(client: BitgetClient):
+    """Ustawia dźwignię dla long i short."""
+    for hold_side in ("long", "short"):
+        try:
+            resp = client.post("/api/v2/mix/account/set-leverage", {
+                "symbol":      SYMBOL,
+                "productType": PRODUCT_TYPE,
+                "marginCoin":  MARGIN_COIN,
+                "leverage":    str(LEVERAGE),
+                "holdSide":    hold_side,
+            })
+            if resp.get("code") not in ("00000", "40919"):  # 40919 = już ustawiona
+                log.warning(f"[exchange] set_leverage {hold_side}: {resp.get('msg')}")
+        except Exception as e:
+            log.warning(f"[exchange] set_leverage {hold_side}: {e}")
 
 
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
-def _place_conditional(client, s: dict) -> int | None:
+def _place_plan_order(client: BitgetClient, s: dict) -> str | None:
     """
-    Składa conditional stop-limit order przy W1.
+    Składa plan (conditional) order przy W1.
     Nie blokuje margin do momentu aktywacji.
-    Zwraca orderId (int) lub None przy błędzie.
+    Bitget automatycznie ustala kierunek triggerowania na podstawie
+    bieżącej ceny vs triggerPrice — nie trzeba go podawać.
+    Zwraca orderId lub None.
     """
     direction = s["direction"]
     w1        = s["entries"][0]
     qty       = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-    side      = "BUY" if direction == "long" else "SELL"
-    et        = s.get("entry_trigger", "falling")
-    cond_type = _conditional_order_type(direction, et)
+    side      = "buy" if direction == "long" else "sell"
 
     try:
-        resp = client.new_order(
-            symbol=SYMBOL,
-            side=side,
-            type=cond_type,
-            quantity=_fmt_qty(qty),
-            price=_fmt_price(w1),
-            stopPrice=_fmt_price(w1),
-            timeInForce="GTC",
-            workingType="MARK_PRICE",
-            priceProtect=True,
-        )
-        oid = resp["orderId"]
-        print(f"[exchange] Conditional {cond_type} złożony: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}")
-        return oid
+        resp = client.post("/api/v2/mix/order/place-plan-order", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "marginMode":  MARGIN_MODE,
+            "marginCoin":  MARGIN_COIN,
+            "size":        _fmt_qty(qty),
+            "price":       _fmt_price(w1),
+            "triggerPrice": _fmt_price(w1),
+            "triggerType": "mark_price",
+            "side":        side,
+            "tradeSide":   "open",
+            "orderType":   "limit",
+        })
+        if resp.get("code") == "00000":
+            oid = resp["data"]["orderId"]
+            print(f"[exchange] Plan order złożony: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}")
+            return oid
+        log.error(f"[exchange] place_plan_order: {resp.get('msg')}")
+        return None
     except Exception as e:
-        log.error(f"[exchange] place_conditional: {e}")
+        log.error(f"[exchange] place_plan_order: {e}")
         return None
 
 
-def _cancel_order(client, order_id: int):
-    """Anuluje zlecenie po orderId."""
+def _cancel_plan_order(client: BitgetClient, order_id: str):
+    """Anuluje plan order."""
     try:
-        client.cancel_order(symbol=SYMBOL, orderId=order_id)
-        print(f"[exchange] Order anulowany: {order_id}")
+        resp = client.post("/api/v2/mix/order/cancel-plan-order", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "orderId":     order_id,
+        })
+        if resp.get("code") == "00000":
+            print(f"[exchange] Plan order anulowany: {order_id}")
+        else:
+            log.warning(f"[exchange] cancel_plan_order {order_id}: {resp.get('msg')}")
     except Exception as e:
-        log.warning(f"[exchange] cancel_order {order_id}: {e}")
+        log.warning(f"[exchange] cancel_plan_order {order_id}: {e}")
 
 
-def _place_tp_sl_orders(client, s: dict) -> tuple[int | None, int | None, int | None]:
+def _place_tp_order(client: BitgetClient, s: dict, tp_price: float, qty: float) -> str | None:
+    """Składa limit order TP (reduce-only, close). Zwraca orderId."""
+    direction = s["direction"]
+    side      = "sell" if direction == "long" else "buy"
+
+    try:
+        resp = client.post("/api/v2/mix/order/place-order", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "marginMode":  MARGIN_MODE,
+            "marginCoin":  MARGIN_COIN,
+            "size":        _fmt_qty(qty),
+            "price":       _fmt_price(tp_price),
+            "side":        side,
+            "tradeSide":   "close",
+            "orderType":   "limit",
+            "reduceOnly":  "YES",
+        })
+        if resp.get("code") == "00000":
+            oid = resp["data"]["orderId"]
+            print(f"[exchange] TP order: {oid} | {side} {_fmt_qty(qty)} SOL @ {tp_price}")
+            return oid
+        log.error(f"[exchange] place_tp_order @ {tp_price}: {resp.get('msg')}")
+        return None
+    except Exception as e:
+        log.error(f"[exchange] place_tp_order: {e}")
+        return None
+
+
+def _place_sl_plan_order(client: BitgetClient, s: dict, sl_price: float, qty: float) -> str | None:
     """
-    Po wejściu w pozycję: składa TP1, TP2 (limit reduce-only) i SL (stop-market).
-    Zwraca (tp1_order_id, tp2_order_id, sl_order_id).
+    Składa plan order SL (stop-market, reduce-only, close).
+    Zwraca orderId lub None.
     """
     direction = s["direction"]
-    w1        = s["entries"][0]
-    full_qty  = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-    half_qty  = _round_qty(full_qty / 2)
-    tp_side   = "SELL" if direction == "long" else "BUY"
-    sl_side   = "SELL" if direction == "long" else "BUY"
-    tps       = s.get("tps", [])
-    sl        = s["sl"]
-    tp1       = tps[0] if tps else None
-    tp2       = tps[1] if len(tps) > 1 else None
-    tp1_id    = None
-    tp2_id    = None
-    sl_id     = None
+    side      = "sell" if direction == "long" else "buy"
 
-    # TP1 — 50% pozycji, limit reduce-only
-    if tp1:
-        try:
-            resp = client.new_order(
-                symbol=SYMBOL,
-                side=tp_side,
-                type="LIMIT",
-                quantity=_fmt_qty(half_qty),
-                price=_fmt_price(tp1),
-                timeInForce="GTC",
-                reduceOnly=True,
-            )
-            tp1_id = resp["orderId"]
-            print(f"[exchange] TP1 order: {tp1_id} | {_fmt_qty(half_qty)} SOL @ {tp1}")
-        except Exception as e:
-            log.error(f"[exchange] TP1: {e}")
+    try:
+        resp = client.post("/api/v2/mix/order/place-plan-order", {
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "marginMode":   MARGIN_MODE,
+            "marginCoin":   MARGIN_COIN,
+            "size":         _fmt_qty(qty),
+            "triggerPrice": _fmt_price(sl_price),
+            "triggerType":  "mark_price",
+            "side":         side,
+            "tradeSide":    "close",
+            "orderType":    "market",
+            "reduceOnly":   "YES",
+        })
+        if resp.get("code") == "00000":
+            oid = resp["data"]["orderId"]
+            print(f"[exchange] SL plan order: {oid} | {side} {_fmt_qty(qty)} SOL stop @ {sl_price}")
+            return oid
+        log.error(f"[exchange] place_sl_plan_order @ {sl_price}: {resp.get('msg')}")
+        return None
+    except Exception as e:
+        log.error(f"[exchange] place_sl_plan_order: {e}")
+        return None
 
-    # TP2 — pozostałe 50%, limit reduce-only
-    if tp2:
-        try:
-            resp = client.new_order(
-                symbol=SYMBOL,
-                side=tp_side,
-                type="LIMIT",
-                quantity=_fmt_qty(half_qty),
-                price=_fmt_price(tp2),
-                timeInForce="GTC",
-                reduceOnly=True,
-            )
-            tp2_id = resp["orderId"]
-            print(f"[exchange] TP2 order: {tp2_id} | {_fmt_qty(half_qty)} SOL @ {tp2}")
-        except Exception as e:
-            log.error(f"[exchange] TP2: {e}")
 
-    # SL — stop-market reduce-only na pełną pozycję
-    sl_id = _place_sl_order(client, sl_side, full_qty, sl)
+def _place_tp_sl_orders(client: BitgetClient, s: dict) -> tuple[str | None, str | None, str | None]:
+    """Po wejściu w pozycję: TP1, TP2 (50%/50%) i SL. Zwraca (tp1_id, tp2_id, sl_id)."""
+    w1       = s["entries"][0]
+    full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+    half_qty = _round_qty(full_qty / 2)
+    tps      = s.get("tps", [])
+    sl       = s["sl"]
+    tp1      = tps[0] if tps else None
+    tp2      = tps[1] if len(tps) > 1 else None
+
+    tp1_id = _place_tp_order(client, s, tp1, half_qty) if tp1 else None
+    tp2_id = _place_tp_order(client, s, tp2, half_qty) if tp2 else None
+    sl_id  = _place_sl_plan_order(client, s, sl, full_qty)
 
     return tp1_id, tp2_id, sl_id
 
 
-def _place_sl_order(client, sl_side: str, qty: float, sl_price: float) -> int | None:
-    """Składa SL jako stop-market reduce-only. Zwraca orderId."""
-    try:
-        resp = client.new_order(
-            symbol=SYMBOL,
-            side=sl_side,
-            type="STOP_MARKET",
-            quantity=_fmt_qty(qty),
-            stopPrice=_fmt_price(sl_price),
-            workingType="MARK_PRICE",
-            priceProtect=True,
-            reduceOnly=True,
-        )
-        oid = resp["orderId"]
-        print(f"[exchange] SL order: {oid} | {_fmt_qty(qty)} SOL stop @ {sl_price}")
-        return oid
-    except Exception as e:
-        log.error(f"[exchange] SL order: {e}")
-        return None
-
-
-def _update_sl(client, s: dict, new_sl: float):
-    """
-    Przesuwa SL po trafieniu TP1:
-    anuluje stary SL, składa nowy stop-market na pozostałe 50%.
-    """
+def _update_sl(client: BitgetClient, s: dict, new_sl: float):
+    """Po TP1: anuluje stary SL, składa nowy na 50% pozycji."""
     old_sl_id = s.get("exchange_sl_order_id")
     if old_sl_id:
-        _cancel_order(client, old_sl_id)
+        _cancel_plan_order(client, old_sl_id)
 
-    direction = s["direction"]
     w1        = s["entries"][0]
     half_qty  = _round_qty(_round_qty((TRADE_USDT * LEVERAGE) / w1) / 2)
-    sl_side   = "SELL" if direction == "long" else "BUY"
+    new_sl_id = _place_sl_plan_order(client, s, new_sl, half_qty)
 
-    new_sl_id = _place_sl_order(client, sl_side, half_qty, new_sl)
     if new_sl_id:
         s["exchange_sl_order_id"] = new_sl_id
         be_label = "BE" if abs(new_sl - w1) < 0.05 else f"+${abs(new_sl - w1):.2f}"
@@ -256,22 +302,55 @@ def _update_sl(client, s: dict, new_sl: float):
 
 # ── Sprawdzanie statusu zleceń ─────────────────────────────────────────────────
 
-def _order_status(client, order_id: int) -> str:
+def _plan_order_status(client: BitgetClient, order_id: str) -> str:
     """
-    Zwraca status zlecenia: 'new' | 'filled' | 'cancelled' | 'unknown'
+    Sprawdza status plan order.
+    Zwraca: 'live' | 'executed' | 'cancelled' | 'unknown'
     """
     try:
-        resp = client.query_order(symbol=SYMBOL, orderId=order_id)
-        status = resp.get("status", "")
-        if status == "FILLED":
-            return "filled"
-        if status in ("CANCELED", "EXPIRED", "REJECTED"):
-            return "cancelled"
-        if status in ("NEW", "PARTIALLY_FILLED"):
-            return "new"
+        # Sprawdź aktywne plan ordery
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+        })
+        if resp.get("code") == "00000":
+            live_ids = {o["orderId"] for o in resp["data"].get("entrustedList", [])}
+            if order_id in live_ids:
+                return "live"
+
+        # Nie ma w aktywnych — sprawdź historię plan orderów
+        resp = client.get("/api/v2/mix/order/orders-plan-history", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "startTime":   str(int((time.time() - 7 * 86400) * 1000)),  # ostatnie 7 dni
+            "endTime":     str(int(time.time() * 1000)),
+        })
+        if resp.get("code") == "00000":
+            for o in resp["data"].get("entrustedList", []):
+                if o["orderId"] == order_id:
+                    status = o.get("planStatus", "")
+                    if status == "executed":
+                        return "executed"
+                    if status in ("cancelled", "expired"):
+                        return "cancelled"
     except Exception as e:
-        log.warning(f"[exchange] query_order {order_id}: {e}")
+        log.warning(f"[exchange] plan_order_status {order_id}: {e}")
     return "unknown"
+
+
+def _is_order_filled(client: BitgetClient, order_id: str) -> bool:
+    """Sprawdza czy zwykły order (TP1/TP2) jest wypełniony."""
+    try:
+        resp = client.get("/api/v2/mix/order/detail", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "orderId":     order_id,
+        })
+        if resp.get("code") == "00000":
+            return resp["data"].get("status") == "filled"
+    except Exception as e:
+        log.warning(f"[exchange] is_order_filled {order_id}: {e}")
+    return False
 
 
 # ── Główna funkcja synchronizacji ─────────────────────────────────────────────
@@ -281,9 +360,9 @@ def sync():
     Główna pętla — wywoływana co 15 min przez sol_alert.py.
 
     Dla każdego setupu w pending_setups.json:
-      - NOWY:      składa conditional order (nie blokuje margin)
-      - ANULOWANY: anuluje order na Binance
-      - OCZEKUJĄCY: sprawdza czy conditional się wypełnił → otwiera TP1/TP2/SL
+      - NOWY:      składa plan order (conditional, nie blokuje margin)
+      - ANULOWANY: anuluje plan order na Bitget
+      - OCZEKUJĄCY: sprawdza czy plan order wykonany → otwiera TP1/TP2/SL
       - OTWARTY:   sprawdza TP1 → przesuwa SL
     """
     client = _client()
@@ -312,40 +391,40 @@ def sync():
 
         # ── Anuluj gdy setup odrzucony przez Groka ───────────────────────────
         if (shadow or cancelled) and order_id and not opened:
-            print(f"[exchange] {label}: setup anulowany → cancel {order_id}")
-            _cancel_order(client, order_id)
+            print(f"[exchange] {label}: anulowany → cancel plan order {order_id}")
+            _cancel_plan_order(client, order_id)
             s["exchange_order_id"] = None
             modified = True
             continue
 
-        # ── Nowy setup — złóż conditional order ─────────────────────────────
+        # ── Nowy setup — złóż plan order (conditional entry) ─────────────────
         if not shadow and not cancelled and not order_id and s["entry_hit_at"] is None:
             w1  = entries[0]
             qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-            oid = _place_conditional(client, s)
+            oid = _place_plan_order(client, s)
             if oid:
-                s["exchange_order_id"]         = oid
-                s["exchange_position_opened"]  = False
-                s["exchange_tp1_order_id"]     = None
-                s["exchange_tp2_order_id"]     = None
-                s["exchange_sl_order_id"]      = None
-                s["exchange_qty"]              = _fmt_qty(qty)
+                s["exchange_order_id"]        = oid
+                s["exchange_position_opened"] = False
+                s["exchange_tp1_order_id"]    = None
+                s["exchange_tp2_order_id"]    = None
+                s["exchange_sl_order_id"]     = None
+                s["exchange_qty"]             = _fmt_qty(qty)
                 modified = True
-                print(f"[exchange] {label}: conditional → {oid} ({_fmt_qty(qty)} SOL @ {w1})")
+                print(f"[exchange] {label}: plan order → {oid} ({_fmt_qty(qty)} SOL @ {w1})")
             continue
 
-        # ── Oczekujący order — sprawdź czy wypełniony ─────────────────────────
+        # ── Oczekujący — sprawdź czy plan order wykonany ─────────────────────
         if order_id and not opened:
-            status = _order_status(client, order_id)
-            if status == "new":
+            status = _plan_order_status(client, order_id)
+            if status == "live":
                 continue  # jeszcze czeka
             if status == "cancelled":
-                print(f"[exchange] {label}: conditional anulowany z zewnątrz")
+                print(f"[exchange] {label}: plan order anulowany z zewnątrz")
                 s["exchange_order_id"] = None
                 modified = True
                 continue
-            if status == "filled":
-                print(f"[exchange] {label}: entry wypełniony! Składam TP1/TP2/SL.")
+            if status == "executed":
+                print(f"[exchange] {label}: entry wykonany! Składam TP/SL.")
                 tp1_id, tp2_id, sl_id = _place_tp_sl_orders(client, s)
                 s["exchange_position_opened"] = True
                 s["exchange_tp1_order_id"]    = tp1_id
@@ -354,10 +433,10 @@ def sync():
                 modified = True
             continue
 
-        # ── Pozycja otwarta — sprawdź TP1, ewentualnie przesuń SL ────────────
+        # ── Pozycja otwarta — sprawdź TP1, przesuń SL ───────────────────────
         if opened and not s.get("sl_adjusted"):
             tp1_oid = s.get("exchange_tp1_order_id")
-            if tp1_oid and _order_status(client, tp1_oid) == "filled":
+            if tp1_oid and _is_order_filled(client, tp1_oid):
                 w1       = entries[0]
                 sl_after = s.get("sl_after_tp1") or w1  # null → W1 = breakeven
                 _update_sl(client, s, sl_after)
