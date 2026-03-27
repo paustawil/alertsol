@@ -328,6 +328,7 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
         resp = client.get("/api/v2/mix/order/orders-plan-pending", {
             "symbol":      SYMBOL,
             "productType": PRODUCT_TYPE,
+            "planType":    "normal_plan",
         })
         if resp.get("code") == "00000":
             live_ids = {o["orderId"] for o in resp["data"].get("entrustedList", [])}
@@ -338,6 +339,7 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
         resp = client.get("/api/v2/mix/order/orders-plan-history", {
             "symbol":      SYMBOL,
             "productType": PRODUCT_TYPE,
+            "planType":    "normal_plan",
             "startTime":   str(int((time.time() - 7 * 86400) * 1000)),  # ostatnie 7 dni
             "endTime":     str(int(time.time() * 1000)),
         })
