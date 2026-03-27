@@ -1493,8 +1493,8 @@ def main():
             pass
         elif not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
             rejection = _rejection_reason(best_algo)
-            log_to_alerty("Algorytm", rejection, best_algo)
             save_pending(best_algo, "Algorytm", rejection, current)
+            log_to_alerty("Algorytm", rejection, best_algo)
             save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
             if best_algo["total"] >= MIN_SCORE:
                 send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
@@ -1519,8 +1519,8 @@ def main():
                     pass
                 elif not was_alerted("Claude", level, direction):
                     rejection = _rejection_reason(claude_result)
-                    log_to_alerty("Claude", rejection, claude_result)
                     save_pending(claude_result, "Claude", rejection, current)
+                    log_to_alerty("Claude", rejection, claude_result)
                     save_alerted("Claude", level, direction)
                     if score >= MIN_SCORE:
                         send_telegram(format_alert("Claude", claude_result, current, filter_passed))
@@ -1552,8 +1552,8 @@ def main():
                     pass
                 elif not was_alerted("GPT", level, direction):
                     rejection = _rejection_reason(gpt_result)
-                    log_to_alerty("GPT", rejection, gpt_result)
                     save_pending(gpt_result, "GPT", rejection, current)
+                    log_to_alerty("GPT", rejection, gpt_result)
                     save_alerted("GPT", level, direction)
                     if score >= MIN_SCORE:
                         send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
@@ -1609,8 +1609,8 @@ def main():
                     "rr":           grok_result.get("rr", 0),
                     "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
                 }
-                log_to_alerty("Grok", "", grok_setup)
                 save_pending(grok_setup, "Grok", "", current)  # ustawia grok_setup["setup_id"]
+                log_to_alerty("Grok", "", grok_setup)
 
             send_telegram(format_grok_alert(grok_result, current, grok_setup.get("setup_id") if entries else None))
         else:
