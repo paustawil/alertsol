@@ -40,6 +40,7 @@ jobs:
           BITGET_API_SECRET: ${{ secrets.BITGET_API_SECRET }}
           BITGET_PASSPHRASE: ${{ secrets.BITGET_PASSPHRASE }}
           BITGET_DEMO:       ${{ secrets.BITGET_DEMO }}
+          BITGET_TRADE_USDT: ${{ secrets.BITGET_TRADE_USDT }}
         run: python sol_alert.py ${{ inputs.reset == true && '--reset' || '' }}
 
       - name: Zapisz stan do repozytorium
