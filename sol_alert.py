@@ -1074,7 +1074,8 @@ def check_pending(candles_m15: list[dict]):
                 if age_h > ENTRY_TIMEOUT_H:
                     print(f"[pending] {s['model']} {d}: nie weszlo")
                     if s.get("shadow"):
-                        log_to_anulowane_grok(s, "nie weszlo", None, None, None, None, 0)
+                        if not log_to_anulowane_grok(s, "nie weszlo", None, None, None, None, 0):
+                            still_pending.append(s)
                     elif log_to_wyniki(s, "nie weszlo", None, None, None, None, 0):
                         try:
                             sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
