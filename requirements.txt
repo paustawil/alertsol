@@ -4,4 +4,4 @@ google-auth>=2.0.0
 anthropic>=0.40.0
 openai>=1.50.0
 xai-sdk
-binance-futures-connector>=3.3.0
+pybit>=5.7.0

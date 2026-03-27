@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Exchange Trader — Binance USDT-M Futures
-Obsługuje SOLUSDT z dźwignią 20x
+Exchange Trader — ByBit Margin Spot
+Obsługuje SOLUSDT z dźwignią do 10x
 
 Wywoływany przez sol_alert.py co 15 minut.
-Zarządza conditional orderami (nie blokują margin), TP1/TP2 i SL.
+Zarządza conditional stop-limit orderami (nie blokują środków),
+TP1/TP2 i SL jako osobnymi zleceniami.
 
-Typy conditional orderów:
-  Long  + falling (pullback): TAKE_PROFIT BUY  — trigger gdy cena spada do W1
-  Long  + rising  (breakout): STOP        BUY  — trigger gdy cena rośnie do W1
-  Short + rising  (pullback): TAKE_PROFIT SELL — trigger gdy cena rośnie do W1
-  Short + falling (breakdown):STOP        SELL — trigger gdy cena spada do W1
+Uwaga: ByBit Spot nie ma set_trading_stop — SL to osobny conditional
+stop-market order, który musimy śledzić i anulować przy zmianie (po TP1).
 """
 
 import os
@@ -20,28 +18,26 @@ import time
 import logging
 
 try:
-    from binance.um_futures import UMFutures
-    BINANCE_AVAILABLE = True
+    from pybit.unified_trading import HTTP as BybitHTTP
+    PYBIT_AVAILABLE = True
 except ImportError:
-    BINANCE_AVAILABLE = False
+    PYBIT_AVAILABLE = False
 
 log = logging.getLogger("exchange")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 # ── Konfiguracja ───────────────────────────────────────────────────────────────
 SYMBOL       = "SOLUSDT"
-LEVERAGE     = 20        # zmień jeśli konto ma inny limit
+LEVERAGE     = 10        # max dla ByBit Margin Spot
 TRADE_USDT   = 100.0     # kwota margin na jeden trade
 QTY_STEP     = 0.1       # minimalny krok qty dla SOLUSDT
 PRICE_DEC    = 2         # miejsca po przecinku dla ceny
 PENDING_FILE = "pending_setups.json"
-TESTNET_URL  = "https://testnet.binancefuture.com"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _round_qty(qty: float) -> float:
-    """Zaokrągla qty w dół do najbliższego kroku QTY_STEP."""
     return max(math.floor(qty / QTY_STEP) * QTY_STEP, QTY_STEP)
 
 
@@ -65,189 +61,199 @@ def _save_pending(pending: list[dict]):
         json.dump(pending, f, indent=2)
 
 
-def _client():
-    """Tworzy klienta Binance Futures. Zwraca None jeśli brak kluczy."""
-    if not BINANCE_AVAILABLE:
-        print("[exchange] binance-futures-connector nie zainstalowany — pomijam.")
+def _session():
+    """Tworzy sesję ByBit. Zwraca None jeśli brak kluczy."""
+    if not PYBIT_AVAILABLE:
+        print("[exchange] pybit nie zainstalowany — pomijam.")
         return None
-    key    = os.getenv("BINANCE_API_KEY", "")
-    secret = os.getenv("BINANCE_API_SECRET", "")
+    key    = os.getenv("BYBIT_API_KEY", "")
+    secret = os.getenv("BYBIT_API_SECRET", "")
     if not key or not secret:
-        print("[exchange] Brak BINANCE_API_KEY/BINANCE_API_SECRET — pomijam.")
+        print("[exchange] Brak BYBIT_API_KEY/BYBIT_API_SECRET — pomijam.")
         return None
-    testnet = os.getenv("BINANCE_TESTNET", "true").lower() != "false"
+    testnet = os.getenv("BYBIT_TESTNET", "true").lower() != "false"
     env_label = "TESTNET" if testnet else "PRODUKCJA"
-    base_url = TESTNET_URL if testnet else None  # None = domyślny prod URL
-    print(f"[exchange] Sesja Binance {env_label} | {SYMBOL} | {LEVERAGE}x | {TRADE_USDT} USDT/trade")
-    return UMFutures(key=key, secret=secret, base_url=base_url)
-
-
-def _set_leverage(client) -> bool:
-    """Ustawia dźwignię na SYMBOL."""
-    try:
-        client.change_leverage(symbol=SYMBOL, leverage=LEVERAGE)
-        return True
-    except Exception as e:
-        # Binance rzuca wyjątek gdy dźwignia już ustawiona na tę wartość
-        if "No need to change leverage" in str(e):
-            return True
-        log.warning(f"[exchange] set_leverage: {e}")
-        return False
-
-
-# ── Wybór typu conditional order ───────────────────────────────────────────────
-
-def _conditional_order_type(direction: str, entry_trigger: str) -> str:
-    """
-    Zwraca typ Binance Futures dla conditional entry order.
-    STOP       = triggeruje gdy cena idzie W KIERUNKU zlecenia (breakout/breakdown)
-    TAKE_PROFIT = triggeruje gdy cena idzie PRZECIWNIE (pullback)
-    """
-    if direction == "long":
-        return "STOP" if entry_trigger == "rising" else "TAKE_PROFIT"
-    else:  # short
-        return "STOP" if entry_trigger == "falling" else "TAKE_PROFIT"
+    print(f"[exchange] Sesja ByBit {env_label} | {SYMBOL} Margin Spot | {LEVERAGE}x | {TRADE_USDT} USDT/trade")
+    return BybitHTTP(testnet=testnet, api_key=key, api_secret=secret)
 
 
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
-def _place_conditional(client, s: dict) -> int | None:
+def _place_conditional(session, s: dict) -> str | None:
     """
-    Składa conditional stop-limit order przy W1.
-    Nie blokuje margin do momentu aktywacji.
-    Zwraca orderId (int) lub None przy błędzie.
+    Składa conditional stop-limit order przy W1 (Margin Spot).
+    Nie blokuje środków do momentu aktywacji.
+    Zwraca orderId lub None przy błędzie.
+
+    triggerDirection: 1 = cena rośnie do W1, 2 = cena spada do W1
     """
     direction = s["direction"]
     w1        = s["entries"][0]
     qty       = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-    side      = "BUY" if direction == "long" else "SELL"
+    side      = "Buy" if direction == "long" else "Sell"
     et        = s.get("entry_trigger", "falling")
-    cond_type = _conditional_order_type(direction, et)
+    trig_dir  = 1 if et == "rising" else 2
 
     try:
-        resp = client.new_order(
+        resp = session.place_order(
+            category="spot",
             symbol=SYMBOL,
             side=side,
-            type=cond_type,
-            quantity=_fmt_qty(qty),
+            orderType="Limit",
+            qty=_fmt_qty(qty),
             price=_fmt_price(w1),
-            stopPrice=_fmt_price(w1),
+            triggerPrice=_fmt_price(w1),
+            triggerDirection=trig_dir,
+            triggerBy="LastPrice",
             timeInForce="GTC",
-            workingType="MARK_PRICE",
-            priceProtect=True,
+            isLeverage=1,
+            orderFilter="StopOrder",
         )
-        oid = resp["orderId"]
-        print(f"[exchange] Conditional {cond_type} złożony: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}")
-        return oid
+        if resp["retCode"] == 0:
+            oid = resp["result"]["orderId"]
+            print(f"[exchange] Conditional złożony: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}")
+            return oid
+        log.error(f"[exchange] place_conditional retCode={resp['retCode']}: {resp['retMsg']}")
+        return None
     except Exception as e:
         log.error(f"[exchange] place_conditional: {e}")
         return None
 
 
-def _cancel_order(client, order_id: int):
-    """Anuluje zlecenie po orderId."""
+def _cancel_order(session, order_id: str, is_stop: bool = False):
+    """Anuluje zlecenie. is_stop=True dla conditional/stop orderów."""
     try:
-        client.cancel_order(symbol=SYMBOL, orderId=order_id)
-        print(f"[exchange] Order anulowany: {order_id}")
+        kwargs = dict(category="spot", symbol=SYMBOL, orderId=order_id)
+        if is_stop:
+            kwargs["orderFilter"] = "StopOrder"
+        resp = session.cancel_order(**kwargs)
+        if resp["retCode"] == 0:
+            print(f"[exchange] Order anulowany: {order_id}")
+        else:
+            log.warning(f"[exchange] cancel_order {order_id}: {resp['retMsg']}")
     except Exception as e:
         log.warning(f"[exchange] cancel_order {order_id}: {e}")
 
 
-def _place_tp_sl_orders(client, s: dict) -> tuple[int | None, int | None, int | None]:
+def _place_tp_orders(session, s: dict) -> tuple[str | None, str | None]:
     """
-    Po wejściu w pozycję: składa TP1, TP2 (limit reduce-only) i SL (stop-market).
-    Zwraca (tp1_order_id, tp2_order_id, sl_order_id).
+    Składa TP1 i TP2 jako limit ordery (50%/50%).
+    Zwraca (tp1_order_id, tp2_order_id).
     """
     direction = s["direction"]
     w1        = s["entries"][0]
     full_qty  = _round_qty((TRADE_USDT * LEVERAGE) / w1)
     half_qty  = _round_qty(full_qty / 2)
-    tp_side   = "SELL" if direction == "long" else "BUY"
-    sl_side   = "SELL" if direction == "long" else "BUY"
+    tp_side   = "Sell" if direction == "long" else "Buy"
     tps       = s.get("tps", [])
-    sl        = s["sl"]
     tp1       = tps[0] if tps else None
     tp2       = tps[1] if len(tps) > 1 else None
     tp1_id    = None
     tp2_id    = None
-    sl_id     = None
 
-    # TP1 — 50% pozycji, limit reduce-only
     if tp1:
         try:
-            resp = client.new_order(
+            resp = session.place_order(
+                category="spot",
                 symbol=SYMBOL,
                 side=tp_side,
-                type="LIMIT",
-                quantity=_fmt_qty(half_qty),
+                orderType="Limit",
+                qty=_fmt_qty(half_qty),
                 price=_fmt_price(tp1),
                 timeInForce="GTC",
-                reduceOnly=True,
+                isLeverage=1,
             )
-            tp1_id = resp["orderId"]
-            print(f"[exchange] TP1 order: {tp1_id} | {_fmt_qty(half_qty)} SOL @ {tp1}")
+            if resp["retCode"] == 0:
+                tp1_id = resp["result"]["orderId"]
+                print(f"[exchange] TP1: {tp1_id} | {_fmt_qty(half_qty)} SOL @ {tp1}")
+            else:
+                log.error(f"[exchange] TP1: {resp['retMsg']}")
         except Exception as e:
             log.error(f"[exchange] TP1: {e}")
 
-    # TP2 — pozostałe 50%, limit reduce-only
     if tp2:
         try:
-            resp = client.new_order(
+            resp = session.place_order(
+                category="spot",
                 symbol=SYMBOL,
                 side=tp_side,
-                type="LIMIT",
-                quantity=_fmt_qty(half_qty),
+                orderType="Limit",
+                qty=_fmt_qty(half_qty),
                 price=_fmt_price(tp2),
                 timeInForce="GTC",
-                reduceOnly=True,
+                isLeverage=1,
             )
-            tp2_id = resp["orderId"]
-            print(f"[exchange] TP2 order: {tp2_id} | {_fmt_qty(half_qty)} SOL @ {tp2}")
+            if resp["retCode"] == 0:
+                tp2_id = resp["result"]["orderId"]
+                print(f"[exchange] TP2: {tp2_id} | {_fmt_qty(half_qty)} SOL @ {tp2}")
+            else:
+                log.error(f"[exchange] TP2: {resp['retMsg']}")
         except Exception as e:
             log.error(f"[exchange] TP2: {e}")
 
-    # SL — stop-market reduce-only na pełną pozycję
-    sl_id = _place_sl_order(client, sl_side, full_qty, sl)
+    return tp1_id, tp2_id
+
+
+def _place_sl_order(session, s: dict, sl_price: float, qty: float) -> str | None:
+    """
+    Składa SL jako conditional stop-market order.
+    Zwraca orderId lub None.
+
+    Long SL: sprzedaj gdy cena spadnie do SL → triggerDirection=2, side=Sell
+    Short SL: kup gdy cena wzrośnie do SL    → triggerDirection=1, side=Buy
+    """
+    direction = s["direction"]
+    side      = "Sell" if direction == "long" else "Buy"
+    trig_dir  = 2 if direction == "long" else 1
+
+    try:
+        resp = session.place_order(
+            category="spot",
+            symbol=SYMBOL,
+            side=side,
+            orderType="Market",
+            qty=_fmt_qty(qty),
+            triggerPrice=_fmt_price(sl_price),
+            triggerDirection=trig_dir,
+            triggerBy="LastPrice",
+            isLeverage=1,
+            orderFilter="StopOrder",
+        )
+        if resp["retCode"] == 0:
+            oid = resp["result"]["orderId"]
+            print(f"[exchange] SL: {oid} | {side} {_fmt_qty(qty)} SOL stop @ {sl_price}")
+            return oid
+        log.error(f"[exchange] SL: {resp['retMsg']}")
+        return None
+    except Exception as e:
+        log.error(f"[exchange] SL: {e}")
+        return None
+
+
+def _place_tp_sl_orders(session, s: dict) -> tuple[str | None, str | None, str | None]:
+    """Po wejściu: składa TP1, TP2 i SL. Zwraca (tp1_id, tp2_id, sl_id)."""
+    w1       = s["entries"][0]
+    full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+    sl       = s["sl"]
+
+    tp1_id, tp2_id = _place_tp_orders(session, s)
+    sl_id          = _place_sl_order(session, s, sl, full_qty)
 
     return tp1_id, tp2_id, sl_id
 
 
-def _place_sl_order(client, sl_side: str, qty: float, sl_price: float) -> int | None:
-    """Składa SL jako stop-market reduce-only. Zwraca orderId."""
-    try:
-        resp = client.new_order(
-            symbol=SYMBOL,
-            side=sl_side,
-            type="STOP_MARKET",
-            quantity=_fmt_qty(qty),
-            stopPrice=_fmt_price(sl_price),
-            workingType="MARK_PRICE",
-            priceProtect=True,
-            reduceOnly=True,
-        )
-        oid = resp["orderId"]
-        print(f"[exchange] SL order: {oid} | {_fmt_qty(qty)} SOL stop @ {sl_price}")
-        return oid
-    except Exception as e:
-        log.error(f"[exchange] SL order: {e}")
-        return None
-
-
-def _update_sl(client, s: dict, new_sl: float):
+def _update_sl(session, s: dict, new_sl: float):
     """
-    Przesuwa SL po trafieniu TP1:
-    anuluje stary SL, składa nowy stop-market na pozostałe 50%.
+    Przesuwa SL po TP1: anuluje stary SL, składa nowy na 50% pozycji.
     """
     old_sl_id = s.get("exchange_sl_order_id")
     if old_sl_id:
-        _cancel_order(client, old_sl_id)
+        _cancel_order(session, old_sl_id, is_stop=True)
 
-    direction = s["direction"]
-    w1        = s["entries"][0]
-    half_qty  = _round_qty(_round_qty((TRADE_USDT * LEVERAGE) / w1) / 2)
-    sl_side   = "SELL" if direction == "long" else "BUY"
+    w1       = s["entries"][0]
+    half_qty = _round_qty(_round_qty((TRADE_USDT * LEVERAGE) / w1) / 2)
+    new_sl_id = _place_sl_order(session, s, new_sl, half_qty)
 
-    new_sl_id = _place_sl_order(client, sl_side, half_qty, new_sl)
     if new_sl_id:
         s["exchange_sl_order_id"] = new_sl_id
         be_label = "BE" if abs(new_sl - w1) < 0.05 else f"+${abs(new_sl - w1):.2f}"
@@ -256,22 +262,54 @@ def _update_sl(client, s: dict, new_sl: float):
 
 # ── Sprawdzanie statusu zleceń ─────────────────────────────────────────────────
 
-def _order_status(client, order_id: int) -> str:
+def _conditional_status(session, order_id: str) -> str:
     """
-    Zwraca status zlecenia: 'new' | 'filled' | 'cancelled' | 'unknown'
+    Sprawdza status conditional stop order.
+    Zwraca: 'untriggered' | 'filled' | 'cancelled' | 'unknown'
     """
     try:
-        resp = client.query_order(symbol=SYMBOL, orderId=order_id)
-        status = resp.get("status", "")
-        if status == "FILLED":
-            return "filled"
-        if status in ("CANCELED", "EXPIRED", "REJECTED"):
-            return "cancelled"
-        if status in ("NEW", "PARTIALLY_FILLED"):
-            return "new"
+        # Czy jest nadal w otwartych stop orderach?
+        resp = session.get_open_orders(
+            category="spot",
+            symbol=SYMBOL,
+            orderFilter="StopOrder",
+        )
+        if resp["retCode"] == 0:
+            open_ids = {o["orderId"] for o in resp["result"]["list"]}
+            if order_id in open_ids:
+                return "untriggered"
+
+        # Nie ma w otwartych — sprawdź historię
+        resp = session.get_order_history(
+            category="spot",
+            symbol=SYMBOL,
+            orderId=order_id,
+            orderFilter="StopOrder",
+        )
+        if resp["retCode"] == 0 and resp["result"]["list"]:
+            status = resp["result"]["list"][0]["orderStatus"]
+            if status in ("Filled", "Triggered"):
+                return "filled"
+            if status in ("Cancelled", "Deactivated"):
+                return "cancelled"
     except Exception as e:
-        log.warning(f"[exchange] query_order {order_id}: {e}")
+        log.warning(f"[exchange] conditional_status {order_id}: {e}")
     return "unknown"
+
+
+def _is_order_filled(session, order_id: str) -> bool:
+    """Sprawdza czy zwykłe zlecenie (TP1/TP2) zostało wypełnione."""
+    try:
+        resp = session.get_order_history(
+            category="spot",
+            symbol=SYMBOL,
+            orderId=order_id,
+        )
+        if resp["retCode"] == 0 and resp["result"]["list"]:
+            return resp["result"]["list"][0]["orderStatus"] == "Filled"
+    except Exception as e:
+        log.warning(f"[exchange] is_order_filled {order_id}: {e}")
+    return False
 
 
 # ── Główna funkcja synchronizacji ─────────────────────────────────────────────
@@ -281,16 +319,14 @@ def sync():
     Główna pętla — wywoływana co 15 min przez sol_alert.py.
 
     Dla każdego setupu w pending_setups.json:
-      - NOWY:      składa conditional order (nie blokuje margin)
-      - ANULOWANY: anuluje order na Binance
-      - OCZEKUJĄCY: sprawdza czy conditional się wypełnił → otwiera TP1/TP2/SL
+      - NOWY:      składa conditional stop-limit (nie blokuje środków)
+      - ANULOWANY: anuluje order na ByBit
+      - OCZEKUJĄCY: sprawdza czy conditional wypełniony → TP1/TP2/SL
       - OTWARTY:   sprawdza TP1 → przesuwa SL
     """
-    client = _client()
-    if client is None:
+    session = _session()
+    if session is None:
         return
-
-    _set_leverage(client)
 
     pending  = _load_pending()
     modified = False
@@ -313,7 +349,7 @@ def sync():
         # ── Anuluj gdy setup odrzucony przez Groka ───────────────────────────
         if (shadow or cancelled) and order_id and not opened:
             print(f"[exchange] {label}: setup anulowany → cancel {order_id}")
-            _cancel_order(client, order_id)
+            _cancel_order(session, order_id, is_stop=True)
             s["exchange_order_id"] = None
             modified = True
             continue
@@ -322,31 +358,31 @@ def sync():
         if not shadow and not cancelled and not order_id and s["entry_hit_at"] is None:
             w1  = entries[0]
             qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-            oid = _place_conditional(client, s)
+            oid = _place_conditional(session, s)
             if oid:
-                s["exchange_order_id"]         = oid
-                s["exchange_position_opened"]  = False
-                s["exchange_tp1_order_id"]     = None
-                s["exchange_tp2_order_id"]     = None
-                s["exchange_sl_order_id"]      = None
-                s["exchange_qty"]              = _fmt_qty(qty)
+                s["exchange_order_id"]        = oid
+                s["exchange_position_opened"] = False
+                s["exchange_tp1_order_id"]    = None
+                s["exchange_tp2_order_id"]    = None
+                s["exchange_sl_order_id"]     = None
+                s["exchange_qty"]             = _fmt_qty(qty)
                 modified = True
                 print(f"[exchange] {label}: conditional → {oid} ({_fmt_qty(qty)} SOL @ {w1})")
             continue
 
-        # ── Oczekujący order — sprawdź czy wypełniony ─────────────────────────
+        # ── Oczekujący — sprawdź czy triggered ──────────────────────────────
         if order_id and not opened:
-            status = _order_status(client, order_id)
-            if status == "new":
-                continue  # jeszcze czeka
+            status = _conditional_status(session, order_id)
+            if status == "untriggered":
+                continue
             if status == "cancelled":
                 print(f"[exchange] {label}: conditional anulowany z zewnątrz")
                 s["exchange_order_id"] = None
                 modified = True
                 continue
             if status == "filled":
-                print(f"[exchange] {label}: entry wypełniony! Składam TP1/TP2/SL.")
-                tp1_id, tp2_id, sl_id = _place_tp_sl_orders(client, s)
+                print(f"[exchange] {label}: entry wypełniony! Składam TP/SL.")
+                tp1_id, tp2_id, sl_id = _place_tp_sl_orders(session, s)
                 s["exchange_position_opened"] = True
                 s["exchange_tp1_order_id"]    = tp1_id
                 s["exchange_tp2_order_id"]    = tp2_id
@@ -354,13 +390,13 @@ def sync():
                 modified = True
             continue
 
-        # ── Pozycja otwarta — sprawdź TP1, ewentualnie przesuń SL ────────────
+        # ── Pozycja otwarta — sprawdź TP1, przesuń SL ───────────────────────
         if opened and not s.get("sl_adjusted"):
             tp1_oid = s.get("exchange_tp1_order_id")
-            if tp1_oid and _order_status(client, tp1_oid) == "filled":
+            if tp1_oid and _is_order_filled(session, tp1_oid):
                 w1       = entries[0]
                 sl_after = s.get("sl_after_tp1") or w1  # null → W1 = breakeven
-                _update_sl(client, s, sl_after)
+                _update_sl(session, s, sl_after)
                 s["sl_adjusted"] = True
                 s["tp1_hit_at"]  = s.get("tp1_hit_at") or int(time.time())
                 modified = True
