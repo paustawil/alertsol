@@ -36,6 +36,9 @@ jobs:
           OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
           XAI_API_KEY:       ${{ secrets.XAI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          BINANCE_API_KEY:     ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET:  ${{ secrets.BINANCE_API_SECRET }}
+          BINANCE_TESTNET:     ${{ secrets.BINANCE_TESTNET }}
         run: python sol_alert.py ${{ inputs.reset == true && '--reset' || '' }}
 
       - name: Zapisz stan do repozytorium
