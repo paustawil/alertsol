@@ -32,7 +32,7 @@ PRODUCT_TYPE  = "USDT-FUTURES"
 MARGIN_COIN   = "USDT"
 MARGIN_MODE   = "crossed"       # cross margin
 LEVERAGE      = 20
-TRADE_USDT    = 100.0           # kwota margin na jeden trade
+TRADE_USDT    = float(os.getenv("BITGET_TRADE_USDT", "100.0"))  # kwota margin na jeden trade
 QTY_STEP      = 0.1             # minimalny krok qty dla SOLUSDT
 PRICE_DEC     = 2               # miejsca po przecinku ceny
 BASE_URL      = "https://api.bitget.com"
@@ -101,7 +101,15 @@ class BitgetClient:
             data=body,
             timeout=10,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            try:
+                err = resp.json()
+                raise requests.HTTPError(
+                    f"{resp.status_code} {resp.reason} — code={err.get('code')} msg={err.get('msg')} | url={resp.url}",
+                    response=resp,
+                )
+            except (ValueError, KeyError):
+                resp.raise_for_status()
         return resp.json()
 
     def get(self, path: str, params: dict | None = None) -> dict:
@@ -113,7 +121,15 @@ class BitgetClient:
             headers=self._headers("GET", path + qs),
             timeout=10,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            try:
+                err = resp.json()
+                raise requests.HTTPError(
+                    f"{resp.status_code} {resp.reason} — code={err.get('code')} msg={err.get('msg')} | url={resp.url}",
+                    response=resp,
+                )
+            except (ValueError, KeyError):
+                resp.raise_for_status()
         return resp.json()
 
 
