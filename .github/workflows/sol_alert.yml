@@ -43,6 +43,6 @@ jobs:
         run: |
           git config user.name "SOL Alert Bot"
           git config user.email "bot@alertsol.com"
-          git add last_alerts.json pending_setups.json 2>/dev/null || true
+          git add last_alerts.json pending_setups.json setup_counter.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "chore: update alert state [skip ci]"
           git push || true
