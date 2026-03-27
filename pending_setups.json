@@ -1,37 +1,5 @@
 [
   {
-    "alert_time": "2026-03-27T08:42:51.854473+00:00",
-    "alert_timestamp": 1774600971,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
-    "score": 70,
-    "kurs": 84.76,
-    "price_at_alert": 84.76,
-    "warunek": "pullback",
-    "entry_trigger": "rising",
-    "entries": [
-      85.5
-    ],
-    "sl": 86.5,
-    "sl_after_tp1": null,
-    "tps": [
-      83.5,
-      82.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": null,
-    "tp1_hit_at": null,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "setup_id": 5,
-    "shadow": true,
-    "cancel_reason": "Rynek uciek\u0142 zbyt daleko w d\u00f3\u0142 po silnym spadku, poziom wej\u015bcia 85.5 jest technicznie nieosi\u0105galny w rozs\u0105dnym czasie ze wzgl\u0119du na dominuj\u0105cy trend spadkowy.",
-    "cancel_time": "2026-03-27T11:47:05.783532+00:00",
-    "cancel_price": 83.42
-  },
-  {
     "alert_time": "2026-03-27T08:46:19.963101+00:00",
     "alert_timestamp": 1774601179,
     "model": "Grok",
@@ -174,7 +142,7 @@
       80.0
     ],
     "rr": 2.1,
-    "entry_hit_at": null,
+    "entry_hit_at": 1774612800,
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1,
@@ -182,5 +150,33 @@
     "cancel_reason": "Rynek spad\u0142 znacznie poni\u017cej poziomu wej\u015bcia 84.5, pullback do tego poziomu jest ma\u0142o prawdopodobny w kr\u00f3tkim terminie.",
     "cancel_time": "2026-03-27T11:47:05.783532+00:00",
     "cancel_price": 83.42
+  },
+  {
+    "setup_id": 1,
+    "alert_time": "2026-03-27T13:17:11.370206+00:00",
+    "alert_timestamp": 1774617431,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "short",
+    "score": 70,
+    "kurs": 83.1,
+    "price_at_alert": 83.1,
+    "warunek": "pullback",
+    "entry_trigger": "rising",
+    "entries": [
+      83.2
+    ],
+    "sl": 84.5,
+    "sl_after_tp1": 83.2,
+    "tps": [
+      81.5,
+      80.0
+    ],
+    "rr": 2.0,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1
   }
 ]
