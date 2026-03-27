@@ -15,7 +15,7 @@ import concurrent.futures
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
-import bybit_trader
+import exchange_trader
 
 TZ = ZoneInfo("Europe/Warsaw")
 
@@ -1481,7 +1481,7 @@ def main():
     check_pending(candles_m15)
 
     # Synchronizuj z ByBit (conditional orders, TP/SL, SL po TP1)
-    bybit_trader.sync()
+    exchange_trader.sync()
 
     # O :45 każdej godziny — Grok weryfikuje nieotwarte setupy
     if datetime.now(TZ).minute == 45:
@@ -1624,7 +1624,7 @@ def main():
         print("[grok] Brak odpowiedzi.")
 
     # Drugi sync po zapisaniu nowych setupów — składa conditional ordery dla nowo wykrytych
-    bybit_trader.sync()
+    exchange_trader.sync()
 
 
 if __name__ == "__main__":
