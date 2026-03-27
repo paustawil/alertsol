@@ -192,7 +192,7 @@ def _place_plan_order(client: BitgetClient, s: dict) -> str | None:
             "triggerPrice": _fmt_price(w1),
             "triggerType": "mark_price",
             "side":        side,
-            "tradeSide":   "open",
+            "posSide":     direction,
             "orderType":   "limit",
         })
         if resp.get("code") == "00000":
@@ -236,9 +236,8 @@ def _place_tp_order(client: BitgetClient, s: dict, tp_price: float, qty: float) 
             "size":        _fmt_qty(qty),
             "price":       _fmt_price(tp_price),
             "side":        side,
-            "tradeSide":   "close",
+            "posSide":     direction,
             "orderType":   "limit",
-            "reduceOnly":  "YES",
         })
         if resp.get("code") == "00000":
             oid = resp["data"]["orderId"]
@@ -270,9 +269,8 @@ def _place_sl_plan_order(client: BitgetClient, s: dict, sl_price: float, qty: fl
             "triggerPrice": _fmt_price(sl_price),
             "triggerType":  "mark_price",
             "side":         side,
-            "tradeSide":    "close",
+            "posSide":      direction,
             "orderType":    "market",
-            "reduceOnly":   "YES",
         })
         if resp.get("code") == "00000":
             oid = resp["data"]["orderId"]
