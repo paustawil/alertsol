@@ -114,5 +114,33 @@
     "cancel_reason": "Rynek uciek\u0142 w d\u00f3\u0142 zbyt daleko, osi\u0105gaj\u0105c low na 82.55 poni\u017cej TP1, co czyni poziom wej\u015bcia 84.0 technicznie nieosi\u0105galnym w rozs\u0105dnym czasie po silnym spadku.",
     "cancel_time": "2026-03-27T13:46:52.901298+00:00",
     "cancel_price": 83.29
+  },
+  {
+    "setup_id": 3,
+    "alert_time": "2026-03-27T16:02:17.810288+00:00",
+    "alert_timestamp": 1774627337,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "long",
+    "score": 65,
+    "kurs": 83.34,
+    "price_at_alert": 83.34,
+    "warunek": "pullback",
+    "entry_trigger": "falling",
+    "entries": [
+      83.0
+    ],
+    "sl": 82.5,
+    "sl_after_tp1": 83.0,
+    "tps": [
+      84.5,
+      85.5
+    ],
+    "rr": 3.0,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1
   }
 ]
