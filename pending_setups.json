@@ -24,7 +24,8 @@
     "entry_hit_at": 1774523700,
     "tp1_hit_at": 1774548900,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 1
   },
   {
     "alert_time": "2026-03-26T18:01:52.887285+00:00",
@@ -51,7 +52,8 @@
     "entry_hit_at": 1774548900,
     "tp1_hit_at": 1774600200,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 2
   },
   {
     "alert_time": "2026-03-26T18:31:35.996483+00:00",
@@ -78,7 +80,8 @@
     "entry_hit_at": 1774555200,
     "tp1_hit_at": 1774600200,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 3
   },
   {
     "alert_time": "2026-03-26T22:31:40.540290+00:00",
@@ -105,7 +108,8 @@
     "entry_hit_at": 1774571400,
     "tp1_hit_at": 1774600200,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 4
   },
   {
     "alert_time": "2026-03-27T08:42:51.854473+00:00",
@@ -132,7 +136,8 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 5
   },
   {
     "alert_time": "2026-03-27T08:46:19.963101+00:00",
@@ -159,7 +164,8 @@
     "entry_hit_at": 1774602000,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 6
   },
   {
     "alert_time": "2026-03-27T09:02:00.948573+00:00",
@@ -183,10 +189,11 @@
       88.0
     ],
     "rr": 2.3,
-    "entry_hit_at": null,
+    "entry_hit_at": 1774602900,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 7
   },
   {
     "alert_time": "2026-03-27T09:17:02.725216+00:00",
@@ -213,6 +220,7 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "setup_id": 8
   }
 ]
