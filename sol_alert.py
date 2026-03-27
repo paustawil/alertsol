@@ -29,6 +29,7 @@ MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
 PENDING_FILE     = "pending_setups.json"
 COOLDOWN_FILE    = "last_alerts.json"
+SETUP_COUNTER_FILE = "setup_counter.json"
 SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
 ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
@@ -406,14 +407,45 @@ Zasady:
 - Analiza techniczna ma priorytet (70–80%). Sentyment i kontekst makro — 20–30%.
 - Odpowiadaj zawsze po polsku, konkretnie, bez powtarzania ostrzeżeń o ryzyku.
 - Ustaw send_alert=true tylko gdy widzisz wyraźny, konkretny setup z jasnym entry, SL i TP. Przy bocznym rynku lub braku wyraźnego setupu — send_alert=false.
+- sl_after_tp1: Po osiągnięciu TP1 SL należy przesunąć. Znajdź ostatni strukturalny support (long) lub resistance (short) między W1 a TP1. Jeśli taki poziom istnieje i jest w strefie zysku (powyżej W1 dla long, poniżej W1 dla short) — użyj go jako sl_after_tp1. Jeśli nie — użyj W1 (break-even). Zawsze podaj tę wartość gdy send_alert=true.
 
 Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Gdy send_alert=true:
-{"send_alert":true,"bias":"long","bias_proc":65,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+{"send_alert":true,"bias":"long","bias_proc":65,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
 
 Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
+
+
+# ── System prompt dla Grok — walidacja oczekujących setupów ──────────────────
+GROK_VALIDATION_PROMPT = """Jesteś doświadczonym traderem kryptowalut weryfikującym aktywne zlecenia oczekujące na SOL/USDT.
+
+Masz dostęp do internetu — użyj go, żeby pobrać aktualne ceny BTC, ETH, SOL i Fear & Greed Index.
+
+Otrzymasz aktualne dane OHLCV SOL (M15 i H1) oraz listę setupów oczekujących na wejście.
+
+Twoje zadanie:
+1. Pobierz live: ceny BTC/ETH/SOL i Fear & Greed Index.
+2. Oceń aktualną sytuację techniczną H1 i M15.
+3. Dla każdego setupu zdecyduj: keep=true (zachowaj) lub keep=false (anuluj).
+
+Anuluj setup TYLKO jeśli zachodzi co najmniej jeden z poniższych warunków:
+- Rynek uciekł zbyt daleko i poziom wejścia jest technicznie nieosiągalny w rozsądnym czasie.
+- Trend wyraźnie się odwrócił i setup działa teraz bezpośrednio przeciwko dominującej strukturze.
+- Kluczowy poziom struktury definiujący setup (support/resistance) został złamany i nie jest już ważny.
+
+Zachowaj setup jeśli:
+- Poziom wejścia jest nadal w zasięgu i ma techniczne uzasadnienie.
+- Nie ma wyraźnego powodu do anulowania — wątpliwość działa na korzyść zachowania.
+
+Zasady:
+- Powód anulowania: konkretny, zwięzły, po polsku (1–2 zdania).
+- Odpowiadaj zawsze po polsku.
+- Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
+
+Format:
+{"decyzje":[{"setup_id":1,"keep":false,"powod":"Rynek wybił trwale powyżej 88.0 — poziom wejścia short 86.50 przestał być strukturalnie istotny"},{"setup_id":2,"keep":true}]}"""
 
 
 # ── CryptoCompare API ─────────────────────────────────────────────────────────
@@ -717,13 +749,18 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 ALERTY_HEADER = [
-    "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
+    "ID", "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
     "Kurs", "W1", "W2", "Warunek", "SL", "SL@TP1", "TP1", "TP2", "RR", "Reasoning",
 ]
 WYNIKI_HEADER = [
-    "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
+    "ID", "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
     "Kurs", "W1", "W2", "Warunek", "SL", "TP1", "TP2", "RR",
     "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik", "PnL $",
+]
+ANULOWANE_GROK_HEADER = [
+    "ID", "Snapshot", "Kierunek", "W1", "SL", "TP1", "TP2", "RR", "Score",
+    "Powód_Anulowania", "Cena_Anulowania", "Wynik_Cień",
+    "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "PnL $",
 ]
 
 
@@ -739,6 +776,7 @@ def _get_sheets(reset: bool = False):
     for name, header, rows in [
         ("Alerty", ALERTY_HEADER, 1000),
         ("Wyniki", WYNIKI_HEADER, 1000),
+        ("Anulowane_Grok", ANULOWANE_GROK_HEADER, 500),
     ]:
         try:
             sh = wb.worksheet(name)
@@ -750,7 +788,7 @@ def _get_sheets(reset: bool = False):
             sh.append_row(header)
         if name == "Alerty":
             sh1 = sh
-        else:
+        elif name == "Wyniki":
             sh2 = sh
 
     return sh1, sh2
@@ -781,6 +819,7 @@ def log_to_alerty(model: str, rejection: str, setup: dict):
         raw_score = setup.get("total", setup.get("score", 0))
         score_val = f"{raw_score}%" if model == "Grok" else raw_score
         sh1.append_row([
+            setup.get("setup_id", "") or "",
             now,
             model,
             rejection or "",
@@ -818,6 +857,7 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         raw_score = s.get("score", s.get("total", 0))
         score_val = f"{raw_score}%" if model == "Grok" else raw_score
         sh2.append_row([
+            s.get("setup_id", "") or "",
             alert_dt,
             model,
             s.get("rejection", "") or "",
@@ -841,6 +881,53 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         return True
     except Exception as e:
         print(f"[sheets] Blad Wyniki: {e}")
+        return False
+
+
+def log_to_anulowane_grok(s: dict, result: str, entry_ts, exit_ts,
+                          eff_entry, eff_exit, move: float) -> bool:
+    """Zapisuje wynik shadow-trackowanego (anulowanego przez Groka) setupu."""
+    try:
+        creds  = Credentials.from_service_account_info(
+            json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        client = gspread.authorize(creds)
+        wb     = client.open_by_key(SHEET_ID)
+        try:
+            sh = wb.worksheet("Anulowane_Grok")
+        except gspread.WorksheetNotFound:
+            sh = wb.add_worksheet("Anulowane_Grok", rows=500, cols=len(ANULOWANE_GROK_HEADER) + 2)
+            sh.append_row(ANULOWANE_GROK_HEADER)
+        alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
+        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
+        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
+        entries  = s.get("entries", [])
+        tps      = s.get("tps", [])
+        n_w      = s.get("entries_hit", 1)
+        sh.append_row([
+            s.get("setup_id", "") or "",
+            alert_dt,
+            s.get("direction", ""),
+            entries[0] if entries else "",
+            s.get("sl", ""),
+            tps[0] if tps else "",
+            tps[1] if len(tps) > 1 else "",
+            s.get("rr", ""),
+            s.get("score", ""),
+            s.get("cancel_reason", ""),
+            s.get("cancel_price", ""),
+            result,
+            "+".join(f"W{i+1}" for i in range(n_w)) if n_w > 0 else "",
+            round(eff_entry, 2) if eff_entry is not None else "",
+            round(eff_exit,  2) if eff_exit  is not None else "",
+            entry_dt, exit_dt,
+            round(move, 2),
+        ])
+        print(f"[sheets] Anulowane_Grok: #{s.get('setup_id')} -> {result} ${move:.2f}")
+        return True
+    except Exception as e:
+        print(f"[sheets] Blad Anulowane_Grok: {e}")
         return False
 
 
@@ -880,6 +967,17 @@ def validate_setup(setup: dict, model: str) -> str:
 
 
 # ── Śledzenie setupów (pending) ───────────────────────────────────────────────
+def next_setup_id() -> int:
+    """Zwraca kolejny numer setupu i inkrementuje licznik."""
+    counter = 1
+    if os.path.exists(SETUP_COUNTER_FILE):
+        with open(SETUP_COUNTER_FILE) as f:
+            counter = json.load(f).get("next_id", 1)
+    with open(SETUP_COUNTER_FILE, "w") as f:
+        json.dump({"next_id": counter + 1}, f)
+    return counter
+
+
 def save_pending(setup: dict, model: str, rejection: str, current_price: float):
     pending = []
     if os.path.exists(PENDING_FILE):
@@ -911,7 +1009,10 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
     else:
         entry_trigger = "falling"
 
+    sid = next_setup_id()
+    setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
     pending.append({
+        "setup_id":        sid,
         "alert_time":      datetime.now(timezone.utc).isoformat(),
         "alert_timestamp": int(datetime.now(timezone.utc).timestamp()),
         "model":           model,
@@ -972,10 +1073,13 @@ def check_pending(candles_m15: list[dict]):
             if hit is None:
                 if age_h > ENTRY_TIMEOUT_H:
                     print(f"[pending] {s['model']} {d}: nie weszlo")
-                    if log_to_wyniki(s, "nie weszlo", None, None, None, None, 0):
+                    if s.get("shadow"):
+                        log_to_anulowane_grok(s, "nie weszlo", None, None, None, None, 0)
+                    elif log_to_wyniki(s, "nie weszlo", None, None, None, None, 0):
                         try:
+                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                             send_telegram(
-                                f"⏳ <b>Nie weszło</b> [{s['model']}]\n"
+                                f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}\n"
                                 f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
                                 f"W1: ${w1:.2f} | SL: ${sl:.2f}"
                             )
@@ -987,15 +1091,17 @@ def check_pending(candles_m15: list[dict]):
                     still_pending.append(s)
                 continue
             s["entry_hit_at"] = hit
-            try:
-                send_telegram(
-                    f"✅ <b>ENTRY HIT</b> [{s['model']}]\n"
-                    f"Setup {s['type']} {d.upper()} aktywowany!\n"
-                    f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
-                    f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
-                )
-            except Exception:
-                pass
+            if not s.get("shadow"):
+                try:
+                    sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                    send_telegram(
+                        f"✅ <b>ENTRY HIT</b> [{s['model']}]{sid_txt}\n"
+                        f"Setup {s['type']} {d.upper()} aktywowany!\n"
+                        f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
+                        f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
+                    )
+                except Exception:
+                    pass
 
         after_entry   = [c for c in candles_m15 if c["time"] > s["entry_hit_at"]]
         result, move  = None, 0.0
@@ -1024,17 +1130,19 @@ def check_pending(candles_m15: list[dict]):
                 if sl_after_tp1 is not None and not s.get("sl_adjusted"):
                     effective_sl   = sl_after_tp1
                     s["sl_adjusted"] = True
-                    try:
-                        be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
-                        send_telegram(
-                            f"📌 <b>TP1 HIT — SL przesunięty</b> [{s['model']}]\n"
-                            f"Setup {s['type']} {d.upper()}\n"
-                            f"TP1: ${tp1:.2f} osiągnięty ✅\n"
-                            f"Nowy SL: ${sl_after_tp1:.2f} ({be_label})\n"
-                            + (f"Cel: TP2 ${tp2:.2f}" if tp2 else "")
-                        )
-                    except Exception:
-                        pass
+                    if not s.get("shadow"):
+                        try:
+                            be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
+                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                            send_telegram(
+                                f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}\n"
+                                f"Setup {s['type']} {d.upper()}\n"
+                                f"TP1: ${tp1:.2f} osiągnięty ✅\n"
+                                f"<b>Przesuń SL na: ${sl_after_tp1:.2f}</b>  ({be_label})\n"
+                                + (f"Cel: TP2 ${tp2:.2f}" if tp2 else "")
+                            )
+                        except Exception:
+                            pass
                 continue
 
             if sl_hit:
@@ -1072,26 +1180,147 @@ def check_pending(candles_m15: list[dict]):
         if result:
             sign = "+" if move >= 0 else ""
             print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
-            if log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, eff_entry, eff_exit, move):
-                icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
-                try:
-                    send_telegram(
-                        f"{icon} <b>{result}</b> [{s['model']}]\n"
-                        f"Setup {s['type']} {d.upper()} zamknięty\n"
-                        f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
-                    )
-                except Exception:
-                    pass
+            if s.get("shadow"):
+                if not log_to_anulowane_grok(s, result, s["entry_hit_at"], exit_ts, eff_entry, eff_exit, move):
+                    still_pending.append(s)
             else:
-                print(f"[pending] Blad zapisu Wyniki — setup zostaje w pending, retry za 15 min")
-                still_pending.append(s)
+                if log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, eff_entry, eff_exit, move):
+                    icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
+                    sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                    try:
+                        send_telegram(
+                            f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}\n"
+                            f"Setup {s['type']} {d.upper()} zamknięty\n"
+                            f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
+                        )
+                    except Exception:
+                        pass
+                else:
+                    print(f"[pending] Blad zapisu Wyniki — setup zostaje w pending, retry za 15 min")
+                    still_pending.append(s)
         elif age_h > TRADE_TIMEOUT_H:
-            log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, None, None, 0)
+            if s.get("shadow"):
+                log_to_anulowane_grok(s, "nieokreslone", s["entry_hit_at"], None, None, None, 0)
+            else:
+                log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, None, None, 0)
         else:
             still_pending.append(s)
 
     with open(PENDING_FILE, "w") as f:
         json.dump(still_pending, f, indent=2)
+
+
+# ── Grok — walidacja oczekujących setupów ────────────────────────────────────
+def call_grok_validation(pending_non_entered: list[dict], candles_m15: list[dict],
+                         candles_h1: list[dict], current_price: float) -> list[dict] | None:
+    """Pyta Groka czy nieotwarte setupy są nadal aktualne. Zwraca listę decyzji lub None."""
+    if not XAI_KEY or not pending_non_entered:
+        return None
+
+    m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_m15[-60:]
+    )
+    h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_h1[-24:]
+    )
+    setups_txt = json.dumps([{
+        "setup_id":  s.get("setup_id"),
+        "direction": s["direction"],
+        "w1":        s["entries"][0] if s["entries"] else None,
+        "sl":        s["sl"],
+        "tp1":       s["tps"][0] if s["tps"] else None,
+        "tp2":       s["tps"][1] if len(s["tps"]) > 1 else None,
+        "warunek":   s.get("warunek", ""),
+        "alert_time": s["alert_time"],
+    } for s in pending_non_entered], ensure_ascii=False)
+    user_msg = (
+        f"Aktualna cena SOL: ${current_price:.2f}\n\n"
+        f"Setupy oczekujące na wejście:\n{setups_txt}\n\n"
+        f"SOL M15 (ostatnie 60 świec):\n{m15_csv}\n\n"
+        f"SOL H1 (ostatnie 24 świece):\n{h1_csv}"
+    )
+
+    def _call() -> str:
+        from xai_sdk import Client as XaiClient
+        from xai_sdk.chat import system as xai_system, user as xai_user
+        from xai_sdk.tools import web_search
+        client = XaiClient(api_key=XAI_KEY)
+        chat   = client.chat.create(model="grok-4", tools=[web_search()])
+        chat.append(xai_system(GROK_VALIDATION_PROMPT))
+        chat.append(xai_user(user_msg))
+        return chat.sample().content.strip()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                text = future.result(timeout=_GROK_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                print(f"[grok-valid] Timeout — brak odpowiedzi w ciągu {_GROK_TIMEOUT_S}s")
+                return None
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group()).get("decyzje", [])
+    except Exception as e:
+        print(f"[grok-valid] Blad: {e}")
+    return None
+
+
+def check_pending_with_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float):
+    """Pyta Groka o nieotwarte setupy i przenosi anulowane w tryb shadow tracking."""
+    if not os.path.exists(PENDING_FILE):
+        return
+    with open(PENDING_FILE) as f:
+        pending = json.load(f)
+
+    non_entered = [s for s in pending if s.get("entry_hit_at") is None and not s.get("shadow")]
+    if not non_entered:
+        print("[grok-valid] Brak nieotwartych setupów do sprawdzenia.")
+        return
+
+    print(f"[grok-valid] Sprawdzam {len(non_entered)} nieotwartych setupów z Grokiem...")
+    decisions = call_grok_validation(non_entered, candles_m15, candles_h1, current_price)
+    if not decisions:
+        print("[grok-valid] Brak odpowiedzi od Groka.")
+        return
+
+    cancel_map = {d["setup_id"]: d for d in decisions if not d.get("keep", True)}
+    if not cancel_map:
+        print("[grok-valid] Grok zachowuje wszystkie setupy.")
+        return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cancelled = 0
+    for s in pending:
+        sid = s.get("setup_id")
+        if sid in cancel_map and s.get("entry_hit_at") is None and not s.get("shadow"):
+            dec = cancel_map[sid]
+            s["shadow"]        = True
+            s["cancel_reason"] = dec.get("powod", "")
+            s["cancel_time"]   = now_iso
+            s["cancel_price"]  = round(current_price, 2)
+            cancelled += 1
+            w1  = s["entries"][0] if s["entries"] else None
+            tp1 = s["tps"][0] if s["tps"] else None
+            d   = s["direction"]
+            di  = "📉" if d == "short" else "📈"
+            try:
+                send_telegram(
+                    f"🚫 <b>Grok anulował setup #{sid}</b>\n"
+                    f"{di} {d.upper()}"
+                    + (f" | W1: ${w1:.2f}" if w1 else "")
+                    + (f" | TP1: ${tp1:.2f}" if tp1 else "") + "\n"
+                    f"<i>{dec.get('powod', '')}</i>\n"
+                    f"(Shadow tracking aktywny)"
+                )
+            except Exception:
+                pass
+
+    with open(PENDING_FILE, "w") as f:
+        json.dump(pending, f, indent=2)
+    print(f"[grok-valid] Anulowano {cancelled} setupów, shadow tracking aktywny.")
 
 
 # ── Anti-spam ─────────────────────────────────────────────────────────────────
@@ -1145,8 +1374,9 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         be_label = "BE" if abs(sl_after_tp1 - entries[0]) < 0.05 else f"+${abs(sl_after_tp1 - entries[0]):.2f}"
         sl_after_tp1_txt = f"<b>SL po TP1:</b>  ${sl_after_tp1:.2f}  ({be_label})\n"
 
+    sid_txt = f" #{setup.get('setup_id')}" if setup.get("setup_id") else ""
     return (
-        f"🎯 <b>SOL/USDT [{score}/15] — {model}</b>\n"
+        f"🎯 <b>SOL/USDT [{score}/15] — {model}{sid_txt}</b>\n"
         f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}  |  {filtr}\n\n"
         f"Cena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejscia)\n\n"
         f"<b>Ustaw zlecenia:</b>\n{entries_txt}\n\n"
@@ -1159,18 +1389,19 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
     )
 
 
-def format_grok_alert(result: dict, sol_price: float) -> str:
+def format_grok_alert(result: dict, sol_price: float, setup_id=None) -> str:
     bias      = result.get("bias", "neutral").capitalize()
     bias_proc = result.get("bias_proc", 0)
     sentyment = result.get("sentyment", "")
     analiza   = result.get("analiza", "")
     akcja     = result.get("akcja", "")
 
-    icon = "📈" if bias.lower() == "long" else ("📉" if bias.lower() == "short" else "⚖️")
-    now  = datetime.now(TZ).strftime("%d.%m  %H:%M")
+    icon    = "📈" if bias.lower() == "long" else ("📉" if bias.lower() == "short" else "⚖️")
+    now     = datetime.now(TZ).strftime("%d.%m  %H:%M")
+    sid_txt = f" #{setup_id}" if setup_id else ""
 
     lines = [
-        f"{icon} <b>Grok SOL/USDT — {bias} ({bias_proc}%)</b>",
+        f"{icon} <b>Grok SOL/USDT — {bias} ({bias_proc}%){sid_txt}</b>",
         f"{now}  |  SOL: <b>${sol_price:.2f}</b>",
     ]
 
@@ -1198,6 +1429,11 @@ def format_grok_alert(result: dict, sol_price: float) -> str:
             lines.append(f"<b>TP2:</b>  ${tp2:.2f}")
         if sl is not None:
             lines.append(f"<b>SL:</b>  ${sl:.2f}")
+        sl_after_tp1 = result.get("sl_after_tp1")
+        if sl_after_tp1 is not None and wejscia:
+            w1_lvl = wejscia[0].get("poziom")
+            be_label = "BE" if (w1_lvl and abs(sl_after_tp1 - w1_lvl) < 0.05) else f"+${abs(sl_after_tp1 - w1_lvl):.2f}" if w1_lvl else ""
+            lines.append(f"<b>SL po TP1:</b>  ${sl_after_tp1:.2f}" + (f"  ({be_label})" if be_label else ""))
         if rr is not None:
             lines.append(f"<b>R:R:</b>  {rr:.1f}:1")
 
@@ -1207,9 +1443,29 @@ def format_grok_alert(result: dict, sol_price: float) -> str:
     return "\n".join(lines)
 
 
+# ── Migracja setup_id dla istniejących setupów bez ID ─────────────────────────
+def _migrate_setup_ids():
+    """Przypisuje setup_id do setupów w pending_setups.json, które go nie mają."""
+    if not os.path.exists(PENDING_FILE):
+        return
+    with open(PENDING_FILE) as f:
+        pending = json.load(f)
+    changed = False
+    for s in pending:
+        if "setup_id" not in s:
+            s["setup_id"] = next_setup_id()
+            changed = True
+    if changed:
+        with open(PENDING_FILE, "w") as f:
+            json.dump(pending, f, indent=2)
+        print(f"[migrate] Przypisano setup_id do {sum(1 for s in pending if 'setup_id' in s)} setupów.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
+
+    _migrate_setup_ids()
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
@@ -1221,6 +1477,10 @@ def main():
 
     # Sprawdz oczekujace setupy
     check_pending(candles_m15)
+
+    # O :45 każdej godziny — Grok weryfikuje nieotwarte setupy
+    if datetime.now(TZ).minute == 45:
+        check_pending_with_grok(candles_m15, candles_h1, current)
 
     # ── 1. Algorytm ───────────────────────────────────────────────────────────
     algo_setups  = algo_detect(candles_m15, candles_h1, rng)
@@ -1344,15 +1604,15 @@ def main():
                     "entries":      entries,
                     "warunek":      warunek,
                     "sl":           grok_result.get("sl"),
-                    "sl_after_tp1": None,
+                    "sl_after_tp1": grok_result.get("sl_after_tp1"),
                     "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
                     "rr":           grok_result.get("rr", 0),
                     "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
                 }
                 log_to_alerty("Grok", "", grok_setup)
-                save_pending(grok_setup, "Grok", "", current)
+                save_pending(grok_setup, "Grok", "", current)  # ustawia grok_setup["setup_id"]
 
-            send_telegram(format_grok_alert(grok_result, current))
+            send_telegram(format_grok_alert(grok_result, current, grok_setup.get("setup_id") if entries else None))
         else:
             print(f"[grok] Brak konkretnego setupu — pomijam Telegram i arkusz.")
     else:
