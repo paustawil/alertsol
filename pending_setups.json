@@ -142,5 +142,33 @@
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1
+  },
+  {
+    "setup_id": 4,
+    "alert_time": "2026-03-27T16:46:27.893378+00:00",
+    "alert_timestamp": 1774629987,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "short",
+    "score": 65,
+    "kurs": 83.07,
+    "price_at_alert": 83.07,
+    "warunek": "pullback",
+    "entry_trigger": "rising",
+    "entries": [
+      83.2
+    ],
+    "sl": 83.8,
+    "sl_after_tp1": 83.0,
+    "tps": [
+      82.0,
+      80.5
+    ],
+    "rr": 2.5,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1
   }
 ]
