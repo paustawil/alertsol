@@ -1,117 +1,5 @@
 [
   {
-    "alert_time": "2026-03-26T10:46:42.485734+00:00",
-    "alert_timestamp": 1774522002,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
-    "score": 70,
-    "kurs": 87.88,
-    "price_at_alert": 87.88,
-    "warunek": "przebicie",
-    "entry_trigger": "falling",
-    "entries": [
-      87.5
-    ],
-    "sl": 88.5,
-    "sl_after_tp1": null,
-    "tps": [
-      86.0,
-      84.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": 1774523700,
-    "tp1_hit_at": 1774548900,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "setup_id": 1
-  },
-  {
-    "alert_time": "2026-03-26T18:01:52.887285+00:00",
-    "alert_timestamp": 1774548112,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
-    "score": 70,
-    "kurs": 86.79,
-    "price_at_alert": 86.79,
-    "warunek": "przebicie",
-    "entry_trigger": "falling",
-    "entries": [
-      86.5
-    ],
-    "sl": 87.5,
-    "sl_after_tp1": null,
-    "tps": [
-      85.0,
-      83.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": 1774548900,
-    "tp1_hit_at": 1774600200,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "setup_id": 2
-  },
-  {
-    "alert_time": "2026-03-26T18:31:35.996483+00:00",
-    "alert_timestamp": 1774549895,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
-    "score": 70,
-    "kurs": 85.93,
-    "price_at_alert": 85.93,
-    "warunek": "pullback",
-    "entry_trigger": "rising",
-    "entries": [
-      86.5
-    ],
-    "sl": 87.5,
-    "sl_after_tp1": null,
-    "tps": [
-      84.5,
-      83.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": 1774555200,
-    "tp1_hit_at": 1774600200,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "setup_id": 3
-  },
-  {
-    "alert_time": "2026-03-26T22:31:40.540290+00:00",
-    "alert_timestamp": 1774564300,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
-    "score": 65,
-    "kurs": 86.53,
-    "price_at_alert": 86.53,
-    "warunek": "przebicie",
-    "entry_trigger": "falling",
-    "entries": [
-      86.2
-    ],
-    "sl": 87.5,
-    "sl_after_tp1": null,
-    "tps": [
-      85.0,
-      83.5
-    ],
-    "rr": 2.3,
-    "entry_hit_at": 1774571400,
-    "tp1_hit_at": 1774600200,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "setup_id": 4
-  },
-  {
     "alert_time": "2026-03-27T08:42:51.854473+00:00",
     "alert_timestamp": 1774600971,
     "model": "Grok",
@@ -162,38 +50,10 @@
     ],
     "rr": 2.0,
     "entry_hit_at": 1774602000,
-    "tp1_hit_at": null,
+    "tp1_hit_at": 1774607400,
     "sl_adjusted": false,
     "entries_hit": 1,
     "setup_id": 6
-  },
-  {
-    "alert_time": "2026-03-27T09:02:00.948573+00:00",
-    "alert_timestamp": 1774602120,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "long",
-    "score": 65,
-    "kurs": 85.08,
-    "price_at_alert": 85.08,
-    "warunek": "pullback",
-    "entry_trigger": "rising",
-    "entries": [
-      85.2
-    ],
-    "sl": 84.0,
-    "sl_after_tp1": null,
-    "tps": [
-      86.5,
-      88.0
-    ],
-    "rr": 2.3,
-    "entry_hit_at": 1774602900,
-    "tp1_hit_at": null,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "setup_id": 7
   },
   {
     "alert_time": "2026-03-27T09:17:02.725216+00:00",
@@ -217,10 +77,38 @@
       81.5
     ],
     "rr": 2.5,
-    "entry_hit_at": null,
+    "entry_hit_at": 1774607400,
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1,
     "setup_id": 8
+  },
+  {
+    "setup_id": 1,
+    "alert_time": "2026-03-27T10:47:42.271954+00:00",
+    "alert_timestamp": 1774608462,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "short",
+    "score": 70,
+    "kurs": 83.46,
+    "price_at_alert": 83.46,
+    "warunek": "pullback",
+    "entry_trigger": "rising",
+    "entries": [
+      84.5
+    ],
+    "sl": 85.5,
+    "sl_after_tp1": 83.5,
+    "tps": [
+      82.0,
+      80.0
+    ],
+    "rr": 2.5,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1
   }
 ]
