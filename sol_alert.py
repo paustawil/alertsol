@@ -1105,13 +1105,18 @@ def check_pending(candles_m15: list[dict]):
                 except Exception:
                     pass
 
-        after_entry   = [c for c in candles_m15 if c["time"] > s["entry_hit_at"]]
         result, move  = None, 0.0
         exit_ts       = None
         tp1_hit_at    = s.get("tp1_hit_at")   # może być ustawione z poprzedniego cyklu
         sl_after_tp1  = s.get("sl_after_tp1")
         # Jeśli SL był już przesunięty w poprzednim cyklu, używamy sl_after_tp1 od razu
         effective_sl  = sl_after_tp1 if s.get("sl_adjusted") and sl_after_tp1 is not None else sl
+
+        # Jeśli TP1 był już trafiony w poprzednim cyklu, zaczynamy sprawdzać SL/TP2
+        # dopiero od świec PO tp1_hit_at — inaczej świeca TP1 (która ma high blisko W1)
+        # może fałszywie wyzwolić sl_hit z przestawionym SL.
+        loop_from = tp1_hit_at if tp1_hit_at is not None else s["entry_hit_at"]
+        after_entry = [c for c in candles_m15 if c["time"] > loop_from]
 
         for c in after_entry:
             sl_hit  = _hits(c, effective_sl, d, "sl")
