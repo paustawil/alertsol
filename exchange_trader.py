@@ -182,17 +182,18 @@ def _place_plan_order(client: BitgetClient, s: dict) -> str | None:
 
     try:
         resp = client.post("/api/v2/mix/order/place-plan-order", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "marginMode":  MARGIN_MODE,
-            "marginCoin":  MARGIN_COIN,
-            "size":        _fmt_qty(qty),
-            "price":       _fmt_price(w1),
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "marginMode":   MARGIN_MODE,
+            "marginCoin":   MARGIN_COIN,
+            "planType":     "normal_plan",
+            "size":         _fmt_qty(qty),
+            "price":        _fmt_price(w1),
             "triggerPrice": _fmt_price(w1),
-            "triggerType": "mark_price",
-            "side":        side,
-            "tradeSide":   "open",
-            "orderType":   "limit",
+            "triggerType":  "mark_price",
+            "side":         side,
+            "tradeSide":    "open",
+            "orderType":    "limit",
         })
         if resp.get("code") == "00000":
             oid = resp["data"]["orderId"]
@@ -264,6 +265,7 @@ def _place_sl_plan_order(client: BitgetClient, s: dict, sl_price: float, qty: fl
             "productType":  PRODUCT_TYPE,
             "marginMode":   MARGIN_MODE,
             "marginCoin":   MARGIN_COIN,
+            "planType":     "normal_plan",
             "size":         _fmt_qty(qty),
             "triggerPrice": _fmt_price(sl_price),
             "triggerType":  "mark_price",
