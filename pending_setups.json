@@ -234,15 +234,15 @@
       80.0
     ],
     "rr": 3.0,
-    "entry_hit_at": null,
+    "entry_hit_at": 1774655100,
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1,
     "exchange_order_id": "1421549713966489600",
-    "exchange_position_opened": false,
-    "exchange_tp1_order_id": null,
-    "exchange_tp2_order_id": null,
-    "exchange_sl_order_id": null,
+    "exchange_position_opened": true,
+    "exchange_tp1_order_id": "1421572159468900356",
+    "exchange_tp2_order_id": "1421572160353898497",
+    "exchange_sl_order_id": "1421572161248157696",
     "exchange_qty": "2.4"
   }
 ]
