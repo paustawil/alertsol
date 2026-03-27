@@ -171,10 +171,10 @@
     "sl_adjusted": false,
     "entries_hit": 1,
     "exchange_order_id": "1421528593961312256",
-    "exchange_position_opened": false,
-    "exchange_tp1_order_id": null,
-    "exchange_tp2_order_id": null,
-    "exchange_sl_order_id": null,
+    "exchange_position_opened": true,
+    "exchange_tp1_order_id": "1421538228937854977",
+    "exchange_tp2_order_id": "1421538229822853121",
+    "exchange_sl_order_id": "1421538230836097024",
     "exchange_qty": "2.4"
   },
   {
