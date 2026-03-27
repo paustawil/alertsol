@@ -205,6 +205,10 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "shadow": true,
+    "cancel_reason": "Rynek uciek\u0142 w d\u00f3\u0142 zbyt daleko, osi\u0105gaj\u0105c low na 82.55 poni\u017cej TP1, co czyni poziom wej\u015bcia 84.0 technicznie nieosi\u0105galnym w rozs\u0105dnym czasie po silnym spadku.",
+    "cancel_time": "2026-03-27T13:46:52.901298+00:00",
+    "cancel_price": 83.29
   }
 ]
