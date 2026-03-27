@@ -25,7 +25,11 @@
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1,
-    "setup_id": 5
+    "setup_id": 5,
+    "shadow": true,
+    "cancel_reason": "Rynek uciek\u0142 zbyt daleko w d\u00f3\u0142 po silnym spadku, poziom wej\u015bcia 85.5 jest technicznie nieosi\u0105galny w rozs\u0105dnym czasie ze wzgl\u0119du na dominuj\u0105cy trend spadkowy.",
+    "cancel_time": "2026-03-27T11:47:05.783532+00:00",
+    "cancel_price": 83.42
   },
   {
     "alert_time": "2026-03-27T08:46:19.963101+00:00",
@@ -109,7 +113,11 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "shadow": true,
+    "cancel_reason": "Rynek spad\u0142 znacznie poni\u017cej poziomu wej\u015bcia 84.5, pullback do tego poziomu jest ma\u0142o prawdopodobny w kr\u00f3tkim terminie.",
+    "cancel_time": "2026-03-27T11:47:05.783532+00:00",
+    "cancel_price": 83.42
   },
   {
     "setup_id": 1,
@@ -137,7 +145,11 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "shadow": true,
+    "cancel_reason": "Rynek spad\u0142 znacznie poni\u017cej poziomu wej\u015bcia 84.5, pullback do tego poziomu jest ma\u0142o prawdopodobny w kr\u00f3tkim terminie.",
+    "cancel_time": "2026-03-27T11:47:05.783532+00:00",
+    "cancel_price": 83.42
   },
   {
     "setup_id": 1,
@@ -165,6 +177,10 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "shadow": true,
+    "cancel_reason": "Rynek spad\u0142 znacznie poni\u017cej poziomu wej\u015bcia 84.5, pullback do tego poziomu jest ma\u0142o prawdopodobny w kr\u00f3tkim terminie.",
+    "cancel_time": "2026-03-27T11:47:05.783532+00:00",
+    "cancel_price": 83.42
   }
 ]
