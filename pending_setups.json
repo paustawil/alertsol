@@ -169,6 +169,12 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "exchange_order_id": "1421528593961312256",
+    "exchange_position_opened": false,
+    "exchange_tp1_order_id": null,
+    "exchange_tp2_order_id": null,
+    "exchange_sl_order_id": null,
+    "exchange_qty": "2.4"
   }
 ]
