@@ -210,5 +210,39 @@
     "exchange_tp2_order_id": null,
     "exchange_sl_order_id": null,
     "exchange_qty": "2.4"
+  },
+  {
+    "setup_id": 8,
+    "alert_time": "2026-03-27T22:16:20.393823+00:00",
+    "alert_timestamp": 1774649780,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "short",
+    "score": 70,
+    "kurs": 82.67,
+    "price_at_alert": 82.67,
+    "warunek": "pullback",
+    "entry_trigger": "rising",
+    "entries": [
+      83.0
+    ],
+    "sl": 83.5,
+    "sl_after_tp1": 82.5,
+    "tps": [
+      81.5,
+      80.0
+    ],
+    "rr": 3.0,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1,
+    "exchange_order_id": "1421549713966489600",
+    "exchange_position_opened": false,
+    "exchange_tp1_order_id": null,
+    "exchange_tp2_order_id": null,
+    "exchange_sl_order_id": null,
+    "exchange_qty": "2.4"
   }
 ]
