@@ -11,6 +11,7 @@ import requests
 import anthropic
 import openai
 import gspread
+import concurrent.futures
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
@@ -654,43 +655,63 @@ def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: flo
 
 
 # ── Grok API (xAI — OpenAI-compatible + live search) ─────────────────────────
+_GROK_CREDIT_KEYWORDS = ("credit", "quota", "billing", "payment", "insufficient", "balance",
+                          "exceeded", "limit", "kredyt", "płatność", "rozliczenie")
+_GROK_TIMEOUT_S = 120  # 2 minuty
+
+
 def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
     if not XAI_KEY:
         print("[grok] Brak klucza API.")
         return None
-    try:
-        m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
-            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
-            for c in candles_m15[-60:]
-        )
-        h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
-            f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
-            for c in candles_h1[-24:]
-        )
-        user_msg = (
-            f"Aktualna cena SOL z moich danych: ${current_price:.2f}\n\n"
-            f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
-            f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
-        )
 
+    m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_m15[-60:]
+    )
+    h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_h1[-24:]
+    )
+    user_msg = (
+        f"Aktualna cena SOL z moich danych: ${current_price:.2f}\n\n"
+        f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
+        f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
+    )
+
+    def _call() -> str:
         from xai_sdk import Client as XaiClient
         from xai_sdk.chat import system as xai_system, user as xai_user
         from xai_sdk.tools import web_search
-
         client = XaiClient(api_key=XAI_KEY)
-        chat   = client.chat.create(
-            model="grok-4",
-            tools=[web_search()],
-        )
+        chat   = client.chat.create(model="grok-4", tools=[web_search()])
         chat.append(xai_system(GROK_PROMPT))
         chat.append(xai_user(user_msg))
-        result = chat.sample()
-        text   = result.content.strip()
+        return chat.sample().content.strip()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                text = future.result(timeout=_GROK_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                print(f"[grok] Timeout — brak odpowiedzi w ciagu {_GROK_TIMEOUT_S}s")
+                future.cancel()
+                return None
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
             return json.loads(match.group())
     except Exception as e:
+        err_str = str(e).lower()
         print(f"[grok] Blad: {e}")
+        if any(kw in err_str for kw in _GROK_CREDIT_KEYWORDS):
+            try:
+                send_telegram(
+                    "⚠️ <b>Grok API — brak kredytów</b>\n"
+                    "Konto xAI wyczerpało limit. Sprawdź saldo na console.x.ai"
+                )
+            except Exception:
+                pass
     return None
 
 
