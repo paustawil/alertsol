@@ -60,68 +60,37 @@
     "cancel_price": 83.29
   },
   {
-    "setup_id": 9,
-    "alert_time": "2026-03-28T08:24:31.085568+00:00",
-    "alert_timestamp": 1774686271,
+    "setup_id": 11,
+    "alert_time": "2026-03-28T10:32:06.947432+00:00",
+    "alert_timestamp": 1774693926,
     "model": "Grok",
     "rejection": "",
     "type": "",
-    "direction": "long",
+    "direction": "short",
     "score": 65,
-    "kurs": 83.6,
-    "price_at_alert": 83.6,
-    "warunek": "pullback",
+    "kurs": 82.77,
+    "price_at_alert": 82.77,
+    "warunek": "przebicie",
     "entry_trigger": "falling",
     "entries": [
-      83.4
+      82.7
     ],
-    "sl": 82.8,
-    "sl_after_tp1": 83.4,
+    "sl": 83.1,
+    "sl_after_tp1": 82.7,
     "tps": [
-      84.5,
-      85.5
+      82.2,
+      81.9
     ],
-    "rr": 2.5,
-    "entry_hit_at": 1774687500,
+    "rr": 2.0,
+    "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
     "entries_hit": 1,
-    "exchange_order_id": "1421702762485215232",
+    "exchange_order_id": "1421734875611783168",
     "exchange_position_opened": false,
     "exchange_tp1_order_id": null,
     "exchange_tp2_order_id": null,
     "exchange_sl_order_id": null,
-    "exchange_qty": "2.3"
-  },
-  {
-    "setup_id": 10,
-    "alert_time": "2026-03-28T09:46:12.914040+00:00",
-    "alert_timestamp": 1774691172,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "long",
-    "score": 65,
-    "kurs": 83.02,
-    "price_at_alert": 83.02,
-    "warunek": "pullback",
-    "entry_trigger": "rising",
-    "entries": [
-      83.2
-    ],
-    "sl": 82.8,
-    "sl_after_tp1": 83.2,
-    "tps": [
-      83.6,
-      84.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": 1774692000,
-    "tp1_hit_at": null,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "exchange_order1_id": "1421723324460818432",
-    "exchange_order2_id": "1421723325366759424",
-    "exchange_position_opened": false
+    "exchange_qty": "2.4"
   }
 ]
