@@ -321,13 +321,33 @@ def test_verify_sl_modified(client, sl_oid, expected_price, expected_size):
 
 
 def test_close_position(client, dry_run=False):
-    sep("[CLEANUP] Zamknij pozycję long")
+    sep("[CLEANUP] Zamknij całą pozycję long")
+
+    # Pobierz rzeczywisty rozmiar pozycji żeby zamknąć dokładnie tyle ile jest otwarte
+    actual_size = "1"
+    if not dry_run:
+        resp_pos = client.get("/api/v2/mix/position/all-position", {
+            "productType": PRODUCT_TYPE,
+            "marginCoin":  MARGIN_COIN,
+        })
+        raw("positions", resp_pos)
+        if resp_pos.get("code") == "00000":
+            for pos in resp_pos.get("data", []):
+                if pos.get("symbol") == SYMBOL and pos.get("holdSide") == "long":
+                    actual_size = pos.get("available", pos.get("total", "1"))
+                    info(f"Otwarta pozycja long: {actual_size} SOL")
+                    break
+
+    if actual_size in ("0", "0.0", ""):
+        info("Brak otwartej pozycji long — nic do zamknięcia")
+        return
+
     params = {
         "symbol":      SYMBOL,
         "productType": PRODUCT_TYPE,
         "marginMode":  MARGIN_MODE,
         "marginCoin":  MARGIN_COIN,
-        "size":        "1",
+        "size":        actual_size,
         "orderType":   "market",
         "side":        "sell",
         "tradeSide":   "close",
@@ -337,7 +357,7 @@ def test_close_position(client, dry_run=False):
     resp = client.post("/api/v2/mix/order/place-order", params, dry_run=dry_run)
     raw("close-position", resp)
     if resp.get("code") in ("00000", "DRY_RUN"):
-        ok("Pozycja zamknięta")
+        ok(f"Pozycja zamknięta ({actual_size} SOL)")
     else:
         fail(f"Błąd zamknięcia: code={resp.get('code')} msg={resp.get('msg')}")
 

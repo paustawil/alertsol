@@ -446,6 +446,21 @@ def sync():
     pending  = _load_pending()
     modified = False
 
+    # Guard: tylko jedna pozycja na raz w Bitget.
+    # Jeśli jakikolwiek setup ma już plan order lub otwartą pozycję → blokuj nowe.
+    exchange_slot_taken = any(
+        (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
+        and not s.get("exchange_done", False)
+        for s in pending
+    )
+    if exchange_slot_taken:
+        active = next(
+            s for s in pending
+            if (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
+            and not s.get("exchange_done", False)
+        )
+        print(f"[exchange] Slot zajęty przez setup #{active.get('setup_id','?')} — nowe pozycje wstrzymane.")
+
     for s in pending:
         sid       = s.get("setup_id", "?")
         direction = s.get("direction", "?")
@@ -481,6 +496,9 @@ def sync():
 
         # ── NOWY setup — złóż plan order przy W1 ─────────────────────────────
         if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
+            if exchange_slot_taken:
+                print(f"[exchange] {label}: pominięty — slot zajęty (tryb jedna pozycja na raz)")
+                continue
             w1       = entries[0]
             full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
             oid      = _place_entry_plan_order(client, s, full_qty)
