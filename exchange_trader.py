@@ -4,10 +4,9 @@ Exchange Trader — Bitget USDT-M Futures (SOLUSDT Perpetual)
 Wywoływany przez sol_alert.py co 15 minut.
 
 Schemat działania:
-  1. Nowy setup    → plan order (conditional entry przy W1)
-  2. Entry wbity   → place-tpsl-order: TP1 (50%), TP2 (50%), SL (100%)
-  3. TP1 wykonany  → anuluj SL, postaw nowy SL na BE dla 50%
-  4. Resztą zarządza Bitget (tpsl powiązane z pozycją)
+  1. Nowy setup    → plan order z preset TP1 i SL (aktywują się automatycznie przy wejściu)
+  2. TP1 wykonany  → anuluj stary SL, postaw nowy SL na BE (sl_after_tp1)
+  3. Resztą zarządza Bitget (tpsl powiązane z pozycją)
 
 Wymagane zmienne środowiskowe:
   BITGET_API_KEY       — klucz API
@@ -165,29 +164,41 @@ def _set_leverage(client: BitgetClient):
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
 def _place_plan_order(client: BitgetClient, s: dict) -> str | None:
-    """Plan order (conditional entry przy W1). Zwraca orderId."""
+    """Plan order (conditional entry przy W1) z preset TP i SL. Zwraca orderId."""
     direction = s["direction"]
     w1        = s["entries"][0]
     qty       = _round_qty((TRADE_USDT * LEVERAGE) / w1)
     side      = "buy" if direction == "long" else "sell"
+    tps       = s.get("tps", [])
+    sl        = s.get("sl")
+    tp1       = tps[0] if tps else None
+
+    params = {
+        "symbol":       SYMBOL,
+        "productType":  PRODUCT_TYPE,
+        "marginMode":   MARGIN_MODE,
+        "marginCoin":   MARGIN_COIN,
+        "planType":     "normal_plan",
+        "size":         _fmt_qty(qty),
+        "price":        _fmt_price(w1),
+        "triggerPrice": _fmt_price(w1),
+        "triggerType":  "mark_price",
+        "side":         side,
+        "posSide":      direction,
+        "orderType":    "limit",
+    }
+    if tp1 is not None:
+        params["presetStopSurplusPrice"] = _fmt_price(tp1)
+    if sl is not None:
+        params["presetStopLossPrice"] = _fmt_price(sl)
+
     try:
-        resp = client.post("/api/v2/mix/order/place-plan-order", {
-            "symbol":       SYMBOL,
-            "productType":  PRODUCT_TYPE,
-            "marginMode":   MARGIN_MODE,
-            "marginCoin":   MARGIN_COIN,
-            "planType":     "normal_plan",
-            "size":         _fmt_qty(qty),
-            "price":        _fmt_price(w1),
-            "triggerPrice": _fmt_price(w1),
-            "triggerType":  "mark_price",
-            "side":         side,
-            "posSide":      direction,
-            "orderType":    "limit",
-        })
+        resp = client.post("/api/v2/mix/order/place-plan-order", params)
         if resp.get("code") == "00000":
             oid = resp["data"]["orderId"]
-            print(f"[exchange] Plan order: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}")
+            tp_info = f" | preset TP={tp1}" if tp1 else ""
+            sl_info = f" | preset SL={sl}" if sl else ""
+            print(f"[exchange] Plan order: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}{tp_info}{sl_info}")
             return oid
         log.error(f"[exchange] place_plan_order: {resp.get('msg')}")
     except Exception as e:
@@ -361,9 +372,9 @@ def sync():
     Główna pętla — wywoływana co 15 min przez sol_alert.py.
 
     Dla każdego setupu w pending_setups.json:
-      - NOWY:      składa plan order (conditional entry przy W1)
+      - NOWY:      składa plan order z preset TP1+SL
       - ANULOWANY: anuluje plan order
-      - OCZEKUJĄCY: sprawdza czy entry wykonany → stawia TP1/TP2/SL przez tpsl
+      - OCZEKUJĄCY: sprawdza czy entry wykonany → oznacza pozycję jako otwartą
       - OTWARTY:   sprawdza TP1 → przesuwa SL na BE
     """
     client = _client()
@@ -398,7 +409,7 @@ def sync():
             modified = True
             continue
 
-        # ── Nowy setup — złóż plan order ─────────────────────────────────────
+        # ── Nowy setup — złóż plan order z preset TP+SL ─────────────────────
         if not shadow and not cancelled and not order_id and s["entry_hit_at"] is None:
             w1  = entries[0]
             qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
@@ -406,15 +417,13 @@ def sync():
             if oid:
                 s["exchange_order_id"]        = oid
                 s["exchange_position_opened"] = False
-                s["exchange_tp1_order_id"]    = None
-                s["exchange_tp2_order_id"]    = None
-                s["exchange_sl_order_id"]     = None
                 s["exchange_qty"]             = _fmt_qty(qty)
                 modified = True
                 print(f"[exchange] {label}: plan order → {oid} ({_fmt_qty(qty)} SOL @ {w1})")
             continue
 
         # ── Oczekujący — sprawdź czy entry wykonany ──────────────────────────
+        # Preset TP/SL zostały ustawione na planie — nie trzeba składać dodatkowych zleceń.
         if order_id and not opened:
             status = _plan_order_status(client, order_id)
             if status == "live":
@@ -425,19 +434,15 @@ def sync():
                 modified = True
                 continue
             if status == "executed":
-                print(f"[exchange] {label}: entry wykonany! Składam TP/SL przez tpsl.")
-                tp1_id, tp2_id, sl_id = _place_tp_sl_orders(client, s)
+                print(f"[exchange] {label}: entry wykonany — pozycja otwarta z preset TP/SL.")
                 s["exchange_position_opened"] = True
-                s["exchange_tp1_order_id"]    = tp1_id
-                s["exchange_tp2_order_id"]    = tp2_id
-                s["exchange_sl_order_id"]     = sl_id
                 modified = True
             continue
 
-        # ── Pozycja otwarta — sprawdź TP1, przesuń SL ───────────────────────
+        # ── Pozycja otwarta — sprawdź TP1 przez cenę (preset nie zwraca ID) ─
         if opened and not s.get("sl_adjusted"):
-            tp1_oid = s.get("exchange_tp1_order_id")
-            if tp1_oid and _tpsl_order_status(client, tp1_oid, "pos_profit") == "executed":
+            # Wykryj TP1 przez sol_alert.py (tp1_hit_at ustawiane przez check_pending)
+            if s.get("tp1_hit_at"):
                 w1       = entries[0]
                 sl_after = s.get("sl_after_tp1") or w1
                 _update_sl(client, s, sl_after)
