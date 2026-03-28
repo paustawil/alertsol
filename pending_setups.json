@@ -86,5 +86,33 @@
     "exchange_qty_full": "2.4",
     "exchange_qty_half": "1.2",
     "exchange_position_opened": false
+  },
+  {
+    "setup_id": 18,
+    "alert_time": "2026-03-28T21:01:41.320751+00:00",
+    "alert_timestamp": 1774731701,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "long",
+    "score": 70,
+    "kurs": 83.43,
+    "price_at_alert": 83.43,
+    "warunek": "pullback",
+    "entry_trigger": "falling",
+    "entries": [
+      83.2
+    ],
+    "sl": 82.8,
+    "sl_after_tp1": 83.2,
+    "tps": [
+      84.0,
+      84.5
+    ],
+    "rr": 2.5,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1
   }
 ]
