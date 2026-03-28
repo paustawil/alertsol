@@ -146,7 +146,22 @@ def _client() -> BitgetClient | None:
     return BitgetClient(key, secret, passphrase, demo=demo)
 
 
-# ── Dźwignia ──────────────────────────────────────────────────────────────────
+# ── Tryb pozycji i dźwignia ───────────────────────────────────────────────────
+
+def _set_hedge_mode(client: BitgetClient):
+    """Ustawia hedge mode — long i short mogą być otwarte równocześnie."""
+    try:
+        resp = client.post("/api/v2/mix/account/set-position-mode", {
+            "productType": PRODUCT_TYPE,
+            "posMode":     "hedge_mode",
+        })
+        if resp.get("code") not in ("00000", "40919"):
+            log.warning(f"[exchange] set_position_mode: {resp.get('msg')}")
+        else:
+            print("[exchange] Hedge mode aktywny.")
+    except Exception as e:
+        log.warning(f"[exchange] set_position_mode: {e}")
+
 
 def _set_leverage(client: BitgetClient):
     for hold_side in ("long", "short"):
@@ -348,6 +363,7 @@ def sync():
     if client is None:
         return
 
+    _set_hedge_mode(client)
     _set_leverage(client)
 
     pending  = _load_pending()
