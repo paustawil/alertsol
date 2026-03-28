@@ -53,7 +53,11 @@
     "entry_hit_at": null,
     "tp1_hit_at": null,
     "sl_adjusted": false,
-    "entries_hit": 1
+    "entries_hit": 1,
+    "exchange_plan_oid": "1421859512226668544",
+    "exchange_qty_full": "2.4",
+    "exchange_qty_half": "1.2",
+    "exchange_position_opened": false
   },
   {
     "setup_id": 16,
