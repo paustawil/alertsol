@@ -201,6 +201,7 @@ def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> s
         "triggerPrice": _fmt_price(w1),
         "triggerType":  "mark_price",
         "side":         side,
+        "tradeSide":    "open",
         "posSide":      direction,
         "orderType":    "limit",
     }
