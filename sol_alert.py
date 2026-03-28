@@ -1596,12 +1596,9 @@ def main():
         tf_aligned = grok_result.get("tf_aligned", True)
         print(f"[grok] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
 
-        # Filtr zawahania: odrzuć setup jeśli przekonanie za niskie lub timeframy sprzeczne
+        # Filtr zawahania: odrzuć setup jeśli przekonanie za niskie
         if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
             print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnał.")
-            send_alert = False
-        if send_alert and not tf_aligned:
-            print(f"[grok] Odrzucono: tf_aligned=false — H1 i M15 sprzeczne.")
             send_alert = False
 
         if send_alert and bias != "neutral":
