@@ -126,5 +126,33 @@
     "exchange_tp2_order_id": null,
     "exchange_sl_order_id": null,
     "exchange_qty": "2.4"
+  },
+  {
+    "setup_id": 13,
+    "alert_time": "2026-03-28T13:02:06.375386+00:00",
+    "alert_timestamp": 1774702926,
+    "model": "Grok",
+    "rejection": "",
+    "type": "",
+    "direction": "short",
+    "score": 70,
+    "kurs": 82.69,
+    "price_at_alert": 82.69,
+    "warunek": "przebicie",
+    "entry_trigger": "falling",
+    "entries": [
+      82.5
+    ],
+    "sl": 83.1,
+    "sl_after_tp1": 82.7,
+    "tps": [
+      81.9,
+      81.0
+    ],
+    "rr": 2.5,
+    "entry_hit_at": null,
+    "tp1_hit_at": null,
+    "sl_adjusted": false,
+    "entries_hit": 1
   }
 ]
