@@ -1509,20 +1509,8 @@ def format_grok_alert(result: dict, sol_price: float, setup_id=None, model_name:
 
 # ── Migracja setup_id dla istniejących setupów bez ID ─────────────────────────
 def _migrate_setup_ids():
-    """Przypisuje setup_id do setupów w pending_setups.json, które go nie mają."""
-    if not os.path.exists(PENDING_FILE):
-        return
-    with open(PENDING_FILE) as f:
-        pending = json.load(f)
-    changed = False
-    for s in pending:
-        if "setup_id" not in s:
-            s["setup_id"] = next_setup_id()
-            changed = True
-    if changed:
-        with open(PENDING_FILE, "w") as f:
-            json.dump(pending, f, indent=2)
-        print(f"[migrate] Przypisano setup_id do {sum(1 for s in pending if 'setup_id' in s)} setupów.")
+    """Nieaktualna — ID są teraz generowane przez SERIAL w PostgreSQL."""
+    pass
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
