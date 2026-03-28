@@ -343,16 +343,16 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
     return "unknown"
 
 
-def _tpsl_order_status(client: BitgetClient, order_id: str, plan_type: str) -> str:
+def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
     """
-    Status zlecenia TPSL: 'live' | 'executed' | 'cancelled' | 'unknown'
-    plan_type: 'profit_plan' lub 'loss_plan'
+    Status zlecenia TPSL (profit_plan lub loss_plan): 'live' | 'executed' | 'cancelled' | 'unknown'
+    Bitget używa planType='profit_loss' do odpytywania obu typów razem.
     """
     try:
         resp = client.get("/api/v2/mix/order/orders-plan-pending", {
             "symbol":      SYMBOL,
             "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
+            "planType":    "profit_loss",
         })
         if resp.get("code") == "00000":
             live_ids = {o["orderId"] for o in resp["data"].get("entrustedList", [])}
@@ -362,7 +362,7 @@ def _tpsl_order_status(client: BitgetClient, order_id: str, plan_type: str) -> s
         resp = client.get("/api/v2/mix/order/orders-plan-history", {
             "symbol":      SYMBOL,
             "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
+            "planType":    "profit_loss",
             "startTime":   str(int((time.time() - 7 * 86400) * 1000)),
             "endTime":     str(int(time.time() * 1000)),
         })
@@ -375,7 +375,7 @@ def _tpsl_order_status(client: BitgetClient, order_id: str, plan_type: str) -> s
                     if status in ("cancelled", "expired"):
                         return "cancelled"
     except Exception as e:
-        log.warning(f"[exchange] tpsl_order_status {order_id} ({plan_type}): {e}")
+        log.warning(f"[exchange] tpsl_order_status {order_id}: {e}")
     return "unknown"
 
 
@@ -446,6 +446,21 @@ def sync():
     pending  = _load_pending()
     modified = False
 
+    # Guard: tylko jedna pozycja na raz w Bitget.
+    # Jeśli jakikolwiek setup ma już plan order lub otwartą pozycję → blokuj nowe.
+    exchange_slot_taken = any(
+        (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
+        and not s.get("exchange_done", False)
+        for s in pending
+    )
+    if exchange_slot_taken:
+        active = next(
+            s for s in pending
+            if (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
+            and not s.get("exchange_done", False)
+        )
+        print(f"[exchange] Slot zajęty przez setup #{active.get('setup_id','?')} — nowe pozycje wstrzymane.")
+
     for s in pending:
         sid       = s.get("setup_id", "?")
         direction = s.get("direction", "?")
@@ -481,6 +496,9 @@ def sync():
 
         # ── NOWY setup — złóż plan order przy W1 ─────────────────────────────
         if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
+            if exchange_slot_taken:
+                print(f"[exchange] {label}: pominięty — slot zajęty (tryb jedna pozycja na raz)")
+                continue
             w1       = entries[0]
             full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
             oid      = _place_entry_plan_order(client, s, full_qty)
@@ -527,7 +545,7 @@ def sync():
 
             # Sprawdź SL jako pierwsze — ma priorytet
             if sl_oid:
-                sl_status = _tpsl_order_status(client, sl_oid, "loss_plan")
+                sl_status = _tpsl_order_status(client, sl_oid)
                 print(f"[exchange] {label}: SL status = {sl_status}")
 
                 if sl_status == "executed":
@@ -543,7 +561,7 @@ def sync():
 
             # Sprawdź TP1 (jeśli jeszcze nie wykonany)
             if tp1_oid and not tp1_done:
-                tp1_status = _tpsl_order_status(client, tp1_oid, "profit_plan")
+                tp1_status = _tpsl_order_status(client, tp1_oid)
                 print(f"[exchange] {label}: TP1 status = {tp1_status}")
 
                 if tp1_status == "executed":
@@ -559,7 +577,7 @@ def sync():
 
             # Sprawdź TP2
             if tp2_oid:
-                tp2_status = _tpsl_order_status(client, tp2_oid, "profit_plan")
+                tp2_status = _tpsl_order_status(client, tp2_oid)
                 print(f"[exchange] {label}: TP2 status = {tp2_status}")
 
                 if tp2_status == "executed":

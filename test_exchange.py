@@ -224,46 +224,40 @@ def test_place_sl(client, price, dry_run=False):
 def test_verify_tpsl_pending(client, tp1_oid, tp2_oid, sl_oid):
     sep("[6] Sprawdź pending TPSL orders")
 
-    for plan_type, label, expected_oid in [
-        ("profit_plan", "TP (profit_plan)", tp1_oid),
-        ("loss_plan",   "SL (loss_plan)",   sl_oid),
-    ]:
-        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
-        })
-        raw(f"pending {plan_type}", resp)
-        if resp.get("code") == "00000":
-            orders = resp["data"].get("entrustedList", [])
-            ids    = [o["orderId"] for o in orders]
-            info(f"{label}: znaleziono {len(orders)} orderów, IDs: {ids}")
+    # profit_plan i loss_plan odpytujemy razem przez planType=profit_loss
+    resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+        "symbol":      SYMBOL,
+        "productType": PRODUCT_TYPE,
+        "planType":    "profit_loss",
+    })
+    raw("pending profit_loss", resp)
+    if resp.get("code") == "00000":
+        orders = resp["data"].get("entrustedList", [])
+        ids    = [o["orderId"] for o in orders]
+        info(f"Znaleziono {len(orders)} pending TPSL orderów, IDs: {ids}")
 
-            if tp1_oid in ids:
-                ok(f"TP1 ({tp1_oid}) widoczny w pending ✓")
-            elif tp1_oid:
-                fail(f"TP1 ({tp1_oid}) NIE widoczny w pending")
-
-            if plan_type == "profit_plan" and tp2_oid in ids:
-                ok(f"TP2 ({tp2_oid}) widoczny w pending ✓")
-            elif plan_type == "profit_plan" and tp2_oid:
-                fail(f"TP2 ({tp2_oid}) NIE widoczny w pending")
-
-            if plan_type == "loss_plan" and sl_oid in ids:
-                ok(f"SL  ({sl_oid}) widoczny w pending ✓")
-            elif plan_type == "loss_plan" and sl_oid:
-                fail(f"SL  ({sl_oid}) NIE widoczny w pending")
-        else:
-            fail(f"Błąd odpytania pending {plan_type}: {resp.get('msg')}")
+        for oid, label in [(tp1_oid, "TP1"), (tp2_oid, "TP2"), (sl_oid, "SL")]:
+            if not oid:
+                continue
+            if oid in ids:
+                order = next(o for o in orders if o["orderId"] == oid)
+                ok(f"{label} ({oid}) widoczny — planType={order.get('planType')} size={order.get('size')} trigger={order.get('triggerPrice')}")
+            else:
+                fail(f"{label} ({oid}) NIE widoczny w pending")
+    else:
+        fail(f"Błąd odpytania pending profit_loss: {resp.get('msg')}")
 
 
 def test_modify_sl(client, sl_oid, price, dry_run=False):
-    sep("[7] Zmodyfikuj SL: nowa cena = cena + 0.5%, nowy size = 0.5 SOL")
+    sep("[7] Zmodyfikuj SL: nowa cena = cena - 1.5%, nowy size = 0.5 SOL")
     if not sl_oid:
         fail("Brak sl_oid — pomijam modyfikację")
         return False
 
-    new_sl_price = round(price * 1.005, 2)
+    # SL dla long MUSI być poniżej aktualnej ceny.
+    # Symulujemy SLpoTP1 jako -1.5% od aktualnej ceny (zamiast -3% jak oryginał).
+    # W realu: gdy TP1 odpali przy cenie wyższej niż entry, SLpoTP1 = breakeven < mark_price.
+    new_sl_price = round(price * 0.985, 2)
     params = {
         "symbol":       SYMBOL,
         "productType":  PRODUCT_TYPE,
@@ -274,7 +268,7 @@ def test_modify_sl(client, sl_oid, price, dry_run=False):
         "size":         "0.5",
     }
     info(f"Modyfikacja SL {sl_oid}:")
-    info(f"  triggerPrice: ${new_sl_price:.2f} (cena + 0.5% — symulacja SLpoTP1)")
+    info(f"  triggerPrice: ${new_sl_price:.2f} (cena - 1.5% — symulacja SLpoTP1, musi być < mark price)")
     info(f"  size:         0.5 SOL (zmniejszenie z 1.0 po TP1)")
     info(f"Parametry: {json.dumps(params)}")
     resp = client.post("/api/v2/mix/order/modify-tpsl-order", params, dry_run=dry_run)
@@ -296,7 +290,7 @@ def test_verify_sl_modified(client, sl_oid, expected_price, expected_size):
     resp = client.get("/api/v2/mix/order/orders-plan-pending", {
         "symbol":      SYMBOL,
         "productType": PRODUCT_TYPE,
-        "planType":    "loss_plan",
+        "planType":    "profit_loss",
     })
     raw("pending loss_plan po modyfikacji", resp)
     if resp.get("code") == "00000":
@@ -327,13 +321,33 @@ def test_verify_sl_modified(client, sl_oid, expected_price, expected_size):
 
 
 def test_close_position(client, dry_run=False):
-    sep("[CLEANUP] Zamknij pozycję long")
+    sep("[CLEANUP] Zamknij całą pozycję long")
+
+    # Pobierz rzeczywisty rozmiar pozycji żeby zamknąć dokładnie tyle ile jest otwarte
+    actual_size = "1"
+    if not dry_run:
+        resp_pos = client.get("/api/v2/mix/position/all-position", {
+            "productType": PRODUCT_TYPE,
+            "marginCoin":  MARGIN_COIN,
+        })
+        raw("positions", resp_pos)
+        if resp_pos.get("code") == "00000":
+            for pos in resp_pos.get("data", []):
+                if pos.get("symbol") == SYMBOL and pos.get("holdSide") == "long":
+                    actual_size = pos.get("available", pos.get("total", "1"))
+                    info(f"Otwarta pozycja long: {actual_size} SOL")
+                    break
+
+    if actual_size in ("0", "0.0", ""):
+        info("Brak otwartej pozycji long — nic do zamknięcia")
+        return
+
     params = {
         "symbol":      SYMBOL,
         "productType": PRODUCT_TYPE,
         "marginMode":  MARGIN_MODE,
         "marginCoin":  MARGIN_COIN,
-        "size":        "1",
+        "size":        actual_size,
         "orderType":   "market",
         "side":        "sell",
         "tradeSide":   "close",
@@ -343,7 +357,7 @@ def test_close_position(client, dry_run=False):
     resp = client.post("/api/v2/mix/order/place-order", params, dry_run=dry_run)
     raw("close-position", resp)
     if resp.get("code") in ("00000", "DRY_RUN"):
-        ok("Pozycja zamknięta")
+        ok(f"Pozycja zamknięta ({actual_size} SOL)")
     else:
         fail(f"Błąd zamknięcia: code={resp.get('code')} msg={resp.get('msg')}")
 
