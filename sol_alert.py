@@ -1491,8 +1491,8 @@ def main():
     # Sprawdz oczekujace setupy
     check_pending(candles_m15)
 
-    # Synchronizuj z ByBit (conditional orders, TP/SL, SL po TP1)
-    exchange_trader.sync()
+    # Exchange sync wyłączony — Bitget testowany osobnym workflow
+    # exchange_trader.sync()
 
     # O :45 każdej godziny — Grok weryfikuje nieotwarte setupy
     if datetime.now(TZ).minute == 45:
@@ -1640,8 +1640,8 @@ def main():
     else:
         print("[grok] Brak odpowiedzi.")
 
-    # Drugi sync po zapisaniu nowych setupów — składa conditional ordery dla nowo wykrytych
-    exchange_trader.sync()
+    # Exchange sync wyłączony — Bitget testowany osobnym workflow
+    # exchange_trader.sync()
 
 
 if __name__ == "__main__":
