@@ -1,0 +1,42 @@
+name: Exchange Sync
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # co 5 minut
+  workflow_dispatch:         # ręczne uruchomienie
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zaleznosci
+        run: pip install -r requirements.txt
+
+      - name: Synchronizuj zlecenia
+        env:
+          BITGET_API_KEY:    ${{ secrets.BITGET_API_KEY }}
+          BITGET_API_SECRET: ${{ secrets.BITGET_API_SECRET }}
+          BITGET_PASSPHRASE: ${{ secrets.BITGET_PASSPHRASE }}
+          BITGET_DEMO:       ${{ secrets.BITGET_DEMO }}
+          BITGET_TRADE_USDT: ${{ secrets.BITGET_TRADE_USDT }}
+        run: python -c "import exchange_trader; exchange_trader.sync()"
+
+      - name: Zapisz stan do repozytorium
+        if: always()
+        run: |
+          git config user.name "SOL Alert Bot"
+          git config user.email "bot@alertsol.com"
+          git add pending_setups.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: update exchange state [skip ci]"
+          git push || true
