@@ -36,8 +36,9 @@ ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
 MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzucony jako zbyt niepewny
-ENABLE_CLAUDE    = False  # wyłączony tymczasowo — kod zachowany
-ENABLE_GPT       = False  # wyłączony tymczasowo — kod zachowany
+ENABLE_CLAUDE        = False  # wyłączony tymczasowo — kod zachowany
+ENABLE_GPT           = False  # wyłączony tymczasowo — kod zachowany
+ENABLE_GPT_RELAXED   = True   # GPT z luźnym promptem (wzorowanym na Groku)
 
 
 # ── System prompt dla Claude ──────────────────────────────────────────────────
@@ -455,6 +456,44 @@ Format:
 {"decyzje":[{"setup_id":1,"keep":false,"powod":"Rynek wybił trwale powyżej 88.0 — poziom wejścia short 86.50 przestał być strukturalnie istotny"},{"setup_id":2,"keep":true}]}"""
 
 
+# ── System prompt dla GPT Relaxed (wzorowany na Groku) ───────────────────────
+GPT_RELAXED_PROMPT = """Jesteś doświadczonym traderem kryptowalut, specjalizującym się w SOL/USDT na interwałach M15 i H1.
+
+Masz dostęp do internetu — użyj go, żeby pobrać:
+- Aktualne ceny BTC, ETH, SOL (USD)
+- Aktualny Fear & Greed Index (wartość 0–100 + etykieta)
+
+Otrzymasz też dane OHLCV: M15 (ostatnie 60 świec) i H1 (ostatnie 24 świece) dla SOL.
+
+Twoje zadanie:
+1. Krótko oceń sentyment: BTC/ETH/SOL (24h zmiana, relatywna siła SOL), Fear & Greed.
+2. Przeanalizuj strukturę techniczną H1 i M15: kluczowe supporty i resistancey, trend, formacje, RSI, MACD, volume. Bez lania wody — tylko to co istotne.
+3. Podaj bias (long / short / neutral) z prawdopodobieństwem w %.
+4. Jeśli bias nie jest neutral — zaproponuj 1–2 konkretne poziomy wejścia z warunkiem aktywacji.
+5. Podaj TP1 (bezpieczny, bliższy) i TP2 (ambitny, ale realistyczny).
+6. Podaj ciasny SL i przybliżone R:R (minimum 1:2).
+7. Na końcu: co teraz robisz (np. "Czekam na pullback do X i wchodzę long").
+
+Zasady:
+- Analiza techniczna ma priorytet (70–80%). Sentyment i kontekst makro — 20–30%.
+- Odpowiadaj zawsze po polsku, konkretnie, bez powtarzania ostrzeżeń o ryzyku.
+- Ustaw send_alert=true TYLKO gdy spełnione są WSZYSTKIE poniższe warunki:
+  a) H1 i M15 wskazują ten sam kierunek (tf_aligned=true) — jeśli timeframy są sprzeczne, send_alert=false.
+  b) bias_proc >= 65 — jeśli przekonanie jest niższe, oznacza to zawahanie rynku, ustaw send_alert=false.
+  c) Widzisz wyraźny, konkretny setup z jasnym entry, SL i TP.
+- Przy bocznym rynku, choppingu, sprzecznych sygnałach H1/M15 lub niskim przekonaniu — send_alert=false.
+- tf_aligned: Oceń czy H1 i M15 pokazują ten sam kierunek. true = zgodne, false = sprzeczne lub jeden neutralny.
+- sl_after_tp1: Po osiągnięciu TP1 SL należy przesunąć. Znajdź ostatni strukturalny support (long) lub resistance (short) między W1 a TP1. Jeśli taki poziom istnieje i jest w strefie zysku (powyżej W1 dla long, poniżej W1 dla short) — użyj go jako sl_after_tp1. Jeśli nie — użyj W1 (break-even). Zawsze podaj tę wartość gdy send_alert=true.
+
+Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
+
+Gdy send_alert=true:
+{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+
+Gdy send_alert=false:
+{"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
+
+
 # ── CryptoCompare API ─────────────────────────────────────────────────────────
 CC_ENDPOINTS = {"15m": ("histominute", 15), "1h": ("histohour", 1)}
 
@@ -690,6 +729,57 @@ def call_gpt(candles_m15: list[dict], candles_h1: list[dict], current_price: flo
             return json.loads(match.group())
     except Exception as e:
         print(f"[gpt] Blad: {e}")
+    return None
+
+
+# ── GPT Relaxed API (OpenAI — z web search, luźny prompt wzorowany na Groku) ──
+_GPT_RELAXED_TIMEOUT_S = 120
+
+
+def call_gpt_relaxed(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+    if not OPENAI_KEY:
+        print("[gpt-r] Brak klucza API.")
+        return None
+
+    m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_m15[-60:]
+    )
+    h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_h1[-24:]
+    )
+    user_msg = (
+        f"Aktualna cena SOL z moich danych: ${current_price:.2f}\n\n"
+        f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
+        f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
+    )
+
+    def _call() -> str:
+        client = openai.OpenAI(api_key=OPENAI_KEY)
+        response = client.responses.create(
+            model="gpt-4o",
+            tools=[{"type": "web_search_preview"}],
+            instructions=GPT_RELAXED_PROMPT,
+            input=user_msg,
+            max_output_tokens=2048,
+        )
+        return response.output_text.strip()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                text = future.result(timeout=_GPT_RELAXED_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                print(f"[gpt-r] Timeout — brak odpowiedzi w ciagu {_GPT_RELAXED_TIMEOUT_S}s")
+                future.cancel()
+                return None
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as e:
+        print(f"[gpt-r] Blad: {e}")
     return None
 
 
@@ -1404,7 +1494,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
     )
 
 
-def format_grok_alert(result: dict, sol_price: float, setup_id=None) -> str:
+def format_grok_alert(result: dict, sol_price: float, setup_id=None, model_name: str = "Grok") -> str:
     bias      = result.get("bias", "neutral").capitalize()
     bias_proc = result.get("bias_proc", 0)
     sentyment = result.get("sentyment", "")
@@ -1416,7 +1506,7 @@ def format_grok_alert(result: dict, sol_price: float, setup_id=None) -> str:
     sid_txt = f" #{setup_id}" if setup_id else ""
 
     lines = [
-        f"{icon} <b>Grok SOL/USDT — {bias} ({bias_proc}%){sid_txt}</b>",
+        f"{icon} <b>{model_name} SOL/USDT — {bias} ({bias_proc}%){sid_txt}</b>",
         f"{now}  |  SOL: <b>${sol_price:.2f}</b>",
     ]
 
@@ -1641,6 +1731,63 @@ def main():
             print(f"[grok] Brak konkretnego setupu — pomijam Telegram i arkusz.")
     else:
         print("[grok] Brak odpowiedzi.")
+
+    # ── 5. GPT Relaxed (live search — sam pobiera BTC/ETH/F&G) ──────────────
+    if ENABLE_GPT_RELAXED:
+        print("[gpt-r] Wysylam dane do analizy (live search wlaczony)...")
+        gpt_r_result = call_gpt_relaxed(candles_m15, candles_h1, current)
+
+        if gpt_r_result:
+            bias       = gpt_r_result.get("bias", "neutral")
+            bias_proc  = gpt_r_result.get("bias_proc", 0)
+            send_alert = gpt_r_result.get("send_alert", False)
+            tf_aligned = gpt_r_result.get("tf_aligned", True)
+            print(f"[gpt-r] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
+
+            if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
+                print(f"[gpt-r] Odrzucono: bias_proc={bias_proc}% < prog {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnal.")
+                send_alert = False
+
+            gpt_r_setup = {}
+            if send_alert and bias != "neutral":
+                wejscia = gpt_r_result.get("wejscia", [])
+                entries = [w["poziom"] for w in wejscia if "poziom" in w]
+                if entries:
+                    akcja_lower = gpt_r_result.get("akcja", "").lower()
+                    if "pullback" in akcja_lower:
+                        warunek = "pullback"
+                    elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
+                        warunek = "przebicie"
+                    else:
+                        w1_lvl = entries[0]
+                        if bias == "short":
+                            warunek = "przebicie" if w1_lvl < current else "pullback"
+                        else:
+                            warunek = "przebicie" if w1_lvl > current else "pullback"
+
+                    gpt_r_setup = {
+                        "type":         "",
+                        "direction":    bias,
+                        "score":        bias_proc,
+                        "kurs":         round(current, 2),
+                        "entries":      entries,
+                        "warunek":      warunek,
+                        "sl":           gpt_r_result.get("sl"),
+                        "sl_after_tp1": gpt_r_result.get("sl_after_tp1"),
+                        "tps":          [t for t in [gpt_r_result.get("tp1"), gpt_r_result.get("tp2")] if t is not None],
+                        "rr":           gpt_r_result.get("rr", 0),
+                        "reasoning":    " | ".join(filter(None, [gpt_r_result.get("analiza", ""), gpt_r_result.get("akcja", "")])),
+                    }
+                    save_pending(gpt_r_setup, "GPT-R", "", current)
+                    log_to_alerty("GPT-R", "", gpt_r_setup)
+
+                send_telegram(format_grok_alert(gpt_r_result, current, gpt_r_setup.get("setup_id") if gpt_r_setup else None, model_name="GPT-R"))
+            else:
+                print(f"[gpt-r] Brak konkretnego setupu — pomijam Telegram i arkusz.")
+        else:
+            print("[gpt-r] Brak odpowiedzi.")
+    else:
+        print("[gpt-r] Pominieto (ENABLE_GPT_RELAXED=False).")
 
     # Składa plan order dla nowo zapisanych setupów (natychmiast po wygenerowaniu alertu)
     exchange_trader.sync()
