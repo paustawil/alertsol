@@ -1,37 +1,5 @@
 [
   {
-    "setup_id": 13,
-    "alert_time": "2026-03-28T13:02:06.375386+00:00",
-    "alert_timestamp": 1774702926,
-    "model": "Grok",
-    "rejection": "",
-    "type": "",
-    "direction": "short",
-    "score": 70,
-    "kurs": 82.69,
-    "price_at_alert": 82.69,
-    "warunek": "przebicie",
-    "entry_trigger": "falling",
-    "entries": [
-      82.5
-    ],
-    "sl": 83.1,
-    "sl_after_tp1": 82.7,
-    "tps": [
-      81.9,
-      81.0
-    ],
-    "rr": 2.5,
-    "entry_hit_at": null,
-    "tp1_hit_at": null,
-    "sl_adjusted": false,
-    "entries_hit": 1,
-    "shadow": true,
-    "cancel_reason": "Trend na H1 i M15 odwr\u00f3ci\u0142 si\u0119 na wzrostowy, a setup short dzia\u0142a przeciwko dominuj\u0105cej strukturze po odbiciu powy\u017cej 84 USD.",
-    "cancel_time": "2026-03-28T15:46:19.661697+00:00",
-    "cancel_price": 83.89
-  },
-  {
     "setup_id": 14,
     "alert_time": "2026-03-28T13:47:17.108211+00:00",
     "alert_timestamp": 1774705637,
