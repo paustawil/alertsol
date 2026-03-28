@@ -258,12 +258,15 @@ def test_verify_tpsl_pending(client, tp1_oid, tp2_oid, sl_oid):
 
 
 def test_modify_sl(client, sl_oid, price, dry_run=False):
-    sep("[7] Zmodyfikuj SL: nowa cena = cena + 0.5%, nowy size = 0.5 SOL")
+    sep("[7] Zmodyfikuj SL: nowa cena = cena - 1.5%, nowy size = 0.5 SOL")
     if not sl_oid:
         fail("Brak sl_oid — pomijam modyfikację")
         return False
 
-    new_sl_price = round(price * 1.005, 2)
+    # SL dla long MUSI być poniżej aktualnej ceny.
+    # Symulujemy SLpoTP1 jako -1.5% od aktualnej ceny (zamiast -3% jak oryginał).
+    # W realu: gdy TP1 odpali przy cenie wyższej niż entry, SLpoTP1 = breakeven < mark_price.
+    new_sl_price = round(price * 0.985, 2)
     params = {
         "symbol":       SYMBOL,
         "productType":  PRODUCT_TYPE,
@@ -274,7 +277,7 @@ def test_modify_sl(client, sl_oid, price, dry_run=False):
         "size":         "0.5",
     }
     info(f"Modyfikacja SL {sl_oid}:")
-    info(f"  triggerPrice: ${new_sl_price:.2f} (cena + 0.5% — symulacja SLpoTP1)")
+    info(f"  triggerPrice: ${new_sl_price:.2f} (cena - 1.5% — symulacja SLpoTP1, musi być < mark price)")
     info(f"  size:         0.5 SOL (zmniejszenie z 1.0 po TP1)")
     info(f"Parametry: {json.dumps(params)}")
     resp = client.post("/api/v2/mix/order/modify-tpsl-order", params, dry_run=dry_run)
