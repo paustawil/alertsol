@@ -1,0 +1,38 @@
+name: Test Exchange TPSL
+
+on:
+  workflow_dispatch:
+    inputs:
+      close_position:
+        description: 'Zamknij pozycję po testach (--close)'
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zależności
+        run: pip install -r requirements.txt
+
+      - name: Uruchom test TPSL
+        env:
+          BITGET_API_KEY:    ${{ secrets.BITGET_API_KEY }}
+          BITGET_API_SECRET: ${{ secrets.BITGET_API_SECRET }}
+          BITGET_PASSPHRASE: ${{ secrets.BITGET_PASSPHRASE }}
+          BITGET_DEMO:       ${{ secrets.BITGET_DEMO }}
+        run: |
+          if [ "${{ inputs.close_position }}" = "true" ]; then
+            python test_exchange.py --close
+          else
+            python test_exchange.py
+          fi
