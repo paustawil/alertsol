@@ -1642,8 +1642,8 @@ def main():
     else:
         print("[grok] Brak odpowiedzi.")
 
-    # Exchange sync wyłączony — Bitget testowany osobnym workflow
-    # exchange_trader.sync()
+    # Składa plan order dla nowo zapisanych setupów (natychmiast po wygenerowaniu alertu)
+    exchange_trader.sync()
 
 
 if __name__ == "__main__":
