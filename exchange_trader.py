@@ -4,10 +4,12 @@ Exchange Trader — Bitget USDT-M Futures (SOLUSDT Perpetual)
 Wywoływany przez sol_alert.py co 15 minut.
 
 Schemat działania:
-  1. Nowy setup    → plan order (conditional entry przy W1)
-  2. Entry wbity   → place-tpsl-order: TP1 (50%), TP2 (50%), SL (100%)
-  3. TP1 wykonany  → anuluj SL, postaw nowy SL na BE dla 50%
-  4. Resztą zarządza Bitget (tpsl powiązane z pozycją)
+  1. Nowy setup → 2 plan ordery przy W1 (każdy 50% pozycji):
+       Plan A: preset TP=TP1 + preset SL
+       Plan B: preset TP=TP2 + preset SL
+  2. Entry wbity → Bitget aktywuje preset TP/SL na obu planach automatycznie
+  3. TP1 wykonany → anuluj wszystkie aktywne pos_loss, postaw BE SL (sl_after_tp1)
+  4. TP2 lub BE SL zamykają resztę
 
 Wymagane zmienne środowiskowe:
   BITGET_API_KEY       — klucz API
@@ -144,7 +146,22 @@ def _client() -> BitgetClient | None:
     return BitgetClient(key, secret, passphrase, demo=demo)
 
 
-# ── Dźwignia ──────────────────────────────────────────────────────────────────
+# ── Tryb pozycji i dźwignia ───────────────────────────────────────────────────
+
+def _set_hedge_mode(client: BitgetClient):
+    """Ustawia hedge mode — long i short mogą być otwarte równocześnie."""
+    try:
+        resp = client.post("/api/v2/mix/account/set-position-mode", {
+            "productType": PRODUCT_TYPE,
+            "posMode":     "hedge_mode",
+        })
+        if resp.get("code") not in ("00000", "40919"):
+            log.warning(f"[exchange] set_position_mode: {resp.get('msg')}")
+        else:
+            print("[exchange] Hedge mode aktywny.")
+    except Exception as e:
+        log.warning(f"[exchange] set_position_mode: {e}")
+
 
 def _set_leverage(client: BitgetClient):
     for hold_side in ("long", "short"):
@@ -164,88 +181,70 @@ def _set_leverage(client: BitgetClient):
 
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
-def _place_plan_order(client: BitgetClient, s: dict) -> str | None:
-    """Plan order (conditional entry przy W1). Zwraca orderId."""
-    direction = s["direction"]
-    w1        = s["entries"][0]
-    qty       = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-    side      = "buy" if direction == "long" else "sell"
-    try:
-        resp = client.post("/api/v2/mix/order/place-plan-order", {
-            "symbol":       SYMBOL,
-            "productType":  PRODUCT_TYPE,
-            "marginMode":   MARGIN_MODE,
-            "marginCoin":   MARGIN_COIN,
-            "planType":     "normal_plan",
-            "size":         _fmt_qty(qty),
-            "price":        _fmt_price(w1),
-            "triggerPrice": _fmt_price(w1),
-            "triggerType":  "mark_price",
-            "side":         side,
-            "posSide":      direction,
-            "orderType":    "limit",
-        })
-        if resp.get("code") == "00000":
-            oid = resp["data"]["orderId"]
-            print(f"[exchange] Plan order: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}")
-            return oid
-        log.error(f"[exchange] place_plan_order: {resp.get('msg')}")
-    except Exception as e:
-        log.error(f"[exchange] place_plan_order: {e}")
-    return None
-
-
-def _place_tpsl_order(
+def _place_plan_order(
     client: BitgetClient,
     s: dict,
-    plan_type: str,       # "pos_profit" | "pos_loss"
-    trigger_price: float,
     qty: float,
+    preset_tp: float | None,
+    preset_sl: float | None,
+    label: str = "",
 ) -> str | None:
-    """
-    Składa zlecenie TPSL powiązane z pozycją (pos_profit lub pos_loss).
-    Bitget automatycznie anuluje je gdy pozycja zostaje zamknięta.
-    Zwraca orderId.
-    """
+    """Plan order przy W1 z opcjonalnym preset TP i SL. Zwraca orderId."""
     direction = s["direction"]
-    side      = "sell" if direction == "long" else "buy"
+    w1        = s["entries"][0]
+    side      = "buy" if direction == "long" else "sell"
+
+    params = {
+        "symbol":       SYMBOL,
+        "productType":  PRODUCT_TYPE,
+        "marginMode":   MARGIN_MODE,
+        "marginCoin":   MARGIN_COIN,
+        "planType":     "normal_plan",
+        "size":         _fmt_qty(qty),
+        "price":        _fmt_price(w1),
+        "triggerPrice": _fmt_price(w1),
+        "triggerType":  "mark_price",
+        "side":         side,
+        "posSide":      direction,
+        "orderType":    "limit",
+    }
+    if preset_tp is not None:
+        params["presetStopSurplusPrice"] = _fmt_price(preset_tp)
+    if preset_sl is not None:
+        params["presetStopLossPrice"] = _fmt_price(preset_sl)
+
     try:
-        resp = client.post("/api/v2/mix/order/place-tpsl-order", {
-            "symbol":       SYMBOL,
-            "productType":  PRODUCT_TYPE,
-            "marginMode":   MARGIN_MODE,
-            "marginCoin":   MARGIN_COIN,
-            "planType":     plan_type,
-            "size":         _fmt_qty(qty),
-            "triggerPrice": _fmt_price(trigger_price),
-            "triggerType":  "mark_price",
-            "side":         side,
-            "posSide":      direction,
-        })
+        resp = client.post("/api/v2/mix/order/place-plan-order", params)
         if resp.get("code") == "00000":
             oid = resp["data"]["orderId"]
-            print(f"[exchange] {plan_type}: {oid} | {side} {_fmt_qty(qty)} SOL trigger @ {trigger_price}")
+            print(f"[exchange] Plan order {label}: {oid} | {side} {_fmt_qty(qty)} SOL @ {w1}"
+                  f" | TP={preset_tp} SL={preset_sl}")
             return oid
-        log.error(f"[exchange] place_tpsl_order {plan_type} @ {trigger_price}: {resp.get('msg')}")
+        log.error(f"[exchange] place_plan_order {label}: {resp.get('msg')}")
     except Exception as e:
-        log.error(f"[exchange] place_tpsl_order: {e}")
+        log.error(f"[exchange] place_plan_order {label}: {e}")
     return None
 
 
-def _place_tp_sl_orders(client: BitgetClient, s: dict) -> tuple[str | None, str | None, str | None]:
-    """Po wejściu: TP1 (50%), TP2 (50%), SL (100%) przez place-tpsl-order."""
+def _place_two_plan_orders(client: BitgetClient, s: dict) -> tuple[str | None, str | None]:
+    """
+    Składa dwa plan ordery przy W1 — każdy po 50% pozycji:
+      Plan A: preset TP=TP1 + preset SL
+      Plan B: preset TP=TP2 + preset SL
+    Zwraca (oid_tp1, oid_tp2).
+    """
     w1       = s["entries"][0]
     full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
     half_qty = _round_qty(full_qty / 2)
     tps      = s.get("tps", [])
-    sl       = s["sl"]
+    sl       = s.get("sl")
     tp1      = tps[0] if len(tps) > 0 else None
     tp2      = tps[1] if len(tps) > 1 else None
 
-    tp1_id = _place_tpsl_order(client, s, "pos_profit", tp1, half_qty) if tp1 else None
-    tp2_id = _place_tpsl_order(client, s, "pos_profit", tp2, half_qty) if tp2 else None
-    sl_id  = _place_tpsl_order(client, s, "pos_loss",   sl,  full_qty)
-    return tp1_id, tp2_id, sl_id
+    oid_a = _place_plan_order(client, s, half_qty, tp1, sl, label="A(TP1)")
+    oid_b = _place_plan_order(client, s, half_qty, tp2, sl, label="B(TP2)")
+    return oid_a, oid_b
+
 
 
 def _cancel_tpsl_order(client: BitgetClient, order_id: str):
@@ -264,20 +263,49 @@ def _cancel_tpsl_order(client: BitgetClient, order_id: str):
         log.warning(f"[exchange] cancel_tpsl_order {order_id}: {e}")
 
 
+def _find_active_pos_loss_ids(client: BitgetClient) -> list[str]:
+    """Zwraca ID wszystkich aktywnych zleceń pos_loss dla SOLUSDT."""
+    try:
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "planType":    "pos_loss",
+        })
+        if resp.get("code") == "00000":
+            return [o["orderId"] for o in resp["data"].get("entrustedList", [])]
+    except Exception as e:
+        log.warning(f"[exchange] find_active_pos_loss: {e}")
+    return []
+
+
+def _modify_tpsl_order(client: BitgetClient, order_id: str, new_price: float):
+    """Modyfikuje triggerPrice istniejącego zlecenia tpsl (pos_profit lub pos_loss)."""
+    try:
+        resp = client.post("/api/v2/mix/order/modify-tpsl-order", {
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "marginCoin":   MARGIN_COIN,
+            "orderId":      order_id,
+            "triggerPrice": _fmt_price(new_price),
+        })
+        if resp.get("code") == "00000":
+            print(f"[exchange] TPSL order {order_id} zaktualizowany → {new_price}")
+        else:
+            log.warning(f"[exchange] modify_tpsl_order {order_id}: {resp.get('msg')}")
+    except Exception as e:
+        log.warning(f"[exchange] modify_tpsl_order {order_id}: {e}")
+
+
 def _update_sl(client: BitgetClient, s: dict, new_sl: float):
-    """Po TP1: anuluje stary SL, stawia nowy na BE dla 50% pozycji."""
-    old_sl_id = s.get("exchange_sl_order_id")
-    if old_sl_id:
-        _cancel_tpsl_order(client, old_sl_id)
-
-    w1       = s["entries"][0]
-    half_qty = _round_qty(_round_qty((TRADE_USDT * LEVERAGE) / w1) / 2)
-    new_sl_id = _place_tpsl_order(client, s, "pos_loss", new_sl, half_qty)
-
-    if new_sl_id:
-        s["exchange_sl_order_id"] = new_sl_id
-        be_label = "BE" if abs(new_sl - w1) < 0.05 else f"@ {new_sl}"
+    """Po TP1: modyfikuje aktywne preset SL Planu B na BE (sl_after_tp1)."""
+    sl_ids = _find_active_pos_loss_ids(client)
+    if sl_ids:
+        for sl_id in sl_ids:
+            _modify_tpsl_order(client, sl_id, new_sl)
+        be_label = "BE" if abs(new_sl - s["entries"][0]) < 0.05 else f"@ {new_sl}"
         print(f"[exchange] SL przesunięty po TP1 → {new_sl} ({be_label})")
+    else:
+        log.warning("[exchange] _update_sl: brak aktywnych pos_loss do zaktualizowania.")
 
 
 # ── Sprawdzanie statusu zleceń ─────────────────────────────────────────────────
@@ -318,41 +346,6 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
     return "unknown"
 
 
-def _tpsl_order_status(client: BitgetClient, order_id: str, plan_type: str) -> str:
-    """
-    Sprawdza status zlecenia tpsl (pos_profit lub pos_loss).
-    Zwraca: 'live' | 'executed' | 'cancelled' | 'unknown'
-    """
-    try:
-        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
-        })
-        if resp.get("code") == "00000":
-            live_ids = {o["orderId"] for o in resp["data"].get("entrustedList", [])}
-            if order_id in live_ids:
-                return "live"
-
-        resp = client.get("/api/v2/mix/order/orders-plan-history", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
-            "startTime":   str(int((time.time() - 7 * 86400) * 1000)),
-            "endTime":     str(int(time.time() * 1000)),
-        })
-        if resp.get("code") == "00000":
-            for o in resp["data"].get("entrustedList", []):
-                if o["orderId"] == order_id:
-                    status = o.get("planStatus", "")
-                    if status == "executed":
-                        return "executed"
-                    if status in ("cancelled", "expired"):
-                        return "cancelled"
-    except Exception as e:
-        log.warning(f"[exchange] tpsl_order_status {order_id}: {e}")
-    return "unknown"
-
 
 # ── Główna funkcja synchronizacji ─────────────────────────────────────────────
 
@@ -361,15 +354,16 @@ def sync():
     Główna pętla — wywoływana co 15 min przez sol_alert.py.
 
     Dla każdego setupu w pending_setups.json:
-      - NOWY:      składa plan order (conditional entry przy W1)
-      - ANULOWANY: anuluje plan order
-      - OCZEKUJĄCY: sprawdza czy entry wykonany → stawia TP1/TP2/SL przez tpsl
-      - OTWARTY:   sprawdza TP1 → przesuwa SL na BE
+      - NOWY:      składa 2 plan ordery (TP1 leg + TP2 leg, każdy 50%)
+      - ANULOWANY: anuluje oba plan ordery
+      - OCZEKUJĄCY: sprawdza czy entry wykonany → oznacza pozycję jako otwartą
+      - OTWARTY:   wykrywa TP1 → anuluje aktywne SL, stawia BE SL
     """
     client = _client()
     if client is None:
         return
 
+    _set_hedge_mode(client)
     _set_leverage(client)
 
     pending  = _load_pending()
@@ -381,68 +375,69 @@ def sync():
         direction = s.get("direction", "?")
         shadow    = s.get("shadow", False)
         cancelled = bool(s.get("cancel_reason"))
-        order_id  = s.get("exchange_order_id")
         opened    = s.get("exchange_position_opened", False)
         entries   = s.get("entries", [])
 
         if not entries:
             continue
 
-        label = f"#{sid} [{model}] {direction.upper()}"
+        label        = f"#{sid} [{model}] {direction.upper()}"
+        order_id_tp1 = s.get("exchange_order_id_tp1")
+        order_id_tp2 = s.get("exchange_order_id_tp2")
+        any_order_id = order_id_tp1 or order_id_tp2
 
-        # ── Anuluj gdy setup odrzucony ───────────────────────────────────────
-        if (shadow or cancelled) and order_id and not opened:
-            print(f"[exchange] {label}: anulowany → cancel plan order {order_id}")
-            _cancel_tpsl_order(client, order_id)
-            s["exchange_order_id"] = None
+        # ── Anuluj gdy setup odrzucony ────────────────────────────────────────
+        if (shadow or cancelled) and any_order_id and not opened:
+            for oid in filter(None, [order_id_tp1, order_id_tp2]):
+                print(f"[exchange] {label}: anulowany → cancel plan order {oid}")
+                _cancel_tpsl_order(client, oid)
+            s["exchange_order_id_tp1"] = None
+            s["exchange_order_id_tp2"] = None
             modified = True
             continue
 
-        # ── Nowy setup — złóż plan order ─────────────────────────────────────
-        if not shadow and not cancelled and not order_id and s["entry_hit_at"] is None:
-            w1  = entries[0]
-            qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-            oid = _place_plan_order(client, s)
-            if oid:
-                s["exchange_order_id"]        = oid
+        # ── Nowy setup — złóż 2 plan ordery (TP1 leg + TP2 leg) ─────────────
+        if not shadow and not cancelled and not any_order_id and s["entry_hit_at"] is None:
+            w1       = entries[0]
+            full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+            oid_a, oid_b = _place_two_plan_orders(client, s)
+            if oid_a or oid_b:
+                s["exchange_order_id_tp1"]    = oid_a
+                s["exchange_order_id_tp2"]    = oid_b
                 s["exchange_position_opened"] = False
-                s["exchange_tp1_order_id"]    = None
-                s["exchange_tp2_order_id"]    = None
-                s["exchange_sl_order_id"]     = None
-                s["exchange_qty"]             = _fmt_qty(qty)
+                s["exchange_qty"]             = _fmt_qty(full_qty)
                 modified = True
-                print(f"[exchange] {label}: plan order → {oid} ({_fmt_qty(qty)} SOL @ {w1})")
+                print(f"[exchange] {label}: 2 plan ordery złożone (TP1={oid_a}, TP2={oid_b})")
             continue
 
         # ── Oczekujący — sprawdź czy entry wykonany ──────────────────────────
-        if order_id and not opened:
-            status = _plan_order_status(client, order_id)
-            if status == "live":
-                continue
-            if status == "cancelled":
-                print(f"[exchange] {label}: plan order anulowany z zewnątrz")
-                s["exchange_order_id"] = None
+        # Preset TP/SL aktywują się automatycznie — nie trzeba składać dodatkowych zleceń.
+        if any_order_id and not opened:
+            # Wystarczy że jeden z planów wykonany → pozycja otwarta
+            statuses = {
+                oid: _plan_order_status(client, oid)
+                for oid in filter(None, [order_id_tp1, order_id_tp2])
+            }
+            if all(st == "cancelled" for st in statuses.values()):
+                print(f"[exchange] {label}: oba plan ordery anulowane z zewnątrz")
+                s["exchange_order_id_tp1"] = None
+                s["exchange_order_id_tp2"] = None
                 modified = True
                 continue
-            if status == "executed":
-                print(f"[exchange] {label}: entry wykonany! Składam TP/SL przez tpsl.")
-                tp1_id, tp2_id, sl_id = _place_tp_sl_orders(client, s)
+            if any(st == "executed" for st in statuses.values()):
+                print(f"[exchange] {label}: entry wykonany — pozycja otwarta z preset TP/SL.")
                 s["exchange_position_opened"] = True
-                s["exchange_tp1_order_id"]    = tp1_id
-                s["exchange_tp2_order_id"]    = tp2_id
-                s["exchange_sl_order_id"]     = sl_id
                 modified = True
             continue
 
-        # ── Pozycja otwarta — sprawdź TP1, przesuń SL ───────────────────────
+        # ── Pozycja otwarta — po TP1 przesuń SL na BE ────────────────────────
         if opened and not s.get("sl_adjusted"):
-            tp1_oid = s.get("exchange_tp1_order_id")
-            if tp1_oid and _tpsl_order_status(client, tp1_oid, "pos_profit") == "executed":
+            # tp1_hit_at ustawiany przez check_pending w sol_alert.py
+            if s.get("tp1_hit_at"):
                 w1       = entries[0]
                 sl_after = s.get("sl_after_tp1") or w1
                 _update_sl(client, s, sl_after)
                 s["sl_adjusted"] = True
-                s["tp1_hit_at"]  = s.get("tp1_hit_at") or int(time.time())
                 modified = True
 
     if modified:
