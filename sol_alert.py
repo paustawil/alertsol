@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
 import exchange_trader
+import db
 
 TZ = ZoneInfo("Europe/Warsaw")
 
@@ -28,9 +29,6 @@ XAI_KEY          = os.getenv("XAI_API_KEY", "")
 SYMBOL           = "SOLUSDT"
 MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
-PENDING_FILE     = "pending_setups.json"
-COOLDOWN_FILE    = "last_alerts.json"
-SETUP_COUNTER_FILE = "setup_counter.json"
 SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
 ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
@@ -1067,30 +1065,19 @@ def validate_setup(setup: dict, model: str) -> str:
 
 # ── Śledzenie setupów (pending) ───────────────────────────────────────────────
 def next_setup_id() -> int:
-    """Zwraca kolejny numer setupu i inkrementuje licznik."""
-    counter = 1
-    if os.path.exists(SETUP_COUNTER_FILE):
-        with open(SETUP_COUNTER_FILE) as f:
-            counter = json.load(f).get("next_id", 1)
-    with open(SETUP_COUNTER_FILE, "w") as f:
-        json.dump({"next_id": counter + 1}, f)
-    return counter
+    """Shim — ID jest teraz generowany przez SERIAL w PostgreSQL (patrz db.insert_setup)."""
+    raise RuntimeError("next_setup_id() nie powinien być wywoływany bezpośrednio — użyj db.insert_setup()")
 
 
 def save_pending(setup: dict, model: str, rejection: str, current_price: float):
-    pending = []
-    if os.path.exists(PENDING_FILE):
-        with open(PENDING_FILE) as f:
-            pending = json.load(f)
-
-    entries = setup.get("entries", [])
-    tps     = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
-    tps     = [t for t in tps if t is not None]
+    entries   = setup.get("entries", [])
+    tps       = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
+    tps       = [t for t in tps if t is not None]
     new_level = entries[0] if entries else current_price
     direction = setup.get("direction", "-")
 
     # Nie dodawaj duplikatu — ten sam model/kierunek/poziom już w pending
-    for p in pending:
+    for p in db.get_active_setups():
         if (p["model"] == model
                 and p["direction"] == direction
                 and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5
@@ -1108,10 +1095,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
     else:
         entry_trigger = "falling"
 
-    sid = next_setup_id()
-    setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
-    pending.append({
-        "setup_id":        sid,
+    row = {
         "alert_time":      datetime.now(timezone.utc).isoformat(),
         "alert_timestamp": int(datetime.now(timezone.utc).timestamp()),
         "model":           model,
@@ -1123,6 +1107,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
         "price_at_alert":  round(current_price, 2),
         "warunek":         setup.get("warunek", "-"),
         "entry_trigger":   entry_trigger,
+        "reasoning":       setup.get("reasoning", ""),
         "entries":         entries,
         "sl":              setup.get("sl"),
         "sl_after_tp1":    setup.get("sl_after_tp1"),
@@ -1132,10 +1117,9 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
         "tp1_hit_at":      None,
         "sl_adjusted":     False,
         "entries_hit":     1,
-    })
-
-    with open(PENDING_FILE, "w") as f:
-        json.dump(pending, f, indent=2)
+    }
+    sid = db.insert_setup(row)
+    setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
 
 
 def _hits(candle: dict, price: float, direction: str, side: str, entry_trigger: str = None) -> bool:
@@ -1150,9 +1134,7 @@ def _hits(candle: dict, price: float, direction: str, side: str, entry_trigger: 
 
 
 def check_pending(candles_m15: list[dict]):
-    if not os.path.exists(PENDING_FILE): return
-    with open(PENDING_FILE) as f:
-        pending = json.load(f)
+    pending = db.get_active_setups()
     if not pending: return
 
     now_ts        = int(datetime.now(timezone.utc).timestamp())
@@ -1172,10 +1154,8 @@ def check_pending(candles_m15: list[dict]):
             if hit is None:
                 if age_h > ENTRY_TIMEOUT_H:
                     print(f"[pending] {s['model']} {d}: nie weszlo")
-                    if s.get("shadow"):
-                        if not log_to_anulowane_grok(s, "nie weszlo", None, None, None, None, 0):
-                            still_pending.append(s)
-                    elif log_to_wyniki(s, "nie weszlo", None, None, None, None, 0):
+                    db.resolve_setup(s["setup_id"], "nie weszlo", None, None, 0, None)
+                    if not s.get("shadow"):
                         try:
                             sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                             send_telegram(
@@ -1185,8 +1165,6 @@ def check_pending(candles_m15: list[dict]):
                             )
                         except Exception:
                             pass
-                    else:
-                        still_pending.append(s)
                 else:
                     still_pending.append(s)
                 continue
@@ -1285,34 +1263,27 @@ def check_pending(candles_m15: list[dict]):
         if result:
             sign = "+" if move >= 0 else ""
             print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
-            if s.get("shadow"):
-                if not log_to_anulowane_grok(s, result, s["entry_hit_at"], exit_ts, eff_entry, eff_exit, move):
-                    still_pending.append(s)
-            else:
-                if log_to_wyniki(s, result, s["entry_hit_at"], exit_ts, eff_entry, eff_exit, move):
-                    icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
-                    sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                    try:
-                        send_telegram(
-                            f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}\n"
-                            f"Setup {s['type']} {d.upper()} zamknięty\n"
-                            f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
-                        )
-                    except Exception:
-                        pass
-                else:
-                    print(f"[pending] Blad zapisu Wyniki — setup zostaje w pending, retry za 15 min")
-                    still_pending.append(s)
+            db.resolve_setup(s["setup_id"], result, eff_entry, eff_exit, move, exit_ts)
+            if not s.get("shadow"):
+                icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
+                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                try:
+                    send_telegram(
+                        f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}\n"
+                        f"Setup {s['type']} {d.upper()} zamknięty\n"
+                        f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
+                    )
+                except Exception:
+                    pass
         elif age_h > TRADE_TIMEOUT_H:
-            if s.get("shadow"):
-                log_to_anulowane_grok(s, "nieokreslone", s["entry_hit_at"], None, None, None, 0)
-            else:
-                log_to_wyniki(s, "nieokreslone", s["entry_hit_at"], None, None, None, 0)
+            db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, 0, None)
         else:
             still_pending.append(s)
-
-    with open(PENDING_FILE, "w") as f:
-        json.dump(still_pending, f, indent=2)
+            db.update_setup(s["setup_id"],
+                            entry_hit_at=s.get("entry_hit_at"),
+                            tp1_hit_at=s.get("tp1_hit_at"),
+                            sl_adjusted=s.get("sl_adjusted", False),
+                            entries_hit=s.get("entries_hit", 1))
 
 
 # ── Grok — walidacja oczekujących setupów ────────────────────────────────────
@@ -1375,10 +1346,7 @@ def call_grok_validation(pending_non_entered: list[dict], candles_m15: list[dict
 
 def check_pending_with_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float):
     """Pyta Groka o nieotwarte setupy i przenosi anulowane w tryb shadow tracking."""
-    if not os.path.exists(PENDING_FILE):
-        return
-    with open(PENDING_FILE) as f:
-        pending = json.load(f)
+    pending = db.get_active_setups()
 
     non_entered = [s for s in pending if s.get("entry_hit_at") is None and not s.get("shadow")]
     if not non_entered:
@@ -1423,31 +1391,22 @@ def check_pending_with_grok(candles_m15: list[dict], candles_h1: list[dict], cur
             except Exception:
                 pass
 
-    with open(PENDING_FILE, "w") as f:
-        json.dump(pending, f, indent=2)
+    for s in pending:
+        if s.get("shadow") and s.get("setup_id") in cancel_map:
+            db.update_setup(s["setup_id"],
+                            shadow=True,
+                            cancel_reason=s.get("cancel_reason", ""),
+                            cancel_time=s.get("cancel_time"),
+                            cancel_price=s.get("cancel_price"))
     print(f"[grok-valid] Anulowano {cancelled} setupów, shadow tracking aktywny.")
 
 
 # ── Anti-spam ─────────────────────────────────────────────────────────────────
 def was_alerted(model: str, level: float, direction: str) -> bool:
-    if not os.path.exists(COOLDOWN_FILE): return False
-    try:
-        data = json.load(open(COOLDOWN_FILE)).get(model, {})
-        last = datetime.fromisoformat(data["time"])
-        if last.tzinfo is None: last = last.replace(tzinfo=timezone.utc)
-        hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
-        return abs(data.get("level", 0) - level) < 0.5 and data.get("direction") == direction and hours < COOLDOWN_HOURS
-    except Exception:
-        return False
+    return db.was_alerted(model, level, direction)
 
 def save_alerted(model: str, level: float, direction: str):
-    data = {}
-    if os.path.exists(COOLDOWN_FILE):
-        with open(COOLDOWN_FILE) as f:
-            data = json.load(f)
-    data[model] = {"level": level, "direction": direction, "time": datetime.now(timezone.utc).isoformat()}
-    with open(COOLDOWN_FILE, "w") as f:
-        json.dump(data, f)
+    db.save_alerted(model, level, direction)
 
 
 # ── Telegram ──────────────────────────────────────────────────────────────────

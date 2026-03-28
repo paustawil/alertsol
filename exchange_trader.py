@@ -42,7 +42,6 @@ TRADE_USDT   = float(os.getenv("BITGET_TRADE_USDT") or "100.0")
 QTY_STEP     = 0.1
 PRICE_DEC    = 2
 BASE_URL     = "https://api.bitget.com"
-PENDING_FILE = "pending_setups.json"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -57,14 +56,12 @@ def _fmt_price(p: float) -> str:
     return f"{p:.{PRICE_DEC}f}"
 
 def _load_pending() -> list[dict]:
-    if not os.path.exists(PENDING_FILE):
-        return []
-    with open(PENDING_FILE) as f:
-        return json.load(f)
+    import db
+    return db.load_pending()
 
 def _save_pending(pending: list[dict]):
-    with open(PENDING_FILE, "w") as f:
-        json.dump(pending, f, indent=2)
+    import db
+    db.save_pending_list(pending)
 
 
 # ── Klient Bitget REST API ─────────────────────────────────────────────────────
