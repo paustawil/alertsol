@@ -35,6 +35,7 @@ SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
 ENTRY_TIMEOUT_H  = 4
 TRADE_TIMEOUT_H  = 24
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
+MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzucony jako zbyt niepewny
 ENABLE_CLAUDE    = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT       = False  # wyłączony tymczasowo — kod zachowany
 
@@ -407,16 +408,21 @@ Twoje zadanie:
 Zasady:
 - Analiza techniczna ma priorytet (70–80%). Sentyment i kontekst makro — 20–30%.
 - Odpowiadaj zawsze po polsku, konkretnie, bez powtarzania ostrzeżeń o ryzyku.
-- Ustaw send_alert=true tylko gdy widzisz wyraźny, konkretny setup z jasnym entry, SL i TP. Przy bocznym rynku lub braku wyraźnego setupu — send_alert=false.
+- Ustaw send_alert=true TYLKO gdy spełnione są WSZYSTKIE poniższe warunki:
+  a) H1 i M15 wskazują ten sam kierunek (tf_aligned=true) — jeśli timeframy są sprzeczne, send_alert=false.
+  b) bias_proc >= 65 — jeśli przekonanie jest niższe, oznacza to zawahanie rynku, ustaw send_alert=false.
+  c) Widzisz wyraźny, konkretny setup z jasnym entry, SL i TP.
+- Przy bocznym rynku, choppingu, sprzecznych sygnałach H1/M15 lub niskim przekonaniu — send_alert=false.
+- tf_aligned: Oceń czy H1 i M15 pokazują ten sam kierunek. true = zgodne, false = sprzeczne lub jeden neutralny.
 - sl_after_tp1: Po osiągnięciu TP1 SL należy przesunąć. Znajdź ostatni strukturalny support (long) lub resistance (short) między W1 a TP1. Jeśli taki poziom istnieje i jest w strefie zysku (powyżej W1 dla long, poniżej W1 dla short) — użyj go jako sl_after_tp1. Jeśli nie — użyj W1 (break-even). Zawsze podaj tę wartość gdy send_alert=true.
 
 Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Gdy send_alert=true:
-{"send_alert":true,"bias":"long","bias_proc":65,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
 
 Gdy send_alert=false:
-{"send_alert":false,"bias":"neutral","bias_proc":50,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
+{"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
 
 
 # ── System prompt dla Grok — walidacja oczekujących setupów ──────────────────
@@ -1587,7 +1593,16 @@ def main():
         bias       = grok_result.get("bias", "neutral")
         bias_proc  = grok_result.get("bias_proc", 0)
         send_alert = grok_result.get("send_alert", False)
-        print(f"[grok] Bias: {bias} ({bias_proc}%) | send_alert={send_alert}")
+        tf_aligned = grok_result.get("tf_aligned", True)
+        print(f"[grok] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
+
+        # Filtr zawahania: odrzuć setup jeśli przekonanie za niskie lub timeframy sprzeczne
+        if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
+            print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnał.")
+            send_alert = False
+        if send_alert and not tf_aligned:
+            print(f"[grok] Odrzucono: tf_aligned=false — H1 i M15 sprzeczne.")
+            send_alert = False
 
         if send_alert and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])
