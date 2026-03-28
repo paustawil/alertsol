@@ -1,8 +1,9 @@
 name: Exchange Sync
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'   # co 5 minut
+  # schedule wyłączony — Exchange Sync uruchamiany ręcznie do testów Bitget
+  # schedule:
+  #   - cron: '*/5 * * * *'   # co 5 minut
   workflow_dispatch:         # ręczne uruchomienie
 
 jobs:
