@@ -231,58 +231,6 @@ def _place_two_plan_orders(client: BitgetClient, s: dict) -> tuple[str | None, s
     return oid_a, oid_b
 
 
-def _place_tpsl_order(
-    client: BitgetClient,
-    s: dict,
-    plan_type: str,       # "pos_profit" | "pos_loss"
-    trigger_price: float,
-    qty: float,
-) -> str | None:
-    """
-    Składa zlecenie TPSL powiązane z pozycją (pos_profit lub pos_loss).
-    Bitget automatycznie anuluje je gdy pozycja zostaje zamknięta.
-    Zwraca orderId.
-    """
-    direction = s["direction"]
-    side      = "sell" if direction == "long" else "buy"
-    try:
-        resp = client.post("/api/v2/mix/order/place-tpsl-order", {
-            "symbol":       SYMBOL,
-            "productType":  PRODUCT_TYPE,
-            "marginMode":   MARGIN_MODE,
-            "marginCoin":   MARGIN_COIN,
-            "planType":     plan_type,
-            "size":         _fmt_qty(qty),
-            "triggerPrice": _fmt_price(trigger_price),
-            "triggerType":  "mark_price",
-            "side":         side,
-            "posSide":      direction,
-        })
-        if resp.get("code") == "00000":
-            oid = resp["data"]["orderId"]
-            print(f"[exchange] {plan_type}: {oid} | {side} {_fmt_qty(qty)} SOL trigger @ {trigger_price}")
-            return oid
-        log.error(f"[exchange] place_tpsl_order {plan_type} @ {trigger_price}: {resp.get('msg')}")
-    except Exception as e:
-        log.error(f"[exchange] place_tpsl_order: {e}")
-    return None
-
-
-def _place_tp_sl_orders(client: BitgetClient, s: dict) -> tuple[str | None, str | None, str | None]:
-    """Po wejściu: TP1 (50%), TP2 (50%), SL (100%) przez place-tpsl-order."""
-    w1       = s["entries"][0]
-    full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-    half_qty = _round_qty(full_qty / 2)
-    tps      = s.get("tps", [])
-    sl       = s["sl"]
-    tp1      = tps[0] if len(tps) > 0 else None
-    tp2      = tps[1] if len(tps) > 1 else None
-
-    tp1_id = _place_tpsl_order(client, s, "pos_profit", tp1, half_qty) if tp1 else None
-    tp2_id = _place_tpsl_order(client, s, "pos_profit", tp2, half_qty) if tp2 else None
-    sl_id  = _place_tpsl_order(client, s, "pos_loss",   sl,  full_qty)
-    return tp1_id, tp2_id, sl_id
-
 
 def _cancel_tpsl_order(client: BitgetClient, order_id: str):
     """Anuluje zlecenie tpsl (lub plan order)."""
@@ -300,8 +248,8 @@ def _cancel_tpsl_order(client: BitgetClient, order_id: str):
         log.warning(f"[exchange] cancel_tpsl_order {order_id}: {e}")
 
 
-def _cancel_all_active_pos_loss(client: BitgetClient):
-    """Anuluje wszystkie aktywne zlecenia pos_loss dla SOLUSDT (po TP1 preset nie zwraca ID)."""
+def _find_active_pos_loss_ids(client: BitgetClient) -> list[str]:
+    """Zwraca ID wszystkich aktywnych zleceń pos_loss dla SOLUSDT."""
     try:
         resp = client.get("/api/v2/mix/order/orders-plan-pending", {
             "symbol":      SYMBOL,
@@ -309,27 +257,40 @@ def _cancel_all_active_pos_loss(client: BitgetClient):
             "planType":    "pos_loss",
         })
         if resp.get("code") == "00000":
-            orders = resp["data"].get("entrustedList", [])
-            for o in orders:
-                _cancel_tpsl_order(client, o["orderId"])
-            if orders:
-                print(f"[exchange] Anulowano {len(orders)} aktywnych SL (pos_loss).")
+            return [o["orderId"] for o in resp["data"].get("entrustedList", [])]
     except Exception as e:
-        log.warning(f"[exchange] cancel_all_pos_loss: {e}")
+        log.warning(f"[exchange] find_active_pos_loss: {e}")
+    return []
+
+
+def _modify_tpsl_order(client: BitgetClient, order_id: str, new_price: float):
+    """Modyfikuje triggerPrice istniejącego zlecenia tpsl (pos_profit lub pos_loss)."""
+    try:
+        resp = client.post("/api/v2/mix/order/modify-tpsl-order", {
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "marginCoin":   MARGIN_COIN,
+            "orderId":      order_id,
+            "triggerPrice": _fmt_price(new_price),
+        })
+        if resp.get("code") == "00000":
+            print(f"[exchange] TPSL order {order_id} zaktualizowany → {new_price}")
+        else:
+            log.warning(f"[exchange] modify_tpsl_order {order_id}: {resp.get('msg')}")
+    except Exception as e:
+        log.warning(f"[exchange] modify_tpsl_order {order_id}: {e}")
 
 
 def _update_sl(client: BitgetClient, s: dict, new_sl: float):
-    """Po TP1: anuluje wszystkie aktywne SL (preset nie zwraca ID), stawia BE SL dla 50%."""
-    _cancel_all_active_pos_loss(client)
-
-    w1       = s["entries"][0]
-    half_qty = _round_qty(_round_qty((TRADE_USDT * LEVERAGE) / w1) / 2)
-    new_sl_id = _place_tpsl_order(client, s, "pos_loss", new_sl, half_qty)
-
-    if new_sl_id:
-        s["exchange_sl_order_id"] = new_sl_id
-        be_label = "BE" if abs(new_sl - w1) < 0.05 else f"@ {new_sl}"
+    """Po TP1: modyfikuje aktywne preset SL Planu B na BE (sl_after_tp1)."""
+    sl_ids = _find_active_pos_loss_ids(client)
+    if sl_ids:
+        for sl_id in sl_ids:
+            _modify_tpsl_order(client, sl_id, new_sl)
+        be_label = "BE" if abs(new_sl - s["entries"][0]) < 0.05 else f"@ {new_sl}"
         print(f"[exchange] SL przesunięty po TP1 → {new_sl} ({be_label})")
+    else:
+        log.warning("[exchange] _update_sl: brak aktywnych pos_loss do zaktualizowania.")
 
 
 # ── Sprawdzanie statusu zleceń ─────────────────────────────────────────────────
@@ -369,41 +330,6 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
         log.warning(f"[exchange] plan_order_status {order_id}: {e}")
     return "unknown"
 
-
-def _tpsl_order_status(client: BitgetClient, order_id: str, plan_type: str) -> str:
-    """
-    Sprawdza status zlecenia tpsl (pos_profit lub pos_loss).
-    Zwraca: 'live' | 'executed' | 'cancelled' | 'unknown'
-    """
-    try:
-        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
-        })
-        if resp.get("code") == "00000":
-            live_ids = {o["orderId"] for o in resp["data"].get("entrustedList", [])}
-            if order_id in live_ids:
-                return "live"
-
-        resp = client.get("/api/v2/mix/order/orders-plan-history", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
-            "startTime":   str(int((time.time() - 7 * 86400) * 1000)),
-            "endTime":     str(int(time.time() * 1000)),
-        })
-        if resp.get("code") == "00000":
-            for o in resp["data"].get("entrustedList", []):
-                if o["orderId"] == order_id:
-                    status = o.get("planStatus", "")
-                    if status == "executed":
-                        return "executed"
-                    if status in ("cancelled", "expired"):
-                        return "cancelled"
-    except Exception as e:
-        log.warning(f"[exchange] tpsl_order_status {order_id}: {e}")
-    return "unknown"
 
 
 # ── Główna funkcja synchronizacji ─────────────────────────────────────────────
