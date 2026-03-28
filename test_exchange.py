@@ -224,37 +224,28 @@ def test_place_sl(client, price, dry_run=False):
 def test_verify_tpsl_pending(client, tp1_oid, tp2_oid, sl_oid):
     sep("[6] Sprawdź pending TPSL orders")
 
-    for plan_type, label, expected_oid in [
-        ("profit_plan", "TP (profit_plan)", tp1_oid),
-        ("loss_plan",   "SL (loss_plan)",   sl_oid),
-    ]:
-        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "planType":    plan_type,
-        })
-        raw(f"pending {plan_type}", resp)
-        if resp.get("code") == "00000":
-            orders = resp["data"].get("entrustedList", [])
-            ids    = [o["orderId"] for o in orders]
-            info(f"{label}: znaleziono {len(orders)} orderów, IDs: {ids}")
+    # profit_plan i loss_plan odpytujemy razem przez planType=profit_loss
+    resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+        "symbol":      SYMBOL,
+        "productType": PRODUCT_TYPE,
+        "planType":    "profit_loss",
+    })
+    raw("pending profit_loss", resp)
+    if resp.get("code") == "00000":
+        orders = resp["data"].get("entrustedList", [])
+        ids    = [o["orderId"] for o in orders]
+        info(f"Znaleziono {len(orders)} pending TPSL orderów, IDs: {ids}")
 
-            if tp1_oid in ids:
-                ok(f"TP1 ({tp1_oid}) widoczny w pending ✓")
-            elif tp1_oid:
-                fail(f"TP1 ({tp1_oid}) NIE widoczny w pending")
-
-            if plan_type == "profit_plan" and tp2_oid in ids:
-                ok(f"TP2 ({tp2_oid}) widoczny w pending ✓")
-            elif plan_type == "profit_plan" and tp2_oid:
-                fail(f"TP2 ({tp2_oid}) NIE widoczny w pending")
-
-            if plan_type == "loss_plan" and sl_oid in ids:
-                ok(f"SL  ({sl_oid}) widoczny w pending ✓")
-            elif plan_type == "loss_plan" and sl_oid:
-                fail(f"SL  ({sl_oid}) NIE widoczny w pending")
-        else:
-            fail(f"Błąd odpytania pending {plan_type}: {resp.get('msg')}")
+        for oid, label in [(tp1_oid, "TP1"), (tp2_oid, "TP2"), (sl_oid, "SL")]:
+            if not oid:
+                continue
+            if oid in ids:
+                order = next(o for o in orders if o["orderId"] == oid)
+                ok(f"{label} ({oid}) widoczny — planType={order.get('planType')} size={order.get('size')} trigger={order.get('triggerPrice')}")
+            else:
+                fail(f"{label} ({oid}) NIE widoczny w pending")
+    else:
+        fail(f"Błąd odpytania pending profit_loss: {resp.get('msg')}")
 
 
 def test_modify_sl(client, sl_oid, price, dry_run=False):
@@ -299,7 +290,7 @@ def test_verify_sl_modified(client, sl_oid, expected_price, expected_size):
     resp = client.get("/api/v2/mix/order/orders-plan-pending", {
         "symbol":      SYMBOL,
         "productType": PRODUCT_TYPE,
-        "planType":    "loss_plan",
+        "planType":    "profit_loss",
     })
     raw("pending loss_plan po modyfikacji", resp)
     if resp.get("code") == "00000":
