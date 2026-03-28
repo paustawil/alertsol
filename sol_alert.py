@@ -763,6 +763,7 @@ WYNIKI_HEADER = [
     "ID", "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
     "Kurs", "W1", "W2", "Warunek", "SL", "TP1", "TP2", "RR",
     "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik", "PnL $",
+    "Reasoning",
 ]
 ANULOWANE_GROK_HEADER = [
     "ID", "Snapshot", "Kierunek", "W1", "SL", "TP1", "TP2", "RR", "Score",
@@ -883,6 +884,7 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
             round(eff_entry, 2) if eff_entry is not None else "",
             round(eff_exit,  2) if eff_exit  is not None else "",
             entry_dt, exit_dt, result, round(move, 2),
+            s.get("reasoning", "") or "",
         ])
         print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f} [{entry_dt}-{exit_dt}]")
         return True

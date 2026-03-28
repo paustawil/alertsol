@@ -356,7 +356,7 @@ def _get_test_sheets(reset: bool = False):
         "W1", "W2", "SL", "TP1", "TP2", "RR",
         "Entries_hit", "Śr.Entry", "Śr.Exit",
         "Wejście o", "Wyjście o", "Wynik (TP1+TP2)", "PnL $ (TP1+TP2)",
-        "Wynik (TP1 only)", "PnL $ (TP1 only)",
+        "Wynik (TP1 only)", "PnL $ (TP1 only)", "Reasoning",
     ]
 
     for name, header, rows in [
@@ -435,6 +435,7 @@ def log_wynik(sh2, snapshot_label: str, model: str, rejection: str, setup: dict,
         pnl_tp12,
         sim_tp1["result"],
         pnl_tp1,
+        setup.get("reasoning", "-"),
     ])
 
 
