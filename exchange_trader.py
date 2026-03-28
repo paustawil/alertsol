@@ -222,6 +222,22 @@ def _cancel_plan_order(client: BitgetClient, order_id: str):
         log.warning(f"[exchange] cancel_plan_order {order_id}: {e}")
 
 
+def _cancel_regular_order(client: BitgetClient, order_id: str):
+    """Anuluje zwykły limit order (TP)."""
+    try:
+        resp = client.post("/api/v2/mix/order/cancel-order", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "orderId":     order_id,
+        })
+        if resp.get("code") == "00000":
+            print(f"[exchange] TP order anulowany: {order_id}")
+        else:
+            log.warning(f"[exchange] cancel_regular_order {order_id}: {resp.get('msg')}")
+    except Exception as e:
+        log.warning(f"[exchange] cancel_regular_order {order_id}: {e}")
+
+
 def _place_tp_order(client: BitgetClient, s: dict, tp_price: float, qty: float) -> str | None:
     """Składa limit order TP (reduce-only, close). Zwraca orderId."""
     direction = s["direction"]
@@ -451,16 +467,45 @@ def sync():
                 modified = True
             continue
 
-        # ── Pozycja otwarta — sprawdź TP1, przesuń SL ───────────────────────
-        if opened and not s.get("sl_adjusted"):
+        # ── Pozycja otwarta — sprawdź TP1/TP2/SL ───────────────────────────
+        if opened:
+            sl_oid  = s.get("exchange_sl_order_id")
             tp1_oid = s.get("exchange_tp1_order_id")
-            if tp1_oid and _is_order_filled(client, tp1_oid):
-                w1       = entries[0]
-                sl_after = s.get("sl_after_tp1") or w1  # null → W1 = breakeven
-                _update_sl(client, s, sl_after)
-                s["sl_adjusted"] = True
-                s["tp1_hit_at"]  = s.get("tp1_hit_at") or int(time.time())
-                modified = True
+            tp2_oid = s.get("exchange_tp2_order_id")
+
+            # Sprawdź czy SL został wykonany → anuluj pozostałe TP ordery
+            if sl_oid and not s.get("sl_hit"):
+                sl_status = _plan_order_status(client, sl_oid)
+                if sl_status == "executed":
+                    print(f"[exchange] {label}: SL wykonany! Anuluję pozostałe TP.")
+                    if tp1_oid and not _is_order_filled(client, tp1_oid):
+                        _cancel_regular_order(client, tp1_oid)
+                    if tp2_oid and not _is_order_filled(client, tp2_oid):
+                        _cancel_regular_order(client, tp2_oid)
+                    s["sl_hit"] = True
+                    s["exchange_position_opened"] = False
+                    modified = True
+                    continue
+
+            if not s.get("sl_adjusted"):
+                # TP1 jeszcze nie trafiony — sprawdź
+                if tp1_oid and _is_order_filled(client, tp1_oid):
+                    w1       = entries[0]
+                    sl_after = s.get("sl_after_tp1") or w1  # null → W1 = breakeven
+                    _update_sl(client, s, sl_after)
+                    s["sl_adjusted"] = True
+                    s["tp1_hit_at"]  = s.get("tp1_hit_at") or int(time.time())
+                    modified = True
+            else:
+                # Po TP1 — sprawdź TP2, anuluj SL gdy TP2 wykonany
+                if tp2_oid and _is_order_filled(client, tp2_oid):
+                    print(f"[exchange] {label}: TP2 wykonany! Anuluję SL.")
+                    if sl_oid:
+                        _cancel_plan_order(client, sl_oid)
+                        s["exchange_sl_order_id"] = None
+                    s["tp2_hit_at"] = s.get("tp2_hit_at") or int(time.time())
+                    s["exchange_position_opened"] = False
+                    modified = True
 
     if modified:
         _save_pending(pending)
