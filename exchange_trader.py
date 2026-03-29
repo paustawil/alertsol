@@ -603,7 +603,7 @@ def sync():
 
                 if sl_status == "cancelled":
                     # SL anulowany ręcznie — pozycja zamknięta manualnie
-                    log.warning(f"[exchange] {label}: SL anulowany ręcznie — zwalniam slot")
+                    log.warning(f"[exchange] {label}: SL anulowany ręcznie — zwalniam slot i zamykam setup")
                     for oid in filter(None, [tp1_oid, tp2_oid]):
                         _cancel_order(client, oid, "profit_plan")
                     s["exchange_sl_oid"]  = None
@@ -611,6 +611,9 @@ def sync():
                     s["exchange_tp2_oid"] = None
                     s["exchange_done"]    = True
                     modified = True
+                    sid = s.get("setup_id")
+                    if sid:
+                        db.resolve_setup(sid, "nieokreslone", s.get("avg_entry"), None, 0, None)
                     continue
 
             # Sprawdź TP1 (jeśli jeszcze nie wykonany)
