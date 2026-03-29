@@ -243,12 +243,14 @@ def _place_tpsl_orders(
     s: dict,
     full_qty: float,
     half_qty: float,
+    skip_sl: bool = False,
 ) -> tuple[str | None, str | None, str | None]:
     """
     Po wejściu w pozycję składa 3 oddzielne TPSL ordery:
       TP1: profit_plan, half_qty SOL, trigger=TP1
       TP2: profit_plan, half_qty SOL, trigger=TP2
       SL:  loss_plan,   full_qty SOL, trigger=SL
+    skip_sl=True — pomija SL (gdy SL już istnieje w Bitget).
     Zwraca (tp1_id, tp2_id, sl_id).
     """
     direction = s["direction"]
@@ -303,7 +305,7 @@ def _place_tpsl_orders(
         except Exception as e:
             log.error(f"[exchange] #{sid} place TP2: {e}")
 
-    if sl is not None:
+    if sl is not None and not skip_sl:
         try:
             resp = client.post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       SYMBOL,
@@ -578,6 +580,18 @@ def sync():
                       f"(TP1={tp1_id} TP2={tp2_id} SL={sl_id})")
             continue
 
+        # ── Pozycja otwarta, SL jest ale brak TP — re-place tylko TP ─────────
+        if pos_open and not ex_done and sl_oid and not tp1_oid and not tp2_oid and not tp1_done:
+            full_qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
+            half_qty = float((s.get("exchange_qty_half") or "0").replace(",", "."))
+            if full_qty > 0:
+                log.warning(f"[exchange] {label}: brakuje TP przy istniejącym SL — re-place TP")
+                tp1_id, tp2_id, _ = _place_tpsl_orders(client, s, full_qty, half_qty, skip_sl=True)
+                s["exchange_tp1_oid"] = tp1_id
+                s["exchange_tp2_oid"] = tp2_id
+                modified = True
+            continue
+
         # ── Pozycja otwarta, brak TPSL — retry składania zleceń ──────────────
         if pos_open and not ex_done and not tp1_oid and not tp2_oid and not sl_oid:
             full_qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
@@ -608,6 +622,8 @@ def sync():
                     s["exchange_tp2_oid"] = None
                     s["exchange_done"]    = True
                     modified = True
+                    if sid and sid != "?":
+                        db.resolve_setup(int(sid), "sl", s.get("avg_entry"), None, 0, None)
                     continue
 
                 if sl_status == "cancelled":
