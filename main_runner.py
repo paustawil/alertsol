@@ -241,6 +241,13 @@ def admin_resolve_setup(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "nieokreslone"}
 
 
+@app.get("/admin/reset-entry/{setup_id}")
+def admin_reset_entry(setup_id: int):
+    """Resetuje entry_hit_at do NULL — cofa setup do statusu 'oczekujący'."""
+    db.update_setup(setup_id, entry_hit_at=None, tp1_hit_at=None, sl_adjusted=False)
+    return {"ok": True, "setup_id": setup_id, "result": "entry zresetowane — setup wrócił do oczekujących"}
+
+
 @app.get("/api/stats")
 def api_stats():
     """JSON API dla przyszłej integracji z Metabase."""
