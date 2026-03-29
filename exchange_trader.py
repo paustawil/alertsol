@@ -470,7 +470,7 @@ def sync():
     # Guard: maksymalnie MAX_POSITIONS aktywnych pozycji na raz.
     active_count = sum(
         1 for s in pending
-        if (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
+        if s.get("exchange_position_opened")
         and not s.get("exchange_done", False)
     )
     exchange_slot_taken = active_count >= MAX_POSITIONS
