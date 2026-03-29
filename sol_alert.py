@@ -1364,10 +1364,10 @@ def call_grok_validation(pending_non_entered: list[dict], candles_m15: list[dict
     setups_txt = json.dumps([{
         "setup_id":  s.get("setup_id"),
         "direction": s["direction"],
-        "w1":        s["entries"][0] if s["entries"] else None,
-        "sl":        s["sl"],
-        "tp1":       s["tps"][0] if s["tps"] else None,
-        "tp2":       s["tps"][1] if len(s["tps"]) > 1 else None,
+        "w1":        float(s["entries"][0]) if s["entries"] else None,
+        "sl":        float(s["sl"]),
+        "tp1":       float(s["tps"][0]) if s["tps"] else None,
+        "tp2":       float(s["tps"][1]) if len(s["tps"]) > 1 else None,
         "warunek":   s.get("warunek", ""),
         "alert_time": s["alert_time"],
     } for s in pending_non_entered], ensure_ascii=False)
