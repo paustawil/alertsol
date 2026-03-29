@@ -39,7 +39,8 @@ PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN  = "USDT"
 MARGIN_MODE  = "crossed"
 LEVERAGE     = 20
-TRADE_USDT   = float(os.getenv("BITGET_TRADE_USDT") or "100.0")
+TRADE_USDT    = float(os.getenv("BITGET_TRADE_USDT") or "100.0")
+MAX_POSITIONS = int(os.getenv("BITGET_MAX_POSITIONS") or "5")
 QTY_STEP     = 0.1
 PRICE_DEC    = 2
 BASE_URL     = "https://api.bitget.com"
@@ -466,20 +467,15 @@ def sync():
     pending  = _load_pending()
     modified = False
 
-    # Guard: tylko jedna pozycja na raz w Bitget.
-    # Jeśli jakikolwiek setup ma już plan order lub otwartą pozycję → blokuj nowe.
-    exchange_slot_taken = any(
-        (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
+    # Guard: maksymalnie MAX_POSITIONS aktywnych pozycji na raz.
+    active_count = sum(
+        1 for s in pending
+        if (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
         and not s.get("exchange_done", False)
-        for s in pending
     )
+    exchange_slot_taken = active_count >= MAX_POSITIONS
     if exchange_slot_taken:
-        active = next(
-            s for s in pending
-            if (s.get("exchange_plan_oid") or s.get("exchange_position_opened"))
-            and not s.get("exchange_done", False)
-        )
-        print(f"[exchange] Slot zajęty przez setup #{active.get('setup_id','?')} — nowe pozycje wstrzymane.")
+        print(f"[exchange] Limit pozycji osiągnięty ({active_count}/{MAX_POSITIONS}) — nowe wstrzymane.")
 
     for s in pending:
         sid       = s.get("setup_id", "?")
