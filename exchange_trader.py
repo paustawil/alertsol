@@ -317,7 +317,7 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
             "planType":    "normal_plan",
         })
         if resp.get("code") == "00000":
-            live_ids = {o["orderId"] for o in resp["data"].get("entrustedList", [])}
+            live_ids = {o["orderId"] for o in (resp["data"].get("entrustedList") or [])}
             if order_id in live_ids:
                 return "live"
 
@@ -329,7 +329,7 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
             "endTime":     str(int(time.time() * 1000)),
         })
         if resp.get("code") == "00000":
-            for o in resp["data"].get("entrustedList", []):
+            for o in (resp["data"].get("entrustedList") or []):
                 if o["orderId"] == order_id:
                     status = o.get("planStatus", "")
                     if status == "executed":
@@ -353,7 +353,7 @@ def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
             "planType":    "profit_loss",
         })
         if resp.get("code") == "00000":
-            live_ids = {o["orderId"] for o in resp["data"].get("entrustedList", [])}
+            live_ids = {o["orderId"] for o in (resp["data"].get("entrustedList") or [])}
             if order_id in live_ids:
                 return "live"
 
@@ -365,7 +365,7 @@ def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
             "endTime":     str(int(time.time() * 1000)),
         })
         if resp.get("code") == "00000":
-            for o in resp["data"].get("entrustedList", []):
+            for o in (resp["data"].get("entrustedList") or []):
                 if o["orderId"] == order_id:
                     status = o.get("planStatus", "")
                     if status == "executed":
