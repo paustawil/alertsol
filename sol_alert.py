@@ -510,9 +510,6 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
         },
         timeout=10,
     )
-    if not r.ok:
-        import logging
-        logging.getLogger(__name__).error(f"fetch_klines 400 body: {r.text}")
     r.raise_for_status()
     data = r.json().get("data") or []
     # Bitget zwraca [ts_ms, open, high, low, close, baseVol, quoteVol], newest first

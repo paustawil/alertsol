@@ -233,21 +233,6 @@ def health():
     return {"status": "ok", "jobs": jobs}
 
 
-@app.get("/admin/test-klines")
-def admin_test_klines():
-    """Testuje fetch_klines z Bitget — zwraca ostatnią świecę lub błąd."""
-    try:
-        import requests as req
-        r = req.get(
-            "https://api.bitget.com/api/v2/mix/market/candles",
-            params={"symbol": "SOLUSDT", "productType": "USDT-FUTURES",
-                    "granularity": "15m", "limit": "3"},
-            timeout=10,
-        )
-        return {"ok": r.ok, "status": r.status_code, "body": r.json()}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
 
 @app.get("/admin/resolve-setup/{setup_id}")
 def admin_resolve_setup(setup_id: int):
