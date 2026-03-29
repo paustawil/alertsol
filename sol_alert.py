@@ -494,6 +494,24 @@ Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
 
 
+# ── Bitget API — cena na żywo ────────────────────────────────────────────────
+def fetch_current_price(symbol: str) -> float | None:
+    """Pobiera aktualną cenę last z tickera Bitget futures."""
+    try:
+        r = requests.get(
+            "https://api.bitget.com/api/v2/mix/market/ticker",
+            params={"symbol": symbol, "productType": "USDT-FUTURES"},
+            timeout=5,
+        )
+        r.raise_for_status()
+        data = r.json().get("data") or []
+        if data:
+            return float(data[0]["lastPr"])
+    except Exception as e:
+        print(f"[ticker] Błąd pobierania ceny: {e}")
+    return None
+
+
 # ── Bitget API — świece ───────────────────────────────────────────────────────
 _BITGET_GRANULARITY = {"15m": "15m", "1h": "1H"}
 
@@ -1166,37 +1184,46 @@ def check_pending(candles_m15: list[dict]):
         d           = s["direction"]
 
         if s["entry_hit_at"] is None:
-            et = s.get("entry_trigger")
-            if not et:
-                # Fallback: odtwórz entry_trigger z W1 vs ceny w momencie alertu.
-                # Bez tego dla setupów wybiciowych (W1 > price_at_alert dla long)
-                # domyślne "falling" w _hits sprawdza low <= W1, co jest zawsze true.
-                price_at_alert = s.get("price_at_alert") or s.get("kurs", 0)
-                if d == "long":
-                    et = "rising" if w1 > price_at_alert else "falling"
-                elif d == "short":
-                    et = "falling" if w1 < price_at_alert else "rising"
-                else:
-                    et = "falling"
-                print(f"[pending] #{s.get('setup_id')} entry_trigger byl NULL — odtworzono jako '{et}' (W1={w1} price_at_alert={price_at_alert})")
-            hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry", et)), None)
-            if hit is None:
-                if age_h > ENTRY_TIMEOUT_H:
-                    print(f"[pending] {s['model']} {d}: nie weszlo")
-                    db.resolve_setup(s["setup_id"], "nie weszlo", None, None, 0, None)
-                    if not s.get("shadow"):
-                        try:
-                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                            send_telegram(
-                                f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}\n"
-                                f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
-                                f"W1: ${w1:.2f} | SL: ${sl:.2f}"
-                            )
-                        except Exception:
-                            pass
-                else:
+            if s.get("exchange_plan_oid"):
+                # Setup zarządzany przez Bitget — nie wykrywaj wejścia przez świece.
+                # Jedynym źródłem prawdy jest exchange_trader, który co 15s odpytuje
+                # Bitget i ustawia exchange_position_opened=True gdy plan order zostanie wykonany.
+                if not s.get("exchange_position_opened"):
                     still_pending.append(s)
-                continue
+                    continue
+                # exchange_trader potwierdził otwarcie pozycji w Bitget
+                hit = int(datetime.now(timezone.utc).timestamp())
+                print(f"[pending] #{s.get('setup_id')} entry potwierdzony przez Bitget (exchange_position_opened=True)")
+            else:
+                # Brak plan order w Bitget — wykrywaj wejście przez symulację świec
+                et = s.get("entry_trigger")
+                if not et:
+                    price_at_alert = s.get("price_at_alert") or s.get("kurs", 0)
+                    if d == "long":
+                        et = "rising" if w1 > price_at_alert else "falling"
+                    elif d == "short":
+                        et = "falling" if w1 < price_at_alert else "rising"
+                    else:
+                        et = "falling"
+                    print(f"[pending] #{s.get('setup_id')} entry_trigger byl NULL — odtworzono jako '{et}' (W1={w1} price_at_alert={price_at_alert})")
+                hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry", et)), None)
+                if hit is None:
+                    if age_h > ENTRY_TIMEOUT_H:
+                        print(f"[pending] {s['model']} {d}: nie weszlo")
+                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, 0, None)
+                        if not s.get("shadow"):
+                            try:
+                                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                                send_telegram(
+                                    f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}\n"
+                                    f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
+                                    f"W1: ${w1:.2f} | SL: ${sl:.2f}"
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        still_pending.append(s)
+                    continue
             s["entry_hit_at"] = hit
             if not s.get("shadow"):
                 try:
@@ -1554,7 +1581,7 @@ def main():
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
-    current     = candles_m15[-1]["close"]
+    current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     rng         = detect_range(candles_m15)
     trend       = h1_trend(candles_h1)
 
