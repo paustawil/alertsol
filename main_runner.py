@@ -241,7 +241,7 @@ def admin_test_klines():
         r = req.get(
             "https://api.bitget.com/api/v2/mix/market/candles",
             params={"symbol": "SOLUSDT", "productType": "USDT-FUTURES",
-                    "granularity": "15min", "limit": "3"},
+                    "granularity": "15m", "limit": "3"},
             timeout=10,
         )
         return {"ok": r.ok, "status": r.status_code, "body": r.json()}

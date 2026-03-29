@@ -495,7 +495,7 @@ Gdy send_alert=false:
 
 
 # ── Bitget API — świece ───────────────────────────────────────────────────────
-_BITGET_GRANULARITY = {"15m": "15min", "1h": "1H"}
+_BITGET_GRANULARITY = {"15m": "15m", "1h": "1H"}
 
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
     bg_symbol = symbol  # Bitget candles API używa SOLUSDT (bez sufixu U)
