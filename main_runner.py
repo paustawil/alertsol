@@ -233,6 +233,13 @@ def health():
     return {"status": "ok", "jobs": jobs}
 
 
+@app.post("/admin/resolve-setup/{setup_id}")
+def admin_resolve_setup(setup_id: int, result: str = "nieokreslone"):
+    """Tymczasowy endpoint do ręcznego zamknięcia setupu w bazie."""
+    db.resolve_setup(setup_id, result, None, None, 0, None)
+    return {"ok": True, "setup_id": setup_id, "result": result}
+
+
 @app.get("/api/stats")
 def api_stats():
     """JSON API dla przyszłej integracji z Metabase."""
