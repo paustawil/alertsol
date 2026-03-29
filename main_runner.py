@@ -237,8 +237,14 @@ def health():
 def admin_test_klines():
     """Testuje fetch_klines z Bitget — zwraca ostatnią świecę lub błąd."""
     try:
-        candles = sol_alert.fetch_klines("SOLUSDT", "15m", limit=3)
-        return {"ok": True, "count": len(candles), "last": candles[-1] if candles else None}
+        import requests as req
+        r = req.get(
+            "https://api.bitget.com/api/v2/mix/market/candles",
+            params={"symbol": "SOLUSDTU", "productType": "USDT-FUTURES",
+                    "granularity": "15min", "limit": "3"},
+            timeout=10,
+        )
+        return {"ok": r.ok, "status": r.status_code, "body": r.json()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
