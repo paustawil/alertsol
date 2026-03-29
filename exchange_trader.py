@@ -28,6 +28,7 @@ import hashlib
 import base64
 import logging
 import requests
+import db
 
 log = logging.getLogger("exchange")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -56,12 +57,33 @@ def _fmt_price(p: float) -> str:
     return f"{p:.{PRICE_DEC}f}"
 
 def _load_pending() -> list[dict]:
-    import db
     return db.load_pending()
 
 def _save_pending(pending: list[dict]):
-    import db
     db.save_pending_list(pending)
+
+
+# ── Pobieranie aktualnej pozycji ──────────────────────────────────────────────
+
+def _get_open_position_size(client: "BitgetClient", hold_side: str) -> float:
+    """
+    Zwraca rzeczywisty rozmiar otwartej pozycji dla danego hold_side ('long'/'short').
+    Odpytuje Bitget bezpośrednio — służy do weryfikacji po wykonaniu plan ordera.
+    Zwraca 0.0 jeśli brak pozycji lub błąd.
+    """
+    try:
+        resp = client.get("/api/v2/mix/position/all-position", {
+            "productType": PRODUCT_TYPE,
+            "marginCoin":  MARGIN_COIN,
+        })
+        if resp.get("code") == "00000":
+            for pos in (resp.get("data") or []):
+                if (pos.get("symbol") == SYMBOL
+                        and pos.get("holdSide") == hold_side):
+                    return float(pos.get("total") or 0)
+    except Exception as e:
+        log.warning(f"[exchange] get_position_size({hold_side}): {e}")
+    return 0.0
 
 
 # ── Klient Bitget REST API ─────────────────────────────────────────────────────
@@ -520,21 +542,43 @@ def sync():
                 modified = True
 
             elif status == "executed":
-                # Entry hit — składaj TPSL ordery
-                full_qty = float(s.get("exchange_qty_full", "0").replace(",", ".") or "0")
-                half_qty = float(s.get("exchange_qty_half", "0").replace(",", ".") or "0")
-                if full_qty <= 0:
+                # Entry hit — zweryfikuj rzeczywistą pozycję przed złożeniem TPSL
+                actual_qty = _get_open_position_size(client, direction)
+                calc_qty   = float(s.get("exchange_qty_full", "0").replace(",", ".") or "0")
+                if calc_qty <= 0:
                     w1       = entries[0]
-                    full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-                    half_qty = _round_qty(full_qty / 2)
+                    calc_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+
+                if actual_qty <= 0:
+                    # Plan order "executed" ale pozycja = 0 — częściowe wypełnienie
+                    # zamknięte natychmiast (SL/liq) lub fałszywy status Bitget
+                    log.error(
+                        f"[exchange] {label}: plan order wykonany ale pozycja=0 "
+                        f"(oczekiwano {calc_qty} SOL) — traktuję jako brak wejścia"
+                    )
+                    s["exchange_plan_oid"] = None
+                    s["exchange_done"]     = True
+                    modified = True
+                    continue
+
+                if actual_qty < calc_qty * 0.8:
+                    log.warning(
+                        f"[exchange] {label}: częściowe wypełnienie — "
+                        f"oczekiwano {calc_qty} SOL, otwarto {actual_qty} SOL"
+                    )
+
+                full_qty = _round_qty(actual_qty)
+                half_qty = _round_qty(full_qty / 2)
 
                 tp1_id, tp2_id, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
                 s["exchange_position_opened"] = True
+                s["exchange_qty_full"]        = _fmt_qty(full_qty)
+                s["exchange_qty_half"]        = _fmt_qty(half_qty)
                 s["exchange_tp1_oid"]         = tp1_id
                 s["exchange_tp2_oid"]         = tp2_id
                 s["exchange_sl_oid"]          = sl_id
                 modified = True
-                print(f"[exchange] {label}: pozycja otwarta, TPSL złożone "
+                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL), TPSL złożone "
                       f"(TP1={tp1_id} TP2={tp2_id} SL={sl_id})")
             continue
 
