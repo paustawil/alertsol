@@ -151,13 +151,23 @@ def dashboard():
     active_rows = ""
     for s in active:
         entries = s.get("entries") or []
-        w1 = f"${entries[0]:.2f}" if entries else "—"
-        status = "w pozycji" if s.get("entry_hit_at") else "czeka"
-        tp1_done = " (TP1 ✓)" if s.get("tp1_hit_at") else ""
+        tps     = s.get("tps") or []
+        w1   = f"${entries[0]:.2f}" if entries else "—"
+        tp1  = f"${tps[0]:.2f}"    if len(tps) > 0 else "—"
+        tp2  = f"${tps[1]:.2f}"    if len(tps) > 1 else "—"
+        sl   = f"${s['sl']:.2f}"           if s.get("sl")          else "—"
+        sl2  = f"${s['sl_after_tp1']:.2f}" if s.get("sl_after_tp1") else "—"
+        if s.get("entry_hit_at") and s.get("tp1_hit_at"):
+            status = "✅ po TP1"
+        elif s.get("entry_hit_at"):
+            status = "📈 w pozycji"
+        else:
+            status = "⏳ czeka"
         active_rows += (
             f"<tr><td>#{s['setup_id']}</td><td>{s['model']}</td>"
-            f"<td>{s['direction'].upper()}</td><td>{w1}</td>"
-            f"<td>{status}{tp1_done}</td></tr>\n"
+            f"<td>{s['direction'].upper()}</td><td>{status}</td>"
+            f"<td>{w1}</td><td>{tp1}</td><td>{tp2}</td>"
+            f"<td>{sl}</td><td>{sl2}</td></tr>\n"
         )
 
     history_rows = ""
@@ -199,8 +209,8 @@ def dashboard():
 </div>
 
 <h3>Aktywne setupy ({len(active)})</h3>
-<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>W1</th><th>Status</th></tr>
-{active_rows or '<tr><td colspan=5 style="color:#888">Brak aktywnych setupów</td></tr>'}
+<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Status</th><th>W1</th><th>TP1</th><th>TP2</th><th>SL</th><th>SL@TP1</th></tr>
+{active_rows or '<tr><td colspan=9 style="color:#888">Brak aktywnych setupów</td></tr>'}
 </table>
 
 <h3>Per model</h3>
