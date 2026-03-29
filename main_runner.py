@@ -252,6 +252,24 @@ def admin_reset_entry(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "entry zresetowane — setup wrócił do oczekujących"}
 
 
+@app.get("/admin/force-position-open/{setup_id}")
+def admin_force_position_open(setup_id: int):
+    """Oznacza pozycję jako otwartą — gdy Bitget ma otwartą pozycję ale system tego nie wie.
+    Exchange_trader złoży TP/SL automatycznie w ciągu 15 sekund."""
+    import time
+    db.update_setup(
+        setup_id,
+        exchange_position_opened=True,
+        exchange_done=False,
+        resolved=False,
+        entry_hit_at=int(time.time()),
+        exchange_tp1_oid=None,
+        exchange_tp2_oid=None,
+        exchange_sl_oid=None,
+    )
+    return {"ok": True, "setup_id": setup_id, "result": "pozycja oznaczona jako otwarta — exchange_trader złoży TP/SL za ~15s"}
+
+
 @app.get("/admin/setup/{setup_id}")
 def admin_get_setup(setup_id: int):
     """Zwraca pełny stan setupu z bazy — do diagnostyki."""
