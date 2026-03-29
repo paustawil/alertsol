@@ -1,123 +1,127 @@
 # SOL Alert Bot
 
-Automatyczny skrypt wykrywający setupy tradingowe na **SOL/USDT** i wysyłający alerty na Telegram.
-Działa na GitHub Actions — sprawdza rynek co 15 minut, nie wymaga żadnego serwera.
+Automatyczny system tradingowy dla **SOL/USDT** — wykrywa setupy, wysyła alerty Telegram i automatycznie składa zlecenia na Bitget Futures.
+
+Działa jako serwis **Railway** (FastAPI + APScheduler), nie wymaga GitHub Actions.
 
 ---
 
 ## Jak działa
 
-1. Co 15 minut GitHub uruchamia skrypt
-2. Skrypt pobiera świece M15 i H1 z CryptoCompare API
-3. Szuka dwóch typów setupów: **Range Trading** i **Breakout Retest**
-4. Ocenia setup w skali 0–15 pkt (5 filarów × 3 pkt)
-5. Jeśli score ≥ 11 i cena zmierza ku poziomowi → alert na Telegram
-6. Setupy ≥ 10 pkt są śledzone i wyniki trafiają do Google Sheets
+1. Co 15 minut skrypt pobiera świece M15 i H1 z **Bitget API** (SOLUSDTU perpetual)
+2. Kilka modeli AI analizuje setup równolegle (Grok, GPT)
+3. Jeśli setup jest wystarczająco dobry → alert Telegram
+4. **Automatycznie składany plan order** na Bitget przy poziomie W1
+5. Gdy pozycja się otworzy → automatyczne zlecenia TP1, TP2, SL
+6. Monitoring pozycji co 15 sekund — TP1 przesuwa SL na break-even
+7. Wyniki trafiają do Google Sheets
 
 ---
 
-## Model oceny setupu (15 pkt)
+## Architektura
 
-| Filar | Max | Opis |
-|-------|-----|------|
-| Siła poziomu | 3 | Ile razy cena respektowała S/R |
-| Potencjał ruchu | 3 | Szerokość zakresu (sweet spot 1.2–2.0 USD) |
-| Kontekst rynku | 3 | Trend H1 zgodny z kierunkiem |
-| RR | 3 | Relacja ryzyko/zysk (min 1.5:1) |
-| Impuls | 3 | Siła poprzedzającego ruchu |
-
-**Progi:**
-- ≥ 11/15 → alert Telegram
-- ≥ 10/15 → śledzenie w Google Sheets
-
----
-
-## Alert na Telegram
-
-Skrypt wysyła alert **z wyprzedzeniem** — gdy cena zbliża się do poziomu (10–35% szerokości zakresu), nie gdy już tam jest. Dzięki temu masz czas ustawić zlecenia limit.
-
-Format alertu:
 ```
-🎯 SOL/USDT – Range [12/15]
-📈 Long  |  20.03  14:30
+Railway (always-on)
+├── FastAPI + dashboard (/)
+├── APScheduler
+│   ├── co 15 min → sol_alert.main()    — detekcja setupów + weryfikacja pending
+│   ├── co 15 sek → exchange_trader.sync() — monitoring pozycji na Bitget
+│   └── co 5 min  → sheets_export()    — eksport wyników do Google Sheets
+└── PostgreSQL (Railway Postgres)
 
-Cena teraz: $89.40
-Strefa wejscia za: ~$0.45
-
-Poziom 3 · Ruch 3 · Kontekst 2 · RR 2 · Impuls 2
-
-Ustaw zlecenia:
-  W1: $88.95
-  W2: $88.70
-  W3: $88.50
-
-SL:  $88.25
-
-Cele:
-  TP1: $89.80  (+$0.85)
-  TP2: $90.60  (+$1.65)
-
-RR:  2.2:1
+Bitget Futures API
+├── Plan orders (wejście przy W1)
+├── TPSL orders (TP1, TP2, SL)
+└── Position monitoring
 ```
 
 ---
 
-## Śledzenie wyników
+## Modele AI
 
-Każdy setup ≥ 10/15 jest automatycznie weryfikowany:
-- **2h na wejście** — czy cena osiągnęła W1
-- **24h na wynik** — czy najpierw TP1, TP2 czy SL
+| Model | Rola |
+|-------|------|
+| **Grok** (xAI) | Główna detekcja setupów — ma dostęp do internetu (sentyment, BTC/ETH/F&G) |
+| **GPT-4o** | Drugi model (relaxed prompt) — weryfikacja |
+| **Grok Validation** | Walidacja oczekujących setupów — czy nadal aktualne |
 
-Wyniki trafiają do Google Sheets (arkusz `SOL Alert Log`).
+---
+
+## Typy setupów (Forteca v1.0)
+
+- **Range Trading** — odbicie od wsparcia/oporu w konsolidacji
+- **Breakout Retest** — powrót do przebitego poziomu
+- **False Breakout** — fałszywe wybicie i powrót
+
+---
+
+## Zarządzanie pozycją
+
+- **W1 / W2** — dwa poziomy wejścia (agresywny i konserwatywny)
+- **TP1** — pierwsza realizacja (½ pozycji), SL przesuwa się na SLpoTP1
+- **TP2** — pełna realizacja pozostałej ½
+- **SL** — stop loss, anuluje wszystkie TP
+- Limit aktywnych pozycji: **5** (konfigurowalny przez `BITGET_MAX_POSITIONS`)
+
+---
+
+## Ochrona przed niepełnym wypełnieniem
+
+Po wykonaniu plan ordera system weryfikuje rzeczywistą pozycję przez Bitget API:
+- Pozycja = 0 → brak wejścia, slot zwolniony
+- Pozycja < 80% oczekiwanej → ostrzeżenie, TPSL złożone na faktycznym rozmiarze
+- Manualne zamknięcie pozycji → system wykrywa anulowane TPSL i zamyka setup w bazie
 
 ---
 
 ## Pliki
 
 ```
-sol_alert.py                  — główny skrypt
-requirements.txt              — zależności Python
-.github/workflows/sol_alert.yml — harmonogram GitHub Actions
+sol_alert.py          — detekcja setupów, modele AI, weryfikacja pending
+exchange_trader.py    — Bitget API, plan orders, TPSL, monitoring pozycji
+main_runner.py        — FastAPI dashboard, APScheduler, endpointy
+db.py                 — PostgreSQL (setup CRUD, stats, eksport)
+schema.sql            — schemat bazy danych
+sheets_exporter.py    — eksport do Google Sheets
+requirements.txt      — zależności Python
 ```
 
-**Pliki tworzone automatycznie (cache GitHub Actions):**
-```
-last_alert.json       — anty-spam (cooldown 4h)
-pending_setups.json   — setupy czekające na weryfikację
-```
+---
+
+## Konfiguracja — zmienne Railway
+
+| Zmienna | Opis |
+|---------|------|
+| `TELEGRAM_TOKEN` | Token bota Telegram |
+| `TELEGRAM_CHAT_ID` | Chat ID |
+| `ANTHROPIC_API_KEY` | Klucz Anthropic (Claude) |
+| `OPENAI_API_KEY` | Klucz OpenAI (GPT) |
+| `XAI_API_KEY` | Klucz xAI (Grok) |
+| `BITGET_API_KEY` | Klucz Bitget |
+| `BITGET_API_SECRET` | Secret Bitget |
+| `BITGET_PASSPHRASE` | Passphrase Bitget |
+| `BITGET_DEMO` | `true` = tryb demo, brak/`false` = produkcja |
+| `BITGET_TRADE_USDT` | Rozmiar pozycji w USDT (domyślnie `100`) |
+| `BITGET_MAX_POSITIONS` | Max otwartych pozycji jednocześnie (domyślnie `5`) |
+| `GOOGLE_CREDENTIALS` | JSON konta serwisowego Google |
+| `DATABASE_URL` | Automatycznie z Railway Postgres |
 
 ---
 
-## Konfiguracja (GitHub Secrets)
+## Dashboard
 
-| Secret | Opis |
-|--------|------|
-| `TELEGRAM_TOKEN` | Token bota Telegram (z @BotFather) |
-| `TELEGRAM_CHAT_ID` | Twoje Chat ID (z @userinfobot) |
-| `GOOGLE_CREDENTIALS` | Zawartość JSON konta serwisowego Google |
+Railway udostępnia panel pod adresem serwisu:
 
----
-
-## Parametry do kalibracji (w sol_alert.py)
-
-| Parametr | Wartość | Opis |
-|----------|---------|------|
-| `MIN_SCORE` | 11 | Minimalny próg alertu |
-| `TRACK_MIN_SCORE` | 10 | Minimalny próg śledzenia |
-| `COOLDOWN_HOURS` | 4 | Cisza po tym samym setupie |
-| `ENTRY_TIMEOUT_H` | 2 | Max godzin na wejście |
-| `TRADE_TIMEOUT_H` | 24 | Max godzin na wynik |
-| `SHEET_ID` | `19TWH...` | ID arkusza Google Sheets |
+| Endpoint | Opis |
+|----------|------|
+| `/` | Dashboard HTML — aktywne setupy, ostatnie wyniki |
+| `/health` | Healthcheck + status schedulera |
+| `/api/stats` | JSON — statystyki, aktywne, ostatnie wyniki |
+| `/docs` | Swagger UI |
 
 ---
 
-## Ręczne uruchomienie
+## PnL
 
-GitHub → zakładka **Actions** → **SOL Alert** → **Run workflow**
-
----
-
-## Następne kroki
-
-Po zebraniu kilkunastu rozwiązanych setupów — analiza wyników i kalibracja parametrów.
-Docelowo: rozbudowa o automatyczne składanie zleceń przez Bybit API.
+- `pnl_usd` — realny zysk/strata w USD dla danego trade'u (ruch ceny × qty SOL)
+- `pnl_pct` — % zwrotu z zainwestowanego kapitału (`pnl_usd / BITGET_TRADE_USDT × 100`)
