@@ -1166,37 +1166,46 @@ def check_pending(candles_m15: list[dict]):
         d           = s["direction"]
 
         if s["entry_hit_at"] is None:
-            et = s.get("entry_trigger")
-            if not et:
-                # Fallback: odtwórz entry_trigger z W1 vs ceny w momencie alertu.
-                # Bez tego dla setupów wybiciowych (W1 > price_at_alert dla long)
-                # domyślne "falling" w _hits sprawdza low <= W1, co jest zawsze true.
-                price_at_alert = s.get("price_at_alert") or s.get("kurs", 0)
-                if d == "long":
-                    et = "rising" if w1 > price_at_alert else "falling"
-                elif d == "short":
-                    et = "falling" if w1 < price_at_alert else "rising"
-                else:
-                    et = "falling"
-                print(f"[pending] #{s.get('setup_id')} entry_trigger byl NULL — odtworzono jako '{et}' (W1={w1} price_at_alert={price_at_alert})")
-            hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry", et)), None)
-            if hit is None:
-                if age_h > ENTRY_TIMEOUT_H:
-                    print(f"[pending] {s['model']} {d}: nie weszlo")
-                    db.resolve_setup(s["setup_id"], "nie weszlo", None, None, 0, None)
-                    if not s.get("shadow"):
-                        try:
-                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                            send_telegram(
-                                f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}\n"
-                                f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
-                                f"W1: ${w1:.2f} | SL: ${sl:.2f}"
-                            )
-                        except Exception:
-                            pass
-                else:
+            if s.get("exchange_plan_oid"):
+                # Setup zarządzany przez Bitget — nie wykrywaj wejścia przez świece.
+                # Jedynym źródłem prawdy jest exchange_trader, który co 15s odpytuje
+                # Bitget i ustawia exchange_position_opened=True gdy plan order zostanie wykonany.
+                if not s.get("exchange_position_opened"):
                     still_pending.append(s)
-                continue
+                    continue
+                # exchange_trader potwierdził otwarcie pozycji w Bitget
+                hit = int(datetime.now(timezone.utc).timestamp())
+                print(f"[pending] #{s.get('setup_id')} entry potwierdzony przez Bitget (exchange_position_opened=True)")
+            else:
+                # Brak plan order w Bitget — wykrywaj wejście przez symulację świec
+                et = s.get("entry_trigger")
+                if not et:
+                    price_at_alert = s.get("price_at_alert") or s.get("kurs", 0)
+                    if d == "long":
+                        et = "rising" if w1 > price_at_alert else "falling"
+                    elif d == "short":
+                        et = "falling" if w1 < price_at_alert else "rising"
+                    else:
+                        et = "falling"
+                    print(f"[pending] #{s.get('setup_id')} entry_trigger byl NULL — odtworzono jako '{et}' (W1={w1} price_at_alert={price_at_alert})")
+                hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry", et)), None)
+                if hit is None:
+                    if age_h > ENTRY_TIMEOUT_H:
+                        print(f"[pending] {s['model']} {d}: nie weszlo")
+                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, 0, None)
+                        if not s.get("shadow"):
+                            try:
+                                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                                send_telegram(
+                                    f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}\n"
+                                    f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
+                                    f"W1: ${w1:.2f} | SL: ${sl:.2f}"
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        still_pending.append(s)
+                    continue
             s["entry_hit_at"] = hit
             if not s.get("shadow"):
                 try:
