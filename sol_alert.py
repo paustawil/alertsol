@@ -492,23 +492,39 @@ Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
 
 
-# ── CryptoCompare API ─────────────────────────────────────────────────────────
-CC_ENDPOINTS = {"15m": ("histominute", 15), "1h": ("histohour", 1)}
+# ── Bitget API — świece ───────────────────────────────────────────────────────
+_BITGET_GRANULARITY = {"15m": "15min", "1h": "1H"}
 
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
-    endpoint, aggregate = CC_ENDPOINTS.get(interval, ("histominute", 15))
-    fsym = symbol.replace("USDT", "").replace("USD", "")
+    # Bitget futures używa symbolu SOLUSDTU dla SOLUSDT perpetual
+    bg_symbol = symbol.rstrip("T") + "U" if symbol.endswith("USDT") else symbol
+    granularity = _BITGET_GRANULARITY.get(interval, "15min")
     r = requests.get(
-        f"https://min-api.cryptocompare.com/data/v2/{endpoint}",
-        params={"fsym": fsym, "tsym": "USDT", "limit": limit, "aggregate": aggregate},
-        timeout=10
+        "https://api.bitget.com/api/v2/mix/market/candles",
+        params={
+            "symbol":      bg_symbol,
+            "productType": "USDT-FUTURES",
+            "granularity": granularity,
+            "limit":       str(limit),
+        },
+        timeout=10,
     )
     r.raise_for_status()
-    return [
-        {"time": d["time"], "open": float(d["open"]), "high": float(d["high"]),
-         "low": float(d["low"]), "close": float(d["close"]), "volume": float(d["volumefrom"])}
-        for d in r.json()["Data"]["Data"]
+    data = r.json().get("data") or []
+    # Bitget zwraca [ts_ms, open, high, low, close, baseVol, quoteVol], newest first
+    candles = [
+        {
+            "time":   int(d[0]) // 1000,
+            "open":   float(d[1]),
+            "high":   float(d[2]),
+            "low":    float(d[3]),
+            "close":  float(d[4]),
+            "volume": float(d[5]),
+        }
+        for d in data
     ]
+    candles.reverse()  # oldest first (jak CryptoCompare)
+    return candles
 
 
 # ── Wskaźniki techniczne ──────────────────────────────────────────────────────

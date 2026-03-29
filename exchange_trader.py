@@ -601,6 +601,18 @@ def sync():
                     modified = True
                     continue
 
+                if sl_status == "cancelled":
+                    # SL anulowany ręcznie — pozycja zamknięta manualnie
+                    log.warning(f"[exchange] {label}: SL anulowany ręcznie — zwalniam slot")
+                    for oid in filter(None, [tp1_oid, tp2_oid]):
+                        _cancel_order(client, oid, "profit_plan")
+                    s["exchange_sl_oid"]  = None
+                    s["exchange_tp1_oid"] = None
+                    s["exchange_tp2_oid"] = None
+                    s["exchange_done"]    = True
+                    modified = True
+                    continue
+
             # Sprawdź TP1 (jeśli jeszcze nie wykonany)
             if tp1_oid and not tp1_done:
                 tp1_status = _tpsl_order_status(client, tp1_oid)
@@ -617,6 +629,12 @@ def sync():
                     modified = True
                     print(f"[exchange] {label}: TP1 wykonany — SL przesunięty na {new_sl}")
 
+                elif tp1_status == "cancelled":
+                    log.warning(f"[exchange] {label}: TP1 anulowany ręcznie")
+                    s["exchange_tp1_oid"]  = None
+                    s["exchange_tp1_done"] = True
+                    modified = True
+
             # Sprawdź TP2
             if tp2_oid:
                 tp2_status = _tpsl_order_status(client, tp2_oid)
@@ -630,6 +648,20 @@ def sync():
                     s["exchange_sl_oid"]  = None
                     s["exchange_done"]    = True
                     modified = True
+
+                elif tp2_status == "cancelled":
+                    log.warning(f"[exchange] {label}: TP2 anulowany ręcznie")
+                    s["exchange_tp2_oid"] = None
+                    modified = True
+
+            # Jeśli wszystkie TPSL anulowane — zwolnij slot
+            if (not s.get("exchange_sl_oid")
+                    and not s.get("exchange_tp1_oid")
+                    and not s.get("exchange_tp2_oid")
+                    and not s.get("exchange_done")):
+                log.warning(f"[exchange] {label}: wszystkie TPSL zniknęły — zwalniam slot")
+                s["exchange_done"] = True
+                modified = True
 
     if modified:
         _save_pending(pending)
