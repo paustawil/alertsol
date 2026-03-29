@@ -244,8 +244,26 @@ def admin_resolve_setup(setup_id: int):
 @app.get("/admin/reset-entry/{setup_id}")
 def admin_reset_entry(setup_id: int):
     """Resetuje entry_hit_at do NULL — cofa setup do statusu 'oczekujący'."""
-    db.update_setup(setup_id, entry_hit_at=None, tp1_hit_at=None, sl_adjusted=False)
+    db.update_setup(
+        setup_id,
+        entry_hit_at=None, tp1_hit_at=None, sl_adjusted=False,
+        exchange_done=False, resolved=False,
+    )
     return {"ok": True, "setup_id": setup_id, "result": "entry zresetowane — setup wrócił do oczekujących"}
+
+
+@app.get("/admin/setup/{setup_id}")
+def admin_get_setup(setup_id: int):
+    """Zwraca pełny stan setupu z bazy — do diagnostyki."""
+    rows = db.get_active_setups()
+    # szukaj też w resolved
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    if not row:
+        return {"error": f"setup #{setup_id} nie znaleziony"}
+    return dict(row)
 
 
 @app.get("/api/stats")
