@@ -27,6 +27,8 @@ ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_KEY       = os.getenv("OPENAI_API_KEY", "")
 XAI_KEY          = os.getenv("XAI_API_KEY", "")
 SYMBOL           = "SOLUSDT"
+TRADE_USDT       = float(os.getenv("BITGET_TRADE_USDT", "100"))
+LEVERAGE         = 20
 MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
 SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
@@ -1273,8 +1275,12 @@ def check_pending(candles_m15: list[dict]):
                 exit_prices = [tp1, eff_sl_exit] if tp1 else [eff_sl_exit]
             eff_exit = sum(exit_prices) / len(exit_prices)
 
-            # Signed PnL (pozytywny = zysk)
-            move = round((eff_exit - eff_entry) if d == "long" else (eff_entry - eff_exit), 2)
+            # Signed PnL — realny zysk w USD dla danego trade'u
+            price_move = (eff_exit - eff_entry) if d == "long" else (eff_entry - eff_exit)
+            qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
+            if qty <= 0:
+                qty = (TRADE_USDT * LEVERAGE) / eff_entry
+            move = round(price_move * qty, 2)
 
         if result:
             sign = "+" if move >= 0 else ""

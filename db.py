@@ -195,9 +195,10 @@ def resolve_setup(
     pnl_pct obliczany automatycznie jeśli avg_entry jest dostępne.
     """
     pnl_pct = None
-    if avg_entry and pnl_usd is not None:
+    if pnl_usd is not None:
+        trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
         try:
-            pnl_pct = round(pnl_usd / avg_entry * 100, 4)
+            pnl_pct = round(pnl_usd / trade_usdt * 100, 2)
         except ZeroDivisionError:
             pass
 
