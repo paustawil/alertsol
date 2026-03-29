@@ -233,6 +233,16 @@ def health():
     return {"status": "ok", "jobs": jobs}
 
 
+@app.get("/admin/test-klines")
+def admin_test_klines():
+    """Testuje fetch_klines z Bitget — zwraca ostatnią świecę lub błąd."""
+    try:
+        candles = sol_alert.fetch_klines("SOLUSDT", "15m", limit=3)
+        return {"ok": True, "count": len(candles), "last": candles[-1] if candles else None}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/admin/resolve-setup/{setup_id}")
 def admin_resolve_setup(setup_id: int):
     """Tymczasowy endpoint do ręcznego zamknięcia setupu w bazie."""
