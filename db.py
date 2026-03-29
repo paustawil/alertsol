@@ -304,7 +304,31 @@ def save_pending_list(pending: list[dict]) -> None:
 
 # ── Google Sheets eksport ─────────────────────────────────────────────────────
 
-def get_unexported_resolved() -> list[dict]:
+def get_resolved_with_open_orders() -> list[dict]:
+    """Zwraca rozwiązane setupy które mają jeszcze aktywny plan order na Bitget (do anulowania)."""
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT setup_id, exchange_plan_oid, exchange_position_opened
+                FROM setups
+                WHERE resolved = TRUE
+                  AND exchange_done = FALSE
+                  AND exchange_plan_oid IS NOT NULL
+                  AND exchange_position_opened = FALSE
+                """
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def mark_exchange_done(setup_id: int) -> None:
+    """Oznacza setup jako zakończony po stronie exchange (order anulowany)."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE setups SET exchange_done = TRUE, exchange_plan_oid = NULL WHERE setup_id = %s",
+                (setup_id,),
+            )
     """Zwraca zamknięte setupy, które jeszcze nie zostały wyeksportowane do Sheets."""
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

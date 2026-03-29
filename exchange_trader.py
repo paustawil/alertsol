@@ -591,6 +591,14 @@ def sync():
         _save_pending(pending)
         print("[exchange] pending_setups.json zaktualizowany.")
 
+    # Anuluj plan ordery dla setupów które wygasły bez wejścia (np. "nie weszlo")
+    for s in db.get_resolved_with_open_orders():
+        oid = s["exchange_plan_oid"]
+        sid = s["setup_id"]
+        print(f"[exchange] #{sid}: wygasł bez wejścia → cancel plan order {oid}")
+        _cancel_order(client, oid, "normal_plan")
+        db.mark_exchange_done(sid)
+
 
 if __name__ == "__main__":
     sync()
