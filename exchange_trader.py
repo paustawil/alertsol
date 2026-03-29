@@ -578,6 +578,19 @@ def sync():
                       f"(TP1={tp1_id} TP2={tp2_id} SL={sl_id})")
             continue
 
+        # ── Pozycja otwarta, brak TPSL — retry składania zleceń ──────────────
+        if pos_open and not ex_done and not tp1_oid and not tp2_oid and not sl_oid:
+            full_qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
+            half_qty = float((s.get("exchange_qty_half") or "0").replace(",", "."))
+            if full_qty > 0:
+                log.warning(f"[exchange] {label}: pozycja otwarta bez TPSL — retry składania zleceń")
+                tp1_id, tp2_id, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
+                s["exchange_tp1_oid"] = tp1_id
+                s["exchange_tp2_oid"] = tp2_id
+                s["exchange_sl_oid"]  = sl_id
+                modified = True
+            continue
+
         # ── Pozycja otwarta — monitoruj TPSL ─────────────────────────────────
         if pos_open and (tp1_oid or tp2_oid or sl_oid):
 
