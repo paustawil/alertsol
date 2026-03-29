@@ -10,6 +10,7 @@ import logging
 import os
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from typing import Any
 
 import psycopg2
@@ -68,9 +69,16 @@ def _conn():
 
 
 def _row_to_dict(row: psycopg2.extras.RealDictRow) -> dict:
-    """Konwertuje RealDictRow na zwykły dict; JSONB jest już sparsowany przez psycopg2."""
-    d = dict(row)
-    # Upewnij się że entries/tps są listami (nie None)
+    """Konwertuje RealDictRow na zwykły dict; JSONB jest już sparsowany przez psycopg2.
+    Decimal (kolumny NUMERIC) konwertowane na float — unikamy TypeError w arytmetyce."""
+    d = {}
+    for k, v in row.items():
+        if isinstance(v, Decimal):
+            d[k] = float(v)
+        elif isinstance(v, list):
+            d[k] = [float(x) if isinstance(x, Decimal) else x for x in v]
+        else:
+            d[k] = v
     if d.get("entries") is None:
         d["entries"] = []
     if d.get("tps") is None:

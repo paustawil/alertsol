@@ -270,6 +270,19 @@ def admin_force_position_open(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "pozycja oznaczona jako otwarta — exchange_trader złoży TP/SL za ~15s"}
 
 
+@app.get("/admin/replace-tps/{setup_id}")
+def admin_replace_tps(setup_id: int):
+    """Resetuje exchange_tp1_done → False i czyści TP OID.
+    Na następnym sync exchange_trader automatycznie złoży TP1 i TP2 (bez ruszania SL)."""
+    db.update_setup(
+        setup_id,
+        exchange_tp1_oid=None,
+        exchange_tp2_oid=None,
+        exchange_tp1_done=False,
+    )
+    return {"ok": True, "setup_id": setup_id, "result": "TP zresetowane — exchange_trader złoży TP1/TP2 za ~15s (SL bez zmian)"}
+
+
 @app.get("/admin/setup/{setup_id}")
 def admin_get_setup(setup_id: int):
     """Zwraca pełny stan setupu z bazy — do diagnostyki."""
