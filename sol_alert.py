@@ -494,6 +494,24 @@ Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
 
 
+# ── Bitget API — cena na żywo ────────────────────────────────────────────────
+def fetch_current_price(symbol: str) -> float | None:
+    """Pobiera aktualną cenę last z tickera Bitget futures."""
+    try:
+        r = requests.get(
+            "https://api.bitget.com/api/v2/mix/market/ticker",
+            params={"symbol": symbol, "productType": "USDT-FUTURES"},
+            timeout=5,
+        )
+        r.raise_for_status()
+        data = r.json().get("data") or []
+        if data:
+            return float(data[0]["lastPr"])
+    except Exception as e:
+        print(f"[ticker] Błąd pobierania ceny: {e}")
+    return None
+
+
 # ── Bitget API — świece ───────────────────────────────────────────────────────
 _BITGET_GRANULARITY = {"15m": "15m", "1h": "1H"}
 
@@ -1563,7 +1581,7 @@ def main():
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
-    current     = candles_m15[-1]["close"]
+    current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     rng         = detect_range(candles_m15)
     trend       = h1_trend(candles_h1)
 
