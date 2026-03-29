@@ -1166,7 +1166,19 @@ def check_pending(candles_m15: list[dict]):
         d           = s["direction"]
 
         if s["entry_hit_at"] is None:
-            et  = s.get("entry_trigger")
+            et = s.get("entry_trigger")
+            if not et:
+                # Fallback: odtwórz entry_trigger z W1 vs ceny w momencie alertu.
+                # Bez tego dla setupów wybiciowych (W1 > price_at_alert dla long)
+                # domyślne "falling" w _hits sprawdza low <= W1, co jest zawsze true.
+                price_at_alert = s.get("price_at_alert") or s.get("kurs", 0)
+                if d == "long":
+                    et = "rising" if w1 > price_at_alert else "falling"
+                elif d == "short":
+                    et = "falling" if w1 < price_at_alert else "rising"
+                else:
+                    et = "falling"
+                print(f"[pending] #{s.get('setup_id')} entry_trigger byl NULL — odtworzono jako '{et}' (W1={w1} price_at_alert={price_at_alert})")
             hit = next((c["time"] for c in after_alert if _hits(c, w1, d, "entry", et)), None)
             if hit is None:
                 if age_h > ENTRY_TIMEOUT_H:
