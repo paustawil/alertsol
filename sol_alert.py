@@ -498,8 +498,7 @@ Gdy send_alert=false:
 _BITGET_GRANULARITY = {"15m": "15min", "1h": "1H"}
 
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
-    # Bitget futures używa symbolu SOLUSDTU dla SOLUSDT perpetual
-    bg_symbol = symbol + "U" if symbol.endswith("USDT") else symbol
+    bg_symbol = symbol  # Bitget candles API używa SOLUSDT (bez sufixu U)
     granularity = _BITGET_GRANULARITY.get(interval, "15min")
     r = requests.get(
         "https://api.bitget.com/api/v2/mix/market/candles",
