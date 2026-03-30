@@ -885,7 +885,8 @@ ALERTY_HEADER = [
 WYNIKI_HEADER = [
     "ID", "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
     "Kurs", "W1", "W2", "Warunek", "SL", "TP1", "TP2", "RR",
-    "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik", "PnL $",
+    "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik",
+    "PnL $", "PnL %", "Alt.PnL$(TP1)", "Δ(real-alt)",
     "Reasoning",
 ]
 ANULOWANE_GROK_HEADER = [
@@ -978,7 +979,10 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
     """Zapisuje wynik rozwiązanego setupu do Sheet 2. Zwraca True jeśli sukces."""
     try:
         _, sh2   = _get_sheets()
-        alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
+        _at      = s["alert_time"]
+        if isinstance(_at, str):
+            _at = datetime.fromisoformat(_at)
+        alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
         entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
         exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])
@@ -987,6 +991,31 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         model     = s.get("model", "")
         raw_score = s.get("score", s.get("total", 0))
         score_val = f"{raw_score}%" if model == "Grok" else raw_score
+
+        # PnL %
+        pnl_pct = s.get("pnl_pct")
+        if pnl_pct is None and move:
+            _tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
+            pnl_pct = round(move / _tu * 100, 2) if _tu else None
+        pnl_pct_val = f"{pnl_pct:+.1f}%" if pnl_pct is not None else ""
+
+        # Alternatywny scenariusz: całość na TP1 (tylko dla TP2 i TP1+BE)
+        alt_pnl_val = ""
+        delta_val   = ""
+        if result in ("TP2", "TP1+BE") and eff_entry and tps:
+            tp1_p = float(tps[0])
+            sign  = 1 if s.get("direction") == "long" else -1
+            fq    = (s.get("exchange_qty_full") or "0").replace(",", ".")
+            try:
+                fq_f = float(fq) if fq else 0.0
+            except ValueError:
+                fq_f = 0.0
+            if fq_f <= 0:
+                fq_f = (TRADE_USDT * LEVERAGE) / eff_entry
+            if fq_f > 0:
+                alt_pnl_val = round(sign * fq_f * (tp1_p - eff_entry), 2)
+                delta_val   = round(move - alt_pnl_val, 2)
+
         sh2.append_row([
             s.get("setup_id", "") or "",
             alert_dt,
@@ -1006,7 +1035,8 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
             "+".join(f"W{i+1}" for i in range(n_w)) if n_w > 0 else "",
             round(eff_entry, 2) if eff_entry is not None else "",
             round(eff_exit,  2) if eff_exit  is not None else "",
-            entry_dt, exit_dt, result, round(move, 2),
+            entry_dt, exit_dt, result,
+            round(move, 2), pnl_pct_val, alt_pnl_val, delta_val,
             s.get("reasoning", "") or "",
         ])
         print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f} [{entry_dt}-{exit_dt}]")
@@ -1031,7 +1061,10 @@ def log_to_anulowane_grok(s: dict, result: str, entry_ts, exit_ts,
         except gspread.WorksheetNotFound:
             sh = wb.add_worksheet("Anulowane_Grok", rows=500, cols=len(ANULOWANE_GROK_HEADER) + 2)
             sh.append_row(ANULOWANE_GROK_HEADER)
-        alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
+        _at      = s["alert_time"]
+        if isinstance(_at, str):
+            _at = datetime.fromisoformat(_at)
+        alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
         entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
         exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])
@@ -1189,7 +1222,12 @@ def check_pending(candles_m15: list[dict]):
                 # Jedynym źródłem prawdy jest exchange_trader, który co 15s odpytuje
                 # Bitget i ustawia exchange_position_opened=True gdy plan order zostanie wykonany.
                 if not s.get("exchange_position_opened"):
-                    still_pending.append(s)
+                    if age_h > ENTRY_TIMEOUT_H:
+                        print(f"[pending] #{s.get('setup_id')} Bitget nie weszlo (timeout {ENTRY_TIMEOUT_H}h)")
+                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
+                        # exchange_trader anuluje plan order przy następnym sync przez get_resolved_with_open_orders()
+                    else:
+                        still_pending.append(s)
                     continue
                 # exchange_trader potwierdził otwarcie pozycji w Bitget
                 hit = int(datetime.now(timezone.utc).timestamp())
@@ -1210,7 +1248,7 @@ def check_pending(candles_m15: list[dict]):
                 if hit is None:
                     if age_h > ENTRY_TIMEOUT_H:
                         print(f"[pending] {s['model']} {d}: nie weszlo")
-                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, 0, None)
+                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
                         if not s.get("shadow"):
                             try:
                                 sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
@@ -1336,7 +1374,7 @@ def check_pending(candles_m15: list[dict]):
                 except Exception:
                     pass
         elif age_h > TRADE_TIMEOUT_H:
-            db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, 0, None)
+            db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
             still_pending.append(s)
             db.update_setup(s["setup_id"],
@@ -1453,12 +1491,16 @@ def check_pending_with_grok(candles_m15: list[dict], candles_h1: list[dict], cur
 
     for s in pending:
         if s.get("shadow") and s.get("setup_id") in cancel_map:
-            db.update_setup(s["setup_id"],
+            sid = s["setup_id"]
+            db.update_setup(sid,
                             shadow=True,
                             cancel_reason=s.get("cancel_reason", ""),
                             cancel_time=s.get("cancel_time"),
                             cancel_price=s.get("cancel_price"))
-    print(f"[grok-valid] Anulowano {cancelled} setupów, shadow tracking aktywny.")
+            # Natychmiastowe zamknięcie — exchange_trader anuluje plan order
+            # przez get_resolved_with_open_orders() przy następnym sync (co 15s)
+            db.resolve_setup(sid, "anulowany", None, None, None, None)
+    print(f"[grok-valid] Anulowano {cancelled} setupów.")
 
 
 # ── Anti-spam ─────────────────────────────────────────────────────────────────

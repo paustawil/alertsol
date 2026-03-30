@@ -10,7 +10,10 @@ Uruchamia 3 zadania w tle:
 + FastAPI web dashboard dostępny pod URL przydzielonym przez Railway.
 """
 
+import html as _html
+import json as _json
 import logging
+import math
 import os
 import signal
 import sys
@@ -19,8 +22,9 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 import db
 
@@ -73,11 +77,14 @@ def run_sheets_export():
 
             try:
                 if s.get("shadow"):
-                    sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
+                    ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
                 else:
-                    sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                db.mark_sheets_exported(s["setup_id"])
-                log.info(f"[sheets-export] Setup #{s['setup_id']} wyeksportowany.")
+                    ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
+                if ok:
+                    db.mark_sheets_exported(s["setup_id"])
+                    log.info(f"[sheets-export] Setup #{s['setup_id']} wyeksportowany.")
+                else:
+                    log.warning(f"[sheets-export] Setup #{s['setup_id']} — eksport nieudany, spróbuję ponownie.")
             except Exception:
                 log.exception(f"[sheets-export] Błąd eksportu setupu #{s['setup_id']}")
     except Exception:
@@ -170,15 +177,88 @@ def dashboard():
             f"<td>{sl}</td><td>{sl2}</td></tr>\n"
         )
 
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     history_rows = ""
     for s in recent:
-        result  = s.get("result", "—")
-        pnl     = f"{float(s['pnl_usd']):+.2f}" if s.get("pnl_usd") is not None else "—"
-        color   = "green" if s.get("pnl_usd") and float(s["pnl_usd"]) > 0 else ("gray" if pnl == "—" else "red")
+        sid        = s["setup_id"]
+        result_val = s.get("result") or ""
+        pnl_val    = float(s["pnl_usd"]) if s.get("pnl_usd") is not None else None
+        pnl_str    = f"{pnl_val:+.2f}" if pnl_val is not None else "—"
+        pnl_color  = "lightgreen" if pnl_val and pnl_val > 0 else ("gray" if pnl_val is None else "salmon")
+        avg_entry  = float(s["avg_entry"]) if s.get("avg_entry") else None
+        avg_exit_v = float(s["avg_exit"])  if s.get("avg_exit")  else None
+        tps        = s.get("tps") or []
+
+        avg_entry_str = f"{avg_entry:.2f}" if avg_entry else "—"
+        avg_exit_str  = f"{avg_exit_v:.2f}" if avg_exit_v is not None else ""
+
+        # Qty — z bazy lub oszacowane
+        try:
+            full_qty = float(s["exchange_qty_full"]) if s.get("exchange_qty_full") else None
+            half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
+        except (ValueError, TypeError):
+            full_qty = half_qty = None
+        if not full_qty and avg_entry:
+            full_qty = max(math.floor((trade_usdt * 20 / avg_entry) / 0.1) * 0.1, 0.1)
+        if not half_qty and full_qty:
+            half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+
+        # PnL %
+        pnl_pct = float(s["pnl_pct"]) if s.get("pnl_pct") is not None else None
+        if pnl_pct is None and pnl_val is not None and trade_usdt:
+            pnl_pct = round(pnl_val / trade_usdt * 100, 2)
+        pnl_pct_str   = f"{pnl_pct:+.1f}%" if pnl_pct is not None else "—"
+        pnl_pct_color = "lightgreen" if pnl_pct and pnl_pct > 0 else ("gray" if pnl_pct is None else "salmon")
+
+        # Alternatywny scenariusz: całość zamknięta na TP1 (TP2 i TP1+BE)
+        alt_pnl = None
+        delta   = None
+        tp1_price = float(tps[0]) if tps else None
+        if result_val in ("TP2", "TP1+BE") and tp1_price and avg_entry and full_qty:
+            sign    = 1 if s.get("direction") == "long" else -1
+            alt_pnl = round(sign * full_qty * (tp1_price - avg_entry), 2)
+            if pnl_val is not None:
+                delta = round(pnl_val - alt_pnl, 2)
+        alt_pnl_str   = f"{alt_pnl:+.2f}" if alt_pnl is not None else "—"
+        delta_str     = f"{delta:+.2f}"   if delta   is not None else "—"
+        alt_color     = "lightgreen" if alt_pnl and alt_pnl > 0 else ("gray" if alt_pnl is None else "salmon")
+        delta_color   = "lightgreen" if delta   and delta   > 0 else ("gray" if delta   is None else "salmon")
+
+        # Dane setupu zakodowane w atrybucie data-setup (dla JS)
+        setup_data = {
+            "avg_entry":    avg_entry,
+            "tp1":          tp1_price,
+            "tp2":          float(tps[1]) if len(tps) > 1 else None,
+            "sl":           float(s["sl"]) if s.get("sl") else None,
+            "sl_after_tp1": float(s["sl_after_tp1"]) if s.get("sl_after_tp1") else None,
+            "direction":    s.get("direction", "long"),
+            "full_qty":     full_qty,
+            "half_qty":     half_qty,
+            "trade_usdt":   trade_usdt,
+        }
+        setup_json = _html.escape(_json.dumps(setup_data))
+
+        # Dropdown wynik
+        options = ""
+        for opt, label in [("TP1","TP1"),("TP2","TP2"),("TP1+BE","TP1+BE"),("SL","SL"),("nieokreslone","nieokreślone")]:
+            sel = " selected" if opt == result_val else ""
+            options += f'<option value="{opt}"{sel}>{label}</option>'
+
         history_rows += (
-            f"<tr><td>#{s['setup_id']}</td><td>{s['model']}</td>"
-            f"<td>{s['direction'].upper()}</td><td>{result}</td>"
-            f"<td style='color:{color}'>{pnl}</td></tr>\n"
+            f'<tr data-setup-id="{sid}" data-setup="{setup_json}">'
+            f'<td>#{sid}</td>'
+            f'<td>{s["model"]}</td>'
+            f'<td>{s["direction"].upper()}</td>'
+            f'<td>{avg_entry_str}</td>'
+            f'<td><select class="result-select" onchange="onResultChange(this)">{options}</select></td>'
+            f'<td><input class="avg-exit-input" type="number" step="0.01" value="{avg_exit_str}"'
+            f' oninput="onExitChange(this)"></td>'
+            f'<td class="pnl-cell" style="color:{pnl_color}">{pnl_str}</td>'
+            f'<td class="pnl-pct-cell" style="color:{pnl_pct_color}">{pnl_pct_str}</td>'
+            f'<td class="alt-pnl-cell" style="color:{alt_color}">{alt_pnl_str}</td>'
+            f'<td class="delta-cell" style="color:{delta_color}">{delta_str}</td>'
+            f'<td><button class="save-btn" onclick="saveResult(this)">Zapisz</button></td>'
+            f'</tr>\n'
         )
 
     by_model_rows = ""
@@ -191,12 +271,16 @@ def dashboard():
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>AlertSol Dashboard</title>
 <style>
-  body {{ font-family: monospace; max-width: 900px; margin: 20px auto; background: #1a1a1a; color: #e0e0e0; }}
+  body {{ font-family: monospace; max-width: 1100px; margin: 20px auto; background: #1a1a1a; color: #e0e0e0; }}
   h2 {{ color: #90caf9; }} h3 {{ color: #80deea; }}
   table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-  th, td {{ border: 1px solid #444; padding: 6px 12px; text-align: left; }}
+  th, td {{ border: 1px solid #444; padding: 6px 10px; text-align: left; }}
   th {{ background: #333; }}
   .stat {{ display: inline-block; margin: 0 20px 10px 0; font-size: 1.2em; }}
+  .result-select {{ background: #2a2a2a; color: #e0e0e0; border: 1px solid #555; padding: 2px 4px; font-family: monospace; }}
+  .avg-exit-input {{ background: #2a2a2a; color: #e0e0e0; border: 1px solid #555; padding: 2px 4px; width: 72px; font-family: monospace; }}
+  .save-btn {{ background: #333; color: #e0e0e0; border: 1px solid #555; padding: 2px 10px; cursor: pointer; font-family: monospace; }}
+  .save-btn:hover {{ background: #444; }}
 </style></head><body>
 <h2>🤖 AlertSol Dashboard</h2>
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
@@ -219,10 +303,121 @@ def dashboard():
 </table>
 
 <h3>Ostatnie 20 zamkniętych</h3>
-<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wynik</th><th>PnL $</th></tr>
-{history_rows or '<tr><td colspan=5 style="color:#888">Brak historii</td></tr>'}
+<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
+{history_rows or '<tr><td colspan=11 style="color:#888">Brak historii</td></tr>'}
 </table>
-</body></html>"""
+</body>
+<script>
+function getSetupData(tr) {{
+  return JSON.parse(tr.dataset.setup);
+}}
+
+function calcAvgExit(result, d) {{
+  if (result === 'SL')     return d.sl;
+  if (result === 'TP1')    return d.tp1;
+  if (result === 'TP2')    return (d.tp1 != null && d.tp2 != null) ? (d.tp1 + d.tp2) / 2 : d.tp2;
+  if (result === 'TP1+BE') return (d.tp1 != null && d.sl_after_tp1 != null) ? (d.tp1 + d.sl_after_tp1) / 2 : null;
+  return null;
+}}
+
+function calcPnl(result, d, avgExit) {{
+  if (!d.avg_entry || avgExit == null || isNaN(avgExit)) return null;
+  if (result === 'nieokreslone') return null;
+  var sign = d.direction === 'long' ? 1 : -1;
+  if (result === 'SL')              return sign * d.full_qty * (avgExit - d.avg_entry);
+  if (result === 'TP1')             return sign * d.half_qty * (avgExit - d.avg_entry);
+  if (result === 'TP2' || result === 'TP1+BE')
+                                    return sign * (d.half_qty + d.half_qty) * (avgExit - d.avg_entry);
+  return null;
+}}
+
+function refreshAllCells(tr, pnl) {{
+  var d      = getSetupData(tr);
+  var result = tr.querySelector('.result-select').value;
+
+  // PnL $
+  var pnlCell = tr.querySelector('.pnl-cell');
+  if (pnl == null) {{ pnlCell.textContent = '—'; pnlCell.style.color = 'gray'; }}
+  else {{ pnlCell.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2); pnlCell.style.color = pnl >= 0 ? 'lightgreen' : 'salmon'; }}
+
+  // PnL %
+  var pctCell = tr.querySelector('.pnl-pct-cell');
+  var tu = d.trade_usdt || 100;
+  if (pnl != null && tu) {{
+    var pct = pnl / tu * 100;
+    pctCell.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+    pctCell.style.color = pct >= 0 ? 'lightgreen' : 'salmon';
+  }} else {{ pctCell.textContent = '—'; pctCell.style.color = 'gray'; }}
+
+  // TP1-only $ i Δ
+  var altCell   = tr.querySelector('.alt-pnl-cell');
+  var deltaCell = tr.querySelector('.delta-cell');
+  var alt = null;
+  if ((result === 'TP2' || result === 'TP1+BE') && d.tp1 && d.avg_entry && d.full_qty) {{
+    var sign = d.direction === 'long' ? 1 : -1;
+    alt = sign * d.full_qty * (d.tp1 - d.avg_entry);
+  }}
+  if (alt != null) {{
+    altCell.textContent = (alt >= 0 ? '+' : '') + alt.toFixed(2);
+    altCell.style.color = alt >= 0 ? 'lightgreen' : 'salmon';
+    if (pnl != null) {{
+      var dlt = pnl - alt;
+      deltaCell.textContent = (dlt >= 0 ? '+' : '') + dlt.toFixed(2);
+      deltaCell.style.color = dlt >= 0 ? 'lightgreen' : 'salmon';
+    }} else {{ deltaCell.textContent = '—'; deltaCell.style.color = 'gray'; }}
+  }} else {{
+    altCell.textContent = '—'; altCell.style.color = 'gray';
+    deltaCell.textContent = '—'; deltaCell.style.color = 'gray';
+  }}
+}}
+
+function onResultChange(sel) {{
+  var tr  = sel.closest('tr');
+  var d   = getSetupData(tr);
+  var inp = tr.querySelector('.avg-exit-input');
+  var ae  = calcAvgExit(sel.value, d);
+  inp.value = ae != null ? ae.toFixed(2) : '';
+  refreshAllCells(tr, calcPnl(sel.value, d, ae));
+}}
+
+function onExitChange(inp) {{
+  var tr  = inp.closest('tr');
+  var d   = getSetupData(tr);
+  var res = tr.querySelector('.result-select').value;
+  refreshAllCells(tr, calcPnl(res, d, parseFloat(inp.value)));
+}}
+
+async function saveResult(btn) {{
+  var tr      = btn.closest('tr');
+  var setupId = tr.dataset.setupId;
+  var result  = tr.querySelector('.result-select').value;
+  var exitVal = tr.querySelector('.avg-exit-input').value;
+  var avgExit = exitVal !== '' ? parseFloat(exitVal) : null;
+
+  btn.textContent = '...'; btn.disabled = true;
+  try {{
+    var resp = await fetch('/api/update-result/' + setupId, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{result: result, avg_exit: avgExit}})
+    }});
+    var data = await resp.json();
+    if (resp.ok && data.ok) {{
+      btn.textContent = '✓'; btn.style.color = 'lightgreen';
+      if (data.avg_exit != null) tr.querySelector('.avg-exit-input').value = parseFloat(data.avg_exit).toFixed(2);
+      refreshAllCells(tr, data.pnl_usd != null ? data.pnl_usd : null);
+    }} else {{
+      btn.textContent = '✗'; btn.style.color = 'salmon';
+    }}
+  }} catch(e) {{
+    btn.textContent = '✗'; btn.style.color = 'salmon';
+  }}
+  setTimeout(function() {{
+    btn.textContent = 'Zapisz'; btn.style.color = ''; btn.disabled = false;
+  }}, 2000);
+}}
+</script>
+</html>"""
     return HTMLResponse(html)
 
 
@@ -297,6 +492,19 @@ def admin_get_setup(setup_id: int):
     return dict(row)
 
 
+@app.post("/admin/reset-sheets-export")
+def admin_reset_sheets_export():
+    """Resetuje sheets_exported=FALSE dla wszystkich zamkniętych setupów.
+    Użyj jednorazowo po naprawie buga z eksportem do Sheets."""
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE setups SET sheets_exported = FALSE WHERE resolved = TRUE AND sheets_exported = TRUE"
+            )
+            count = cur.rowcount
+    return {"ok": True, "reset_count": count, "message": f"Zresetowano {count} setupów — zostaną wyeksportowane przy następnym cyklu (co 5 min)"}
+
+
 @app.get("/api/stats")
 def api_stats():
     """JSON API dla przyszłej integracji z Metabase."""
@@ -304,6 +512,66 @@ def api_stats():
         "summary":     db.get_summary_stats(),
         "active":      db.get_active_setups(),
         "recent":      db.get_recent_resolved(50),
+    }
+
+
+class ResultUpdate(BaseModel):
+    result: str
+    avg_exit: float | None = None
+
+
+@app.post("/api/update-result/{setup_id}")
+def api_update_result(setup_id: int, body: ResultUpdate):
+    """Ręczna korekta wyniku i PnL zamkniętego setupu."""
+    VALID_RESULTS = {"TP1", "TP2", "TP1+BE", "SL", "nieokreslone"}
+    if body.result not in VALID_RESULTS:
+        raise HTTPException(status_code=400, detail=f"Nieprawidłowy wynik: {body.result}")
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
+
+    s          = db._row_to_dict(row)
+    avg_exit   = body.avg_exit
+    pnl_usd    = None
+    avg_entry  = float(s["avg_entry"]) if s.get("avg_entry") else None
+
+    if avg_exit is not None and avg_entry:
+        direction = s.get("direction", "long")
+        sign      = 1 if direction == "long" else -1
+
+        # Wyznacz qty
+        try:
+            full_qty = float(s["exchange_qty_full"]) if s.get("exchange_qty_full") else None
+            half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
+        except (ValueError, TypeError):
+            full_qty = half_qty = None
+
+        if not full_qty:
+            trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+            full_qty = max(math.floor((trade_usdt * 20 / avg_entry) / 0.1) * 0.1, 0.1)
+        if not half_qty:
+            half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+
+        # Wylicz PnL
+        if body.result == "SL":
+            pnl_usd = sign * full_qty * (avg_exit - avg_entry)
+        elif body.result == "TP1":
+            pnl_usd = sign * half_qty * (avg_exit - avg_entry)
+        elif body.result in ("TP2", "TP1+BE"):
+            # Obie połówki, avg_exit = średnia ważona obu cen wyjścia
+            pnl_usd = sign * (half_qty + half_qty) * (avg_exit - avg_entry)
+
+    db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)
+    return {
+        "ok":      True,
+        "setup_id": setup_id,
+        "result":  body.result,
+        "avg_exit": avg_exit,
+        "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
     }
 
 
