@@ -696,7 +696,7 @@ async function cancelActiveSetup(btn) {{
   var qtyFull = tr.dataset.qtyFull;
   var closeQtyInfo = tp1Done ? '½ pozycji (' + qtyFull + '/2 SOL)' : qtyFull ? qtyFull + ' SOL' : 'pozycja';
   var msg     = posOpen
-    ? 'Anulować setup #' + sid + '?\n\nZlecenia TP1/TP2/SL zostaną anulowane, a ' + closeQtyInfo + ' zostanie zamknięta RYNKOWO na bieżącej cenie.'
+    ? 'Anulować setup #' + sid + '?\\n\\nZlecenia TP1/TP2/SL zostaną anulowane, a ' + closeQtyInfo + ' zostanie zamknięta RYNKOWO na bieżącej cenie.'
     : 'Anulować setup #' + sid + '? Plan order zostanie anulowany.';
   if (!confirm(msg)) return;
   btn.textContent = '...'; btn.disabled = true;
