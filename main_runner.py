@@ -178,18 +178,34 @@ def dashboard():
         qty_full = s.get("exchange_qty_full")  or ""
         pos_open = "true" if s.get("exchange_position_opened") else "false"
         tp1_done = "true" if s.get("exchange_tp1_done") else "false"
+        tp1_raw  = f"{tps[0]:.2f}" if len(tps) > 0 else ""
+        tp2_raw  = f"{tps[1]:.2f}" if len(tps) > 1 else ""
         active_rows += (
             f'<tr data-sid="{sid}" data-plan-oid="{plan_oid}" '
             f'data-tp1-oid="{tp1_oid}" data-tp2-oid="{tp2_oid}" data-sl-oid="{sl_oid}" '
             f'data-qty-full="{qty_full}" data-pos-open="{pos_open}" data-tp1-done="{tp1_done}">'
             f"<td>#{sid}</td><td>{s['model']}</td>"
             f"<td>{s['direction'].upper()}</td><td>{status}</td>"
-            f"<td>{w1}</td><td>{tp1}</td><td>{tp2}</td>"
+            f"<td>{w1}</td>"
+            f'<td>'
+            f'<span class="av-view">{tp1}</span>'
+            f'<input class="av-edit tp1-input" type="number" step="0.01" value="{tp1_raw}" style="width:72px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;font-family:monospace;padding:2px 4px">'
+            f'</td>'
+            f'<td>'
+            f'<span class="av-view">{tp2}</span>'
+            f'<input class="av-edit tp2-input" type="number" step="0.01" value="{tp2_raw}" style="width:72px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;font-family:monospace;padding:2px 4px">'
+            f'</td>'
             f"<td>{sl}</td><td>{sl2}</td>"
             f'<td class="qt-p"  id="qp-{sid}"><span class="qt-loading">…</span></td>'
             f'<td class="qt-tp1" id="qt1-{sid}"><span class="qt-loading">…</span></td>'
             f'<td class="qt-tp2" id="qt2-{sid}"><span class="qt-loading">…</span></td>'
             f'<td class="qt-sl"  id="qsl-{sid}"><span class="qt-loading">…</span></td>'
+            f'<td style="white-space:nowrap">'
+            f'<button class="av-view btn-edit" onclick="editActiveTp(this)">Zmień TP</button>'
+            f'<button class="av-edit btn-action" onclick="saveActiveTp(this)">Zapisz</button>'
+            f'<button class="av-edit btn-action" onclick="cancelActiveTpEdit(this)">Zamknij</button>'
+            f' <button class="btn-action" style="color:#ffaaaa;border-color:#884444" onclick="cancelActiveSetup(this)">Anuluj setup</button>'
+            f'</td>'
             f'</tr>\n'
         )
 
@@ -357,6 +373,9 @@ def dashboard():
   #active-table th[title], #active-table td.qt-p,
   #active-table td.qt-tp1, #active-table td.qt-tp2, #active-table td.qt-sl
     {{ font-size: 0.9em; min-width: 42px; text-align: right; }}
+  .av-edit {{ display: none; }}
+  tr.editing-tp .av-edit {{ display: inline; }}
+  tr.editing-tp .av-view {{ display: none; }}
 </style></head><body>
 <h2>🤖 AlertSol Dashboard</h2>
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
@@ -374,8 +393,9 @@ def dashboard():
 <th title="SOL w otwartej pozycji (Bitget)" style="background:#1a2a1a">qtP</th>
 <th title="SOL na zleceniu TP1 (Bitget)" style="background:#1a2a1a">qtTP1</th>
 <th title="SOL na zleceniu TP2 (Bitget)" style="background:#1a2a1a">qtTP2</th>
-<th title="SOL na zleceniu SL (Bitget)" style="background:#1a2a1a">qtSL</th></tr>
-{active_rows or '<tr><td colspan=13 style="color:#888">Brak aktywnych setupów</td></tr>'}
+<th title="SOL na zleceniu SL (Bitget)" style="background:#1a2a1a">qtSL</th>
+<th>Akcje</th></tr>
+{active_rows or '<tr><td colspan=14 style="color:#888">Brak aktywnych setupów</td></tr>'}
 </table>
 
 <h3>Per model</h3>
@@ -618,6 +638,74 @@ function clearQtCells() {{
 loadBitgetLive();
 setInterval(loadBitgetLive, 15000);
 // ── koniec Bitget live ───────────────────────────────────────────────────────
+
+// ── Zarządzanie aktywnymi setupami ───────────────────────────────────────────
+function editActiveTp(btn) {{
+  btn.closest('tr').classList.add('editing-tp');
+}}
+
+function cancelActiveTpEdit(btn) {{
+  btn.closest('tr').classList.remove('editing-tp');
+}}
+
+async function saveActiveTp(btn) {{
+  var tr  = btn.closest('tr');
+  var sid = tr.dataset.sid;
+  var tp1Str = tr.querySelector('.tp1-input').value;
+  var tp2Str = tr.querySelector('.tp2-input').value;
+  var tp1 = tp1Str !== '' ? parseFloat(tp1Str) : null;
+  var tp2 = tp2Str !== '' ? parseFloat(tp2Str) : null;
+  if (tp1 === null && tp2 === null) {{
+    alert('Wpisz co najmniej jedną wartość (TP1 lub TP2).');
+    return;
+  }}
+  btn.textContent = '...'; btn.disabled = true;
+  try {{
+    var resp = await fetch('/api/update-tps/' + sid, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{tp1: tp1, tp2: tp2}})
+    }});
+    var data = await resp.json();
+    if (resp.ok && data.ok) {{
+      if (tp1 !== null) tr.querySelector('.tp1-input').closest('td').querySelector('.av-view').textContent = '$' + tp1.toFixed(2);
+      if (tp2 !== null) tr.querySelector('.tp2-input').closest('td').querySelector('.av-view').textContent = '$' + tp2.toFixed(2);
+      tr.classList.remove('editing-tp');
+    }} else {{
+      alert('Błąd zmiany TP: ' + (data.failed || []).join(', ') || data.detail || 'nieznany błąd');
+    }}
+  }} catch(e) {{
+    alert('Błąd: ' + e.message);
+  }}
+  btn.textContent = 'Zapisz'; btn.disabled = false;
+}}
+
+async function cancelActiveSetup(btn) {{
+  var tr      = btn.closest('tr');
+  var sid     = tr.dataset.sid;
+  var posOpen = tr.dataset.posOpen === 'true';
+  var msg     = posOpen
+    ? 'Anulować setup #' + sid + '?\n\nUWAGA: pozycja pozostanie OTWARTA na Bitget bez zleceń TP/SL!'
+    : 'Anulować setup #' + sid + '? Plan order zostanie anulowany.';
+  if (!confirm(msg)) return;
+  btn.textContent = '...'; btn.disabled = true;
+  try {{
+    var resp = await fetch('/api/cancel-setup/' + sid, {{method: 'POST'}});
+    var data = await resp.json();
+    if (resp.ok && data.ok) {{
+      tr.style.opacity = '0.4';
+      btn.textContent = '✓';
+      setTimeout(function() {{ location.reload(); }}, 1500);
+    }} else {{
+      alert('Błąd: ' + (data.detail || data.message || 'nieznany błąd'));
+      btn.textContent = 'Anuluj setup'; btn.disabled = false;
+    }}
+  }} catch(e) {{
+    alert('Błąd: ' + e.message);
+    btn.textContent = 'Anuluj setup'; btn.disabled = false;
+  }}
+}}
+// ── koniec zarządzania setupami ──────────────────────────────────────────────
 
 async function saveResult(btn) {{
   var tr       = btn.closest('tr');
@@ -1070,6 +1158,189 @@ class ResultUpdate(BaseModel):
     result: str
     avg_exit: float | None = None
     avg_entry: float | None = None
+
+
+class TpsUpdate(BaseModel):
+    tp1: float | None = None
+    tp2: float | None = None
+
+
+@app.post("/api/update-tps/{setup_id}")
+def api_update_tps(setup_id: int, body: TpsUpdate):
+    """Modyfikuje TP1 i/lub TP2 aktywnego setupu — aktualizuje DB i zlecenia na Bitget."""
+    import exchange_trader as et
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
+
+    s = db._row_to_dict(row)
+    if s.get("resolved"):
+        raise HTTPException(status_code=400, detail="Setup jest już zamknięty")
+
+    tps = list(s.get("tps") or [])
+    tp1_new = body.tp1
+    tp2_new = body.tp2
+
+    modified = []
+    failed = []
+
+    client = et._client()
+
+    # Modify TP1 on Bitget if order exists
+    tp1_oid = s.get("exchange_tp1_oid")
+    if tp1_new is not None:
+        if tp1_oid and client:
+            half_qty_str = s.get("exchange_qty_half")
+            half_qty = float(half_qty_str) if half_qty_str else None
+            try:
+                params = {
+                    "symbol":       et.SYMBOL,
+                    "productType":  et.PRODUCT_TYPE,
+                    "marginCoin":   et.MARGIN_COIN,
+                    "orderId":      tp1_oid,
+                    "triggerPrice": et._fmt_price(tp1_new),
+                    "triggerType":  "mark_price",
+                }
+                if half_qty:
+                    params["size"] = et._fmt_qty(half_qty)
+                resp = client.post("/api/v2/mix/order/modify-tpsl-order", params)
+                if resp.get("code") == "00000":
+                    modified.append(f"TP1→{tp1_new}")
+                else:
+                    failed.append(f"TP1:{resp.get('msg')}")
+            except Exception as e:
+                failed.append(f"TP1:{e}")
+        else:
+            modified.append(f"TP1→{tp1_new} (tylko DB)")
+        if len(tps) > 0:
+            tps[0] = tp1_new
+        elif len(tps) == 0:
+            tps = [tp1_new]
+
+    # Modify TP2 on Bitget if order exists
+    tp2_oid = s.get("exchange_tp2_oid")
+    if tp2_new is not None:
+        if tp2_oid and client:
+            half_qty_str = s.get("exchange_qty_half")
+            half_qty = float(half_qty_str) if half_qty_str else None
+            try:
+                params = {
+                    "symbol":       et.SYMBOL,
+                    "productType":  et.PRODUCT_TYPE,
+                    "marginCoin":   et.MARGIN_COIN,
+                    "orderId":      tp2_oid,
+                    "triggerPrice": et._fmt_price(tp2_new),
+                    "triggerType":  "mark_price",
+                }
+                if half_qty:
+                    params["size"] = et._fmt_qty(half_qty)
+                resp = client.post("/api/v2/mix/order/modify-tpsl-order", params)
+                if resp.get("code") == "00000":
+                    modified.append(f"TP2→{tp2_new}")
+                else:
+                    failed.append(f"TP2:{resp.get('msg')}")
+            except Exception as e:
+                failed.append(f"TP2:{e}")
+        else:
+            modified.append(f"TP2→{tp2_new} (tylko DB)")
+        if len(tps) > 1:
+            tps[1] = tp2_new
+        elif len(tps) == 1:
+            tps.append(tp2_new)
+        else:
+            tps = [None, tp2_new]
+
+    if modified or not failed:
+        db.update_setup(setup_id, tps=tps)
+
+    return {
+        "ok":       len(failed) == 0,
+        "setup_id": setup_id,
+        "modified": modified,
+        "failed":   failed,
+        "tps":      tps,
+    }
+
+
+@app.post("/api/cancel-setup/{setup_id}")
+def api_cancel_setup(setup_id: int):
+    """Anuluje setup: kasuje zlecenia powiązane z setupem na Bitget i zamyka go w DB jako
+    'anulowany'. Nie zamyka samej pozycji — jeśli pozycja jest otwarta, pozostaje bez TP/SL."""
+    import exchange_trader as et
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
+
+    s = db._row_to_dict(row)
+    if s.get("resolved"):
+        raise HTTPException(status_code=400, detail="Setup jest już zamknięty")
+
+    client = et._client()
+    cancelled_on_bitget = []
+    failed_on_bitget = []
+
+    plan_oid = s.get("exchange_plan_oid")
+    tp1_oid  = s.get("exchange_tp1_oid")
+    tp2_oid  = s.get("exchange_tp2_oid")
+    sl_oid   = s.get("exchange_sl_oid")
+    pos_open = s.get("exchange_position_opened", False)
+
+    if client:
+        # Anuluj plan order (setup czekający na wejście)
+        if plan_oid and not pos_open:
+            try:
+                resp = client.post("/api/v2/mix/order/cancel-plan-order", {
+                    "symbol":      et.SYMBOL,
+                    "productType": et.PRODUCT_TYPE,
+                    "orderId":     plan_oid,
+                    "planType":    "normal_plan",
+                })
+                if resp.get("code") == "00000":
+                    cancelled_on_bitget.append("plan_order")
+                else:
+                    failed_on_bitget.append(f"plan_order:{resp.get('msg')}")
+            except Exception as e:
+                failed_on_bitget.append(f"plan_order:{e}")
+
+        # Anuluj zlecenia TPSL (pozycja otwarta)
+        for label, oid, plan_type in [
+            ("TP1", tp1_oid, "profit_plan"),
+            ("TP2", tp2_oid, "profit_plan"),
+            ("SL",  sl_oid,  "loss_plan"),
+        ]:
+            if oid:
+                try:
+                    resp = client.post("/api/v2/mix/order/cancel-plan-order", {
+                        "symbol":      et.SYMBOL,
+                        "productType": et.PRODUCT_TYPE,
+                        "orderId":     oid,
+                        "planType":    plan_type,
+                    })
+                    if resp.get("code") == "00000":
+                        cancelled_on_bitget.append(label)
+                    else:
+                        failed_on_bitget.append(f"{label}:{resp.get('msg')}")
+                except Exception as e:
+                    failed_on_bitget.append(f"{label}:{e}")
+
+    db.resolve_setup(setup_id, "anulowany", None, None, 0.0, None)
+    db.update_setup(setup_id, exchange_done=True, cancel_reason="manual")
+
+    return {
+        "ok":                 True,
+        "setup_id":           setup_id,
+        "cancelled_on_bitget": cancelled_on_bitget,
+        "failed_on_bitget":   failed_on_bitget,
+        "message":            "Setup anulowany" + (f" (błędy Bitget: {failed_on_bitget})" if failed_on_bitget else ""),
+    }
 
 
 @app.post("/api/update-result/{setup_id}")
