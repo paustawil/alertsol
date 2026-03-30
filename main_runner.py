@@ -178,6 +178,16 @@ def dashboard():
         )
 
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+
+    RESULT_LABELS = {
+        "TP1": "TP1", "TP2": "TP2", "TP1+BE": "TP1+BE", "SL": "SL",
+        "nieokreslone": "Nieokreślone", "nie weszlo": "Nie weszło", "anulowany": "Anulowane",
+    }
+    RESULT_OPTS = [
+        ("TP1","TP1"), ("TP2","TP2"), ("TP1+BE","TP1+BE"), ("SL","SL"),
+        ("nieokreslone","Nieokreślone"), ("nie weszlo","Nie weszło"), ("anulowany","Anulowane"),
+    ]
+
     history_rows = ""
     for s in recent:
         sid        = s["setup_id"]
@@ -189,8 +199,9 @@ def dashboard():
         avg_exit_v = float(s["avg_exit"])  if s.get("avg_exit")  else None
         tps        = s.get("tps") or []
 
-        avg_entry_str = f"{avg_entry:.2f}" if avg_entry else "—"
-        avg_exit_str  = f"{avg_exit_v:.2f}" if avg_exit_v is not None else ""
+        avg_entry_str     = f"{avg_entry:.2f}" if avg_entry else "—"
+        avg_exit_str      = f"{avg_exit_v:.2f}" if avg_exit_v is not None else "—"
+        avg_exit_inp_val  = f"{avg_exit_v:.2f}" if avg_exit_v is not None else ""
 
         # Qty — z bazy lub oszacowane
         try:
@@ -198,8 +209,9 @@ def dashboard():
             half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
         except (ValueError, TypeError):
             full_qty = half_qty = None
-        if not full_qty and avg_entry:
-            full_qty = max(math.floor((trade_usdt * 20 / avg_entry) / 0.1) * 0.1, 0.1)
+        entry_for_calc = avg_entry or w1
+        if not full_qty and entry_for_calc:
+            full_qty = max(math.floor((trade_usdt * 20 / entry_for_calc) / 0.1) * 0.1, 0.1)
         if not half_qty and full_qty:
             half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
 
@@ -224,9 +236,31 @@ def dashboard():
         alt_color     = "lightgreen" if alt_pnl and alt_pnl > 0 else ("gray" if alt_pnl is None else "salmon")
         delta_color   = "lightgreen" if delta   and delta   > 0 else ("gray" if delta   is None else "salmon")
 
+        result_label = RESULT_LABELS.get(result_val, result_val or "—")
+
+        # PnL (W1) — zawsze szacowany ze wzoru (TRADE_USDT*lev/W1)*(Δcena)
+        entries_list = s.get("entries") or []
+        w1 = float(entries_list[0]) if entries_list else None
+        pnl_w1 = None
+        if w1 and avg_exit_v and result_val in ("TP1", "TP2", "TP1+BE", "SL"):
+            sign_w1   = 1 if s.get("direction") == "long" else -1
+            fq_w1     = max(math.floor((trade_usdt * 20 / w1) / 0.1) * 0.1, 0.1)
+            hq_w1     = max(math.floor((fq_w1 / 2) / 0.1) * 0.1, 0.1)
+            if result_val == "SL":
+                pnl_w1 = sign_w1 * fq_w1 * (avg_exit_v - w1)
+            elif result_val == "TP1":
+                pnl_w1 = sign_w1 * hq_w1 * (avg_exit_v - w1)
+            else:  # TP2 / TP1+BE
+                pnl_w1 = sign_w1 * (hq_w1 + hq_w1) * (avg_exit_v - w1)
+            pnl_w1 = round(pnl_w1, 2)
+        pnl_w1_str   = f"{pnl_w1:+.2f}" if pnl_w1 is not None else "—"
+        pnl_w1_color = "lightgreen" if pnl_w1 and pnl_w1 > 0 else ("gray" if pnl_w1 is None else "salmon")
+
         # Dane setupu zakodowane w atrybucie data-setup (dla JS)
+        # avg_entry: używa W1 jako fallback żeby JS mógł liczyć PnL w trybie edycji
         setup_data = {
-            "avg_entry":    avg_entry,
+            "avg_entry":    avg_entry or w1,
+            "w1":           w1,
             "tp1":          tp1_price,
             "tp2":          float(tps[1]) if len(tps) > 1 else None,
             "sl":           float(s["sl"]) if s.get("sl") else None,
@@ -240,24 +274,38 @@ def dashboard():
 
         # Dropdown wynik
         options = ""
-        for opt, label in [("TP1","TP1"),("TP2","TP2"),("TP1+BE","TP1+BE"),("SL","SL"),("nieokreslone","nieokreślone")]:
+        for opt, label in RESULT_OPTS:
             sel = " selected" if opt == result_val else ""
             options += f'<option value="{opt}"{sel}>{label}</option>'
 
+        avg_entry_inp = avg_entry if avg_entry else (w1 or "")
         history_rows += (
             f'<tr data-setup-id="{sid}" data-setup="{setup_json}">'
             f'<td>#{sid}</td>'
             f'<td>{s["model"]}</td>'
             f'<td>{s["direction"].upper()}</td>'
-            f'<td>{avg_entry_str}</td>'
-            f'<td><select class="result-select" onchange="onResultChange(this)">{options}</select></td>'
-            f'<td><input class="avg-exit-input" type="number" step="0.01" value="{avg_exit_str}"'
-            f' oninput="onExitChange(this)"></td>'
+            f'<td>'
+            f'<span class="vmode avg-entry-display">{avg_entry_str}</span>'
+            f'<input class="emode avg-entry-input" type="number" step="0.01" value="{avg_entry_inp}" oninput="onEntryChange(this)">'
+            f'</td>'
+            f'<td>'
+            f'<span class="vmode result-display">{result_label}</span>'
+            f'<select class="emode result-select" onchange="onResultChange(this)">{options}</select>'
+            f'</td>'
+            f'<td>'
+            f'<span class="vmode exit-display">{avg_exit_str}</span>'
+            f'<input class="emode avg-exit-input" type="number" step="0.01" value="{avg_exit_inp_val}" oninput="onExitChange(this)">'
+            f'</td>'
             f'<td class="pnl-cell" style="color:{pnl_color}">{pnl_str}</td>'
             f'<td class="pnl-pct-cell" style="color:{pnl_pct_color}">{pnl_pct_str}</td>'
+            f'<td style="color:{pnl_w1_color}">{pnl_w1_str}</td>'
             f'<td class="alt-pnl-cell" style="color:{alt_color}">{alt_pnl_str}</td>'
             f'<td class="delta-cell" style="color:{delta_color}">{delta_str}</td>'
-            f'<td><button class="save-btn" onclick="saveResult(this)">Zapisz</button></td>'
+            f'<td style="white-space:nowrap">'
+            f'<button class="btn-edit vmode" onclick="editRow(this)">Edytuj</button>'
+            f'<button class="btn-action emode" onclick="saveResult(this)">Zapisz</button>'
+            f'<button class="btn-action emode" onclick="cancelEdit(this)">Anuluj</button>'
+            f'</td>'
             f'</tr>\n'
         )
 
@@ -277,10 +325,15 @@ def dashboard():
   th, td {{ border: 1px solid #444; padding: 6px 10px; text-align: left; }}
   th {{ background: #333; }}
   .stat {{ display: inline-block; margin: 0 20px 10px 0; font-size: 1.2em; }}
-  .result-select {{ background: #2a2a2a; color: #e0e0e0; border: 1px solid #555; padding: 2px 4px; font-family: monospace; }}
-  .avg-exit-input {{ background: #2a2a2a; color: #e0e0e0; border: 1px solid #555; padding: 2px 4px; width: 72px; font-family: monospace; }}
-  .save-btn {{ background: #333; color: #e0e0e0; border: 1px solid #555; padding: 2px 10px; cursor: pointer; font-family: monospace; }}
-  .save-btn:hover {{ background: #444; }}
+  .emode {{ display: none; }}
+  tr.editing .emode {{ display: inline; }}
+  tr.editing .vmode {{ display: none; }}
+  .result-select, .avg-exit-input, .avg-entry-input {{ background: #2a2a2a; color: #e0e0e0; border: 1px solid #555; padding: 2px 4px; font-family: monospace; }}
+  .avg-exit-input, .avg-entry-input {{ width: 72px; }}
+  .btn-edit {{ background: #2a2a2a; color: #aaa; border: 1px solid #555; padding: 2px 8px; cursor: pointer; font-family: monospace; font-size: 0.85em; }}
+  .btn-edit:hover {{ background: #3a3a3a; color: #e0e0e0; }}
+  .btn-action {{ background: #333; color: #e0e0e0; border: 1px solid #555; padding: 2px 8px; cursor: pointer; font-family: monospace; font-size: 0.85em; margin-right: 2px; }}
+  .btn-action:hover {{ background: #444; }}
 </style></head><body>
 <h2>🤖 AlertSol Dashboard</h2>
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
@@ -303,13 +356,47 @@ def dashboard():
 </table>
 
 <h3>Ostatnie 20 zamkniętych</h3>
-<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
-{history_rows or '<tr><td colspan=11 style="color:#888">Brak historii</td></tr>'}
+<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL wyliczony ze wzoru (TRADE_USDT×20/W1)×Δcena — zawsze dostępny">PnL (W1)</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
+{history_rows or '<tr><td colspan=12 style="color:#888">Brak historii</td></tr>'}
 </table>
 </body>
 <script>
+var RESULT_LABELS = {{
+  'TP1':'TP1','TP2':'TP2','TP1+BE':'TP1+BE','SL':'SL',
+  'nieokreslone':'Nieokreślone','nie weszlo':'Nie weszło','anulowany':'Anulowane'
+}};
+
 function getSetupData(tr) {{
   return JSON.parse(tr.dataset.setup);
+}}
+
+function editRow(btn) {{
+  var tr = btn.closest('tr');
+  tr.dataset.setupOriginal = tr.dataset.setup;
+  tr.dataset.pnlSnapshot = JSON.stringify({{
+    pnl: tr.querySelector('.pnl-cell').textContent,       pnlC: tr.querySelector('.pnl-cell').style.color,
+    pct: tr.querySelector('.pnl-pct-cell').textContent,   pctC: tr.querySelector('.pnl-pct-cell').style.color,
+    alt: tr.querySelector('.alt-pnl-cell').textContent,   altC: tr.querySelector('.alt-pnl-cell').style.color,
+    dlt: tr.querySelector('.delta-cell').textContent,     dltC: tr.querySelector('.delta-cell').style.color,
+  }});
+  tr.classList.add('editing');
+}}
+
+function cancelEdit(btn) {{
+  var tr = btn.closest('tr');
+  tr.dataset.setup = tr.dataset.setupOriginal;
+  var d = JSON.parse(tr.dataset.setupOriginal);
+  tr.querySelector('.avg-entry-input').value = d.avg_entry != null ? d.avg_entry : '';
+  var exitDisp = tr.querySelector('.exit-display').textContent;
+  tr.querySelector('.avg-exit-input').value = (exitDisp === '—') ? '' : exitDisp;
+  try {{
+    var snap = JSON.parse(tr.dataset.pnlSnapshot);
+    tr.querySelector('.pnl-cell').textContent     = snap.pnl; tr.querySelector('.pnl-cell').style.color     = snap.pnlC;
+    tr.querySelector('.pnl-pct-cell').textContent = snap.pct; tr.querySelector('.pnl-pct-cell').style.color = snap.pctC;
+    tr.querySelector('.alt-pnl-cell').textContent = snap.alt; tr.querySelector('.alt-pnl-cell').style.color = snap.altC;
+    tr.querySelector('.delta-cell').textContent   = snap.dlt; tr.querySelector('.delta-cell').style.color   = snap.dltC;
+  }} catch(e) {{}}
+  tr.classList.remove('editing');
 }}
 
 function calcAvgExit(result, d) {{
@@ -321,54 +408,58 @@ function calcAvgExit(result, d) {{
 }}
 
 function calcPnl(result, d, avgExit) {{
-  if (!d.avg_entry || avgExit == null || isNaN(avgExit)) return null;
-  if (result === 'nieokreslone') return null;
+  if (!d.avg_entry || !d.full_qty || avgExit == null || isNaN(avgExit)) return null;
+  if (!['TP1','TP2','TP1+BE','SL'].includes(result)) return null;
   var sign = d.direction === 'long' ? 1 : -1;
-  if (result === 'SL')              return sign * d.full_qty * (avgExit - d.avg_entry);
-  if (result === 'TP1')             return sign * d.half_qty * (avgExit - d.avg_entry);
-  if (result === 'TP2' || result === 'TP1+BE')
-                                    return sign * (d.half_qty + d.half_qty) * (avgExit - d.avg_entry);
-  return null;
+  if (result === 'SL')  return sign * d.full_qty  * (avgExit - d.avg_entry);
+  if (result === 'TP1') return sign * d.half_qty  * (avgExit - d.avg_entry);
+  return sign * (d.half_qty + d.half_qty) * (avgExit - d.avg_entry);
 }}
 
 function refreshAllCells(tr, pnl) {{
   var d      = getSetupData(tr);
   var result = tr.querySelector('.result-select').value;
 
-  // PnL $
-  var pnlCell = tr.querySelector('.pnl-cell');
-  if (pnl == null) {{ pnlCell.textContent = '—'; pnlCell.style.color = 'gray'; }}
-  else {{ pnlCell.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2); pnlCell.style.color = pnl >= 0 ? 'lightgreen' : 'salmon'; }}
+  var fmt = function(v) {{ return (v >= 0 ? '+' : '') + v.toFixed(2); }};
+  var clr = function(v) {{ return v == null ? 'gray' : (v >= 0 ? 'lightgreen' : 'salmon'); }};
 
-  // PnL %
+  var pnlCell = tr.querySelector('.pnl-cell');
+  pnlCell.textContent = pnl != null ? fmt(pnl) : '—';
+  pnlCell.style.color = clr(pnl);
+
   var pctCell = tr.querySelector('.pnl-pct-cell');
   var tu = d.trade_usdt || 100;
-  if (pnl != null && tu) {{
-    var pct = pnl / tu * 100;
-    pctCell.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
-    pctCell.style.color = pct >= 0 ? 'lightgreen' : 'salmon';
-  }} else {{ pctCell.textContent = '—'; pctCell.style.color = 'gray'; }}
+  var pct = (pnl != null && tu) ? pnl / tu * 100 : null;
+  pctCell.textContent = pct != null ? (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%' : '—';
+  pctCell.style.color = clr(pct);
 
-  // TP1-only $ i Δ
-  var altCell   = tr.querySelector('.alt-pnl-cell');
+  var altCell = tr.querySelector('.alt-pnl-cell');
   var deltaCell = tr.querySelector('.delta-cell');
   var alt = null;
   if ((result === 'TP2' || result === 'TP1+BE') && d.tp1 && d.avg_entry && d.full_qty) {{
-    var sign = d.direction === 'long' ? 1 : -1;
-    alt = sign * d.full_qty * (d.tp1 - d.avg_entry);
+    alt = (d.direction === 'long' ? 1 : -1) * d.full_qty * (d.tp1 - d.avg_entry);
   }}
-  if (alt != null) {{
-    altCell.textContent = (alt >= 0 ? '+' : '') + alt.toFixed(2);
-    altCell.style.color = alt >= 0 ? 'lightgreen' : 'salmon';
-    if (pnl != null) {{
-      var dlt = pnl - alt;
-      deltaCell.textContent = (dlt >= 0 ? '+' : '') + dlt.toFixed(2);
-      deltaCell.style.color = dlt >= 0 ? 'lightgreen' : 'salmon';
-    }} else {{ deltaCell.textContent = '—'; deltaCell.style.color = 'gray'; }}
-  }} else {{
-    altCell.textContent = '—'; altCell.style.color = 'gray';
-    deltaCell.textContent = '—'; deltaCell.style.color = 'gray';
+  altCell.textContent = alt != null ? fmt(alt) : '—';
+  altCell.style.color = clr(alt);
+  var dlt = (alt != null && pnl != null) ? pnl - alt : null;
+  deltaCell.textContent = dlt != null ? fmt(dlt) : '—';
+  deltaCell.style.color = clr(dlt);
+}}
+
+function onEntryChange(inp) {{
+  var tr = inp.closest('tr');
+  var d  = JSON.parse(tr.dataset.setup);
+  var newEntry = parseFloat(inp.value) || null;
+  d.avg_entry = newEntry;
+  if (newEntry && !d.full_qty) {{
+    var tu = d.trade_usdt || 100;
+    d.full_qty = Math.max(Math.floor((tu * 20 / newEntry) / 0.1) * 0.1, 0.1);
+    d.half_qty = Math.max(Math.floor((d.full_qty / 2) / 0.1) * 0.1, 0.1);
   }}
+  tr.dataset.setup = JSON.stringify(d);
+  var res = tr.querySelector('.result-select').value;
+  var ae  = parseFloat(tr.querySelector('.avg-exit-input').value);
+  refreshAllCells(tr, calcPnl(res, d, isNaN(ae) ? null : ae));
 }}
 
 function onResultChange(sel) {{
@@ -388,33 +479,48 @@ function onExitChange(inp) {{
 }}
 
 async function saveResult(btn) {{
-  var tr      = btn.closest('tr');
-  var setupId = tr.dataset.setupId;
-  var result  = tr.querySelector('.result-select').value;
-  var exitVal = tr.querySelector('.avg-exit-input').value;
-  var avgExit = exitVal !== '' ? parseFloat(exitVal) : null;
+  var tr       = btn.closest('tr');
+  var setupId  = tr.dataset.setupId;
+  var result   = tr.querySelector('.result-select').value;
+  var exitVal  = tr.querySelector('.avg-exit-input').value;
+  var entryVal = tr.querySelector('.avg-entry-input').value;
+  var avgExit  = exitVal  !== '' ? parseFloat(exitVal)  : null;
+  var avgEntry = entryVal !== '' ? parseFloat(entryVal) : null;
 
   btn.textContent = '...'; btn.disabled = true;
   try {{
     var resp = await fetch('/api/update-result/' + setupId, {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{result: result, avg_exit: avgExit}})
+      body: JSON.stringify({{result: result, avg_exit: avgExit, avg_entry: avgEntry}})
     }});
     var data = await resp.json();
     if (resp.ok && data.ok) {{
       btn.textContent = '✓'; btn.style.color = 'lightgreen';
-      if (data.avg_exit != null) tr.querySelector('.avg-exit-input').value = parseFloat(data.avg_exit).toFixed(2);
+      tr.querySelector('.result-display').textContent = RESULT_LABELS[result] || result;
+      if (data.avg_exit != null) {{
+        var ae = parseFloat(data.avg_exit).toFixed(2);
+        tr.querySelector('.exit-display').textContent = ae;
+        tr.querySelector('.avg-exit-input').value = ae;
+      }}
+      if (data.avg_entry != null) {{
+        var ent = parseFloat(data.avg_entry).toFixed(2);
+        tr.querySelector('.avg-entry-display').textContent = ent;
+        tr.querySelector('.avg-entry-input').value = ent;
+        var d2 = getSetupData(tr);
+        d2.avg_entry = data.avg_entry;
+        tr.dataset.setup = JSON.stringify(d2);
+      }}
       refreshAllCells(tr, data.pnl_usd != null ? data.pnl_usd : null);
+      tr.classList.remove('editing');
     }} else {{
       btn.textContent = '✗'; btn.style.color = 'salmon';
+      setTimeout(function() {{ btn.textContent = 'Zapisz'; btn.style.color = ''; btn.disabled = false; }}, 2000);
     }}
   }} catch(e) {{
     btn.textContent = '✗'; btn.style.color = 'salmon';
+    setTimeout(function() {{ btn.textContent = 'Zapisz'; btn.style.color = ''; btn.disabled = false; }}, 2000);
   }}
-  setTimeout(function() {{
-    btn.textContent = 'Zapisz'; btn.style.color = ''; btn.disabled = false;
-  }}, 2000);
 }}
 </script>
 </html>"""
@@ -518,12 +624,13 @@ def api_stats():
 class ResultUpdate(BaseModel):
     result: str
     avg_exit: float | None = None
+    avg_entry: float | None = None
 
 
 @app.post("/api/update-result/{setup_id}")
 def api_update_result(setup_id: int, body: ResultUpdate):
     """Ręczna korekta wyniku i PnL zamkniętego setupu."""
-    VALID_RESULTS = {"TP1", "TP2", "TP1+BE", "SL", "nieokreslone"}
+    VALID_RESULTS = {"TP1", "TP2", "TP1+BE", "SL", "nieokreslone", "nie weszlo", "anulowany"}
     if body.result not in VALID_RESULTS:
         raise HTTPException(status_code=400, detail=f"Nieprawidłowy wynik: {body.result}")
 
@@ -534,12 +641,15 @@ def api_update_result(setup_id: int, body: ResultUpdate):
     if not row:
         raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
 
-    s          = db._row_to_dict(row)
-    avg_exit   = body.avg_exit
-    pnl_usd    = None
-    avg_entry  = float(s["avg_entry"]) if s.get("avg_entry") else None
+    s         = db._row_to_dict(row)
+    avg_exit  = body.avg_exit
+    pnl_usd   = None
+    # Użyj avg_entry z body (ręczne wpisanie) albo z bazy
+    avg_entry = body.avg_entry if body.avg_entry is not None else (
+        float(s["avg_entry"]) if s.get("avg_entry") else None
+    )
 
-    if avg_exit is not None and avg_entry:
+    if avg_exit is not None and avg_entry and body.result in ("TP1", "TP2", "TP1+BE", "SL"):
         direction = s.get("direction", "long")
         sign      = 1 if direction == "long" else -1
 
@@ -556,22 +666,21 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         if not half_qty:
             half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
 
-        # Wylicz PnL
         if body.result == "SL":
             pnl_usd = sign * full_qty * (avg_exit - avg_entry)
         elif body.result == "TP1":
             pnl_usd = sign * half_qty * (avg_exit - avg_entry)
         elif body.result in ("TP2", "TP1+BE"):
-            # Obie połówki, avg_exit = średnia ważona obu cen wyjścia
             pnl_usd = sign * (half_qty + half_qty) * (avg_exit - avg_entry)
 
     db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)
     return {
-        "ok":      True,
+        "ok":       True,
         "setup_id": setup_id,
-        "result":  body.result,
-        "avg_exit": avg_exit,
-        "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
+        "result":   body.result,
+        "avg_entry": avg_entry,
+        "avg_exit":  avg_exit,
+        "pnl_usd":  round(pnl_usd, 2) if pnl_usd is not None else None,
     }
 
 
