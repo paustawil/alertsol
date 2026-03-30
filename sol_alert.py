@@ -978,7 +978,10 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
     """Zapisuje wynik rozwiązanego setupu do Sheet 2. Zwraca True jeśli sukces."""
     try:
         _, sh2   = _get_sheets()
-        alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
+        _at      = s["alert_time"]
+        if isinstance(_at, str):
+            _at = datetime.fromisoformat(_at)
+        alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
         entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
         exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])
@@ -1031,7 +1034,10 @@ def log_to_anulowane_grok(s: dict, result: str, entry_ts, exit_ts,
         except gspread.WorksheetNotFound:
             sh = wb.add_worksheet("Anulowane_Grok", rows=500, cols=len(ANULOWANE_GROK_HEADER) + 2)
             sh.append_row(ANULOWANE_GROK_HEADER)
-        alert_dt = datetime.fromisoformat(s["alert_time"]).strftime("%Y-%m-%d %H:%M")
+        _at      = s["alert_time"]
+        if isinstance(_at, str):
+            _at = datetime.fromisoformat(_at)
+        alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
         entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
         exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])

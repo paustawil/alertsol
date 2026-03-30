@@ -77,11 +77,14 @@ def run_sheets_export():
 
             try:
                 if s.get("shadow"):
-                    sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
+                    ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
                 else:
-                    sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                db.mark_sheets_exported(s["setup_id"])
-                log.info(f"[sheets-export] Setup #{s['setup_id']} wyeksportowany.")
+                    ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
+                if ok:
+                    db.mark_sheets_exported(s["setup_id"])
+                    log.info(f"[sheets-export] Setup #{s['setup_id']} wyeksportowany.")
+                else:
+                    log.warning(f"[sheets-export] Setup #{s['setup_id']} — eksport nieudany, spróbuję ponownie.")
             except Exception:
                 log.exception(f"[sheets-export] Błąd eksportu setupu #{s['setup_id']}")
     except Exception:
