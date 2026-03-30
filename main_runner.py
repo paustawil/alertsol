@@ -712,6 +712,85 @@ def admin_force_position_open(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "pozycja oznaczona jako otwarta — exchange_trader złoży TP/SL za ~15s"}
 
 
+@app.get("/admin/fix-position-qty/{setup_id}")
+def admin_fix_position_qty(setup_id: int, full_qty: float):
+    """Jednorazowa korekta rozmiaru TPSL dla setupu z błędnie dużą pozycją.
+    Anuluje istniejące TPSL na Bitget, koryguje qty w DB.
+    Exchange_trader złoży nowe zlecenia o poprawnym rozmiarze za ~15s.
+
+    Przykład: /admin/fix-position-qty/25?full_qty=2.2
+    """
+    import math
+    import exchange_trader as et
+
+    client = et._client()
+    if client is None:
+        return {"error": "Brak konfiguracji BITGET"}
+
+    # Pobierz setup
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    if not row:
+        return {"error": f"Setup #{setup_id} nie znaleziony"}
+
+    s = db._row_to_dict(row)
+    tp1_oid = s.get("exchange_tp1_oid")
+    tp2_oid = s.get("exchange_tp2_oid")
+    sl_oid  = s.get("exchange_sl_oid")
+
+    cancelled = []
+    failed    = []
+
+    # Anuluj istniejące TPSL na Bitget
+    for label, oid, plan_type in [
+        ("TP1", tp1_oid, "profit_plan"),
+        ("TP2", tp2_oid, "profit_plan"),
+        ("SL",  sl_oid,  "loss_plan"),
+    ]:
+        if not oid:
+            continue
+        try:
+            resp = client.post("/api/v2/mix/order/cancel-plan-order", {
+                "symbol":      et.SYMBOL,
+                "productType": et.PRODUCT_TYPE,
+                "orderId":     oid,
+                "planType":    plan_type,
+            })
+            if resp.get("code") == "00000":
+                cancelled.append(label)
+            else:
+                failed.append(f"{label}:{resp.get('msg')}")
+        except Exception as e:
+            failed.append(f"{label}:{e}")
+
+    # Przelicz half_qty
+    qty_step = et.QTY_STEP
+    half_qty = max(math.floor((full_qty / 2) / qty_step) * qty_step, qty_step)
+
+    # Zaktualizuj DB — nowe qty, wyczyść OID
+    db.update_setup(
+        setup_id,
+        exchange_qty_full=f"{full_qty:.1f}",
+        exchange_qty_half=f"{half_qty:.1f}",
+        exchange_tp1_oid=None,
+        exchange_tp2_oid=None,
+        exchange_sl_oid=None,
+        exchange_tp1_done=False,
+    )
+
+    return {
+        "ok":        len(failed) == 0,
+        "setup_id":  setup_id,
+        "full_qty":  full_qty,
+        "half_qty":  half_qty,
+        "cancelled": cancelled,
+        "failed":    failed,
+        "message":   "exchange_trader złoży nowe TPSL za ~15s",
+    }
+
+
 @app.get("/admin/reopen-setup/{setup_id}")
 def admin_reopen_setup(setup_id: int):
     """Przywraca błędnie zamknięty setup jako aktywny z otwartą pozycją.
