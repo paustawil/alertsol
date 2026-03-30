@@ -433,6 +433,19 @@ def admin_get_setup(setup_id: int):
     return dict(row)
 
 
+@app.post("/admin/reset-sheets-export")
+def admin_reset_sheets_export():
+    """Resetuje sheets_exported=FALSE dla wszystkich zamkniętych setupów.
+    Użyj jednorazowo po naprawie buga z eksportem do Sheets."""
+    with db._conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE setups SET sheets_exported = FALSE WHERE resolved = TRUE AND sheets_exported = TRUE"
+            )
+            count = cur.rowcount
+    return {"ok": True, "reset_count": count, "message": f"Zresetowano {count} setupów — zostaną wyeksportowane przy następnym cyklu (co 5 min)"}
+
+
 @app.get("/api/stats")
 def api_stats():
     """JSON API dla przyszłej integracji z Metabase."""
