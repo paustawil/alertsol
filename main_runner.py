@@ -614,6 +614,138 @@ def admin_reset_sheets_export():
     return {"ok": True, "reset_count": count, "message": f"Zresetowano {count} setupów — zostaną wyeksportowane przy następnym cyklu (co 5 min)"}
 
 
+@app.get("/admin/diagnose-positions")
+def admin_diagnose_positions():
+    """Diagnostyka: porównuje stan DB z rzeczywistymi pozycjami i TPSL na Bitget."""
+    import exchange_trader as et
+
+    client = et._client()
+    if client is None:
+        return {"error": "Brak konfiguracji BITGET"}
+
+    # ── DB: setupy nierozwiązane ──────────────────────────────────────────────
+    pending = db.load_pending()
+    db_summary = []
+    for s in pending:
+        sid      = s.get("setup_id")
+        pos_open = s.get("exchange_position_opened", False)
+        ex_done  = s.get("exchange_done", False)
+        db_summary.append({
+            "setup_id":   sid,
+            "model":      s.get("model"),
+            "direction":  s.get("direction"),
+            "pos_open":   pos_open,
+            "ex_done":    ex_done,
+            "shadow":     s.get("shadow", False),
+            "cancelled":  bool(s.get("cancel_reason")),
+            "plan_oid":   s.get("exchange_plan_oid"),
+            "tp1_oid":    s.get("exchange_tp1_oid"),
+            "tp2_oid":    s.get("exchange_tp2_oid"),
+            "sl_oid":     s.get("exchange_sl_oid"),
+            "tp1_done":   s.get("exchange_tp1_done", False),
+        })
+
+    db_open = [s for s in db_summary if s["pos_open"] and not s["ex_done"]]
+
+    # ── Bitget: rzeczywiste pozycje ───────────────────────────────────────────
+    bitget_positions = []
+    try:
+        resp = client.get("/api/v2/mix/position/all-position", {
+            "productType": et.PRODUCT_TYPE,
+            "marginCoin":  et.MARGIN_COIN,
+        })
+        if resp.get("code") == "00000":
+            bitget_positions = [
+                {
+                    "symbol":    p["symbol"],
+                    "holdSide":  p["holdSide"],
+                    "total":     p.get("total"),
+                    "avgPrice":  p.get("openPriceAvg"),
+                    "unrealPnl": p.get("unrealizedPL"),
+                }
+                for p in (resp.get("data") or [])
+                if float(p.get("total", 0)) > 0
+            ]
+    except Exception as e:
+        bitget_positions = [{"error": str(e)}]
+
+    # ── Bitget: aktywne TPSL ─────────────────────────────────────────────────
+    live_tpsl = []
+    live_tpsl_ids = set()
+    try:
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol":      et.SYMBOL,
+            "productType": et.PRODUCT_TYPE,
+            "planType":    "profit_loss",
+        })
+        if resp.get("code") == "00000":
+            for o in (resp["data"].get("entrustedList") or []):
+                live_tpsl_ids.add(o["orderId"])
+                live_tpsl.append({
+                    "orderId":      o["orderId"],
+                    "planType":     o.get("planType"),
+                    "side":         o.get("side"),
+                    "triggerPrice": o.get("triggerPrice"),
+                    "size":         o.get("size"),
+                    "status":       o.get("planStatus"),
+                })
+    except Exception as e:
+        live_tpsl = [{"error": str(e)}]
+
+    # ── Bitget: aktywne plan ordery wejścia ───────────────────────────────────
+    live_plan_orders = []
+    try:
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol":      et.SYMBOL,
+            "productType": et.PRODUCT_TYPE,
+            "planType":    "normal_plan",
+        })
+        if resp.get("code") == "00000":
+            for o in (resp["data"].get("entrustedList") or []):
+                live_plan_orders.append({
+                    "orderId":      o["orderId"],
+                    "side":         o.get("side"),
+                    "triggerPrice": o.get("triggerPrice"),
+                    "size":         o.get("size"),
+                    "status":       o.get("planStatus"),
+                })
+    except Exception as e:
+        live_plan_orders = [{"error": str(e)}]
+
+    # ── Analiza rozbieżności ──────────────────────────────────────────────────
+    issues = []
+    for s in db_open:
+        sid    = s["setup_id"]
+        for label, oid in [("TP1", s["tp1_oid"]), ("TP2", s["tp2_oid"]), ("SL", s["sl_oid"])]:
+            if oid and oid not in live_tpsl_ids:
+                issues.append({
+                    "setup_id": sid,
+                    "issue":    f"{label} OID w DB ale nieznaleziony wśród aktywnych TPSL na Bitget",
+                    "oid":      oid,
+                })
+        missing_tpsl = [l for l, o in [("TP1", s["tp1_oid"]), ("TP2", s["tp2_oid"]), ("SL", s["sl_oid"])] if not o]
+        if missing_tpsl and not s["tp1_done"]:
+            issues.append({
+                "setup_id": sid,
+                "issue":    f"Pozycja otwarta w DB ale brak OID dla: {', '.join(missing_tpsl)}",
+            })
+
+    return {
+        "db_pending_count":       len(pending),
+        "db_open_positions":      db_open,
+        "bitget_open_positions":  bitget_positions,
+        "bitget_live_tpsl":       live_tpsl,
+        "bitget_live_plan_orders": live_plan_orders,
+        "issues":                 issues,
+        "summary": {
+            "db_open":        len(db_open),
+            "bitget_open":    len(bitget_positions),
+            "bitget_tpsl":    len(live_tpsl),
+            "issue_count":    len(issues),
+        },
+    }
+
+
 @app.get("/api/stats")
 def api_stats():
     """JSON API dla przyszłej integracji z Metabase."""
