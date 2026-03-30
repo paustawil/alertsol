@@ -201,7 +201,14 @@ def dashboard():
         entries_list = s.get("entries") or []
         w1           = float(entries_list[0]) if entries_list else None
 
-        avg_entry_str     = f"{avg_entry:.2f}" if avg_entry else (f"{w1:.2f}" if w1 else "—")
+        TRADING_RESULTS = {"TP1", "TP2", "TP1+BE", "SL"}
+        # Wejście: pokaż W1 tylko dla rzeczywistych transakcji
+        if avg_entry:
+            avg_entry_str = f"{avg_entry:.2f}"
+        elif result_val in TRADING_RESULTS and w1:
+            avg_entry_str = f"{w1:.2f}"
+        else:
+            avg_entry_str = "—"
         avg_exit_str      = f"{avg_exit_v:.2f}" if avg_exit_v is not None else "—"
         avg_exit_inp_val  = f"{avg_exit_v:.2f}" if avg_exit_v is not None else ""
 
@@ -211,11 +218,24 @@ def dashboard():
             half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
         except (ValueError, TypeError):
             full_qty = half_qty = None
-        entry_for_calc = avg_entry or w1
+        entry_for_calc = avg_entry or (w1 if result_val in TRADING_RESULTS else None)
         if not full_qty and entry_for_calc:
             full_qty = max(math.floor((trade_usdt * 20 / entry_for_calc) / 0.1) * 0.1, 0.1)
         if not half_qty and full_qty:
             half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+
+        # PnL$ — z bazy lub obliczony on-the-fly gdy pnl_usd=NULL
+        if pnl_val is None and result_val in TRADING_RESULTS and avg_exit_v and entry_for_calc and full_qty:
+            _sign = 1 if s.get("direction") == "long" else -1
+            _hq   = half_qty or max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+            if result_val == "SL":
+                pnl_val = round(_sign * full_qty * (avg_exit_v - entry_for_calc), 2)
+            elif result_val == "TP1":
+                pnl_val = round(_sign * _hq * (avg_exit_v - entry_for_calc), 2)
+            elif result_val in ("TP2", "TP1+BE"):
+                pnl_val = round(_sign * (_hq + _hq) * (avg_exit_v - entry_for_calc), 2)
+        pnl_str   = f"{pnl_val:+.2f}" if pnl_val is not None else "—"
+        pnl_color = "lightgreen" if pnl_val and pnl_val > 0 else ("gray" if pnl_val is None else "salmon")
 
         # PnL %
         pnl_pct = float(s["pnl_pct"]) if s.get("pnl_pct") is not None else None
@@ -228,9 +248,9 @@ def dashboard():
         alt_pnl = None
         delta   = None
         tp1_price = float(tps[0]) if tps else None
-        if result_val in ("TP2", "TP1+BE") and tp1_price and avg_entry and full_qty:
+        if result_val in ("TP2", "TP1+BE") and tp1_price and entry_for_calc and full_qty:
             sign    = 1 if s.get("direction") == "long" else -1
-            alt_pnl = round(sign * full_qty * (tp1_price - avg_entry), 2)
+            alt_pnl = round(sign * full_qty * (tp1_price - entry_for_calc), 2)
             if pnl_val is not None:
                 delta = round(pnl_val - alt_pnl, 2)
         alt_pnl_str   = f"{alt_pnl:+.2f}" if alt_pnl is not None else "—"
@@ -262,7 +282,7 @@ def dashboard():
             sel = " selected" if opt == result_val else ""
             options += f'<option value="{opt}"{sel}>{label}</option>'
 
-        avg_entry_inp = avg_entry if avg_entry else (w1 or "")
+        avg_entry_inp = avg_entry if avg_entry else (w1 if result_val in TRADING_RESULTS and w1 else "")
         history_rows += (
             f'<tr data-setup-id="{sid}" data-setup="{setup_json}">'
             f'<td>#{sid}</td>'
