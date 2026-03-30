@@ -198,8 +198,10 @@ def dashboard():
         avg_entry  = float(s["avg_entry"]) if s.get("avg_entry") else None
         avg_exit_v = float(s["avg_exit"])  if s.get("avg_exit")  else None
         tps        = s.get("tps") or []
+        entries_list = s.get("entries") or []
+        w1           = float(entries_list[0]) if entries_list else None
 
-        avg_entry_str     = f"{avg_entry:.2f}" if avg_entry else "—"
+        avg_entry_str     = f"{avg_entry:.2f}" if avg_entry else (f"{w1:.2f}" if w1 else "—")
         avg_exit_str      = f"{avg_exit_v:.2f}" if avg_exit_v is not None else "—"
         avg_exit_inp_val  = f"{avg_exit_v:.2f}" if avg_exit_v is not None else ""
 
@@ -239,8 +241,6 @@ def dashboard():
         result_label = RESULT_LABELS.get(result_val, result_val or "—")
 
         # PnL (W1) — zawsze szacowany ze wzoru (TRADE_USDT*lev/W1)*(Δcena)
-        entries_list = s.get("entries") or []
-        w1 = float(entries_list[0]) if entries_list else None
         pnl_w1 = None
         if w1 and avg_exit_v and result_val in ("TP1", "TP2", "TP1+BE", "SL"):
             sign_w1   = 1 if s.get("direction") == "long" else -1
