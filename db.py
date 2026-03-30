@@ -419,7 +419,8 @@ def get_recent_resolved(limit: int = 20) -> list[dict]:
                 """
                 SELECT setup_id, alert_time, model, direction, score,
                        result, avg_entry, avg_exit, pnl_usd, pnl_pct,
-                       exit_time, entries, tps, sl
+                       exit_time, entries, tps, sl, sl_after_tp1,
+                       exchange_qty_full, exchange_qty_half
                 FROM setups
                 WHERE resolved = TRUE
                 ORDER BY resolved_at DESC
