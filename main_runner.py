@@ -740,10 +740,16 @@ def admin_fix_position_qty(setup_id: int, full_qty: float):
     tp2_oid = s.get("exchange_tp2_oid")
     sl_oid  = s.get("exchange_sl_oid")
 
+    # Krok 1: Zablokuj setup dla exchange_trader ZANIM anulujemy na Bitget.
+    # exchange_done=True sprawia że exchange_trader pominie ten setup w cyklu 15s.
+    # Bez tego: exchange_trader może wykryć "SL anulowany" między krokiem 2 a 3
+    # i wywołać resolve_setup("nieokreslone") — race condition.
+    db.update_setup(setup_id, exchange_done=True)
+
     cancelled = []
     failed    = []
 
-    # Anuluj istniejące TPSL na Bitget
+    # Krok 2: Anuluj istniejące TPSL na Bitget
     for label, oid, plan_type in [
         ("TP1", tp1_oid, "profit_plan"),
         ("TP2", tp2_oid, "profit_plan"),
@@ -769,7 +775,8 @@ def admin_fix_position_qty(setup_id: int, full_qty: float):
     qty_step = et.QTY_STEP
     half_qty = max(math.floor((full_qty / 2) / qty_step) * qty_step, qty_step)
 
-    # Zaktualizuj DB — nowe qty, wyczyść OID
+    # Krok 3: Zaktualizuj DB — nowe qty, wyczyść OID, odblokuj setup
+    # exchange_done=False pozwala exchange_traderowi złożyć nowe TPSL
     db.update_setup(
         setup_id,
         exchange_qty_full=f"{full_qty:.1f}",
@@ -778,6 +785,7 @@ def admin_fix_position_qty(setup_id: int, full_qty: float):
         exchange_tp2_oid=None,
         exchange_sl_oid=None,
         exchange_tp1_done=False,
+        exchange_done=False,
     )
 
     return {
