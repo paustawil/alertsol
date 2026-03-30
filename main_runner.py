@@ -356,7 +356,7 @@ def dashboard():
 </table>
 
 <h3>Ostatnie 20 zamkniętych</h3>
-<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL wyliczony ze wzoru (TRADE_USDT×20/W1)×Δcena — zawsze dostępny">PnL (W1)</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
+<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL/SOL</th><th>PnL %</th><th title="PnL wyliczony ze wzoru (TRADE_USDT×20/W1)×Δcena — zawsze dostępny">PnL (W1)</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
 {history_rows or '<tr><td colspan=12 style="color:#888">Brak historii</td></tr>'}
 </table>
 </body>
