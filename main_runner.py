@@ -170,11 +170,27 @@ def dashboard():
             status = "📈 w pozycji"
         else:
             status = "⏳ czeka"
+        sid      = s["setup_id"]
+        plan_oid = s.get("exchange_plan_oid") or ""
+        tp1_oid  = s.get("exchange_tp1_oid")  or ""
+        tp2_oid  = s.get("exchange_tp2_oid")  or ""
+        sl_oid   = s.get("exchange_sl_oid")   or ""
+        qty_full = s.get("exchange_qty_full")  or ""
+        pos_open = "true" if s.get("exchange_position_opened") else "false"
+        tp1_done = "true" if s.get("exchange_tp1_done") else "false"
         active_rows += (
-            f"<tr><td>#{s['setup_id']}</td><td>{s['model']}</td>"
+            f'<tr data-sid="{sid}" data-plan-oid="{plan_oid}" '
+            f'data-tp1-oid="{tp1_oid}" data-tp2-oid="{tp2_oid}" data-sl-oid="{sl_oid}" '
+            f'data-qty-full="{qty_full}" data-pos-open="{pos_open}" data-tp1-done="{tp1_done}">'
+            f"<td>#{sid}</td><td>{s['model']}</td>"
             f"<td>{s['direction'].upper()}</td><td>{status}</td>"
             f"<td>{w1}</td><td>{tp1}</td><td>{tp2}</td>"
-            f"<td>{sl}</td><td>{sl2}</td></tr>\n"
+            f"<td>{sl}</td><td>{sl2}</td>"
+            f'<td class="qt-p"  id="qp-{sid}"><span class="qt-loading">…</span></td>'
+            f'<td class="qt-tp1" id="qt1-{sid}"><span class="qt-loading">…</span></td>'
+            f'<td class="qt-tp2" id="qt2-{sid}"><span class="qt-loading">…</span></td>'
+            f'<td class="qt-sl"  id="qsl-{sid}"><span class="qt-loading">…</span></td>'
+            f'</tr>\n'
         )
 
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
@@ -337,6 +353,10 @@ def dashboard():
   .btn-edit:hover {{ background: #3a3a3a; color: #e0e0e0; }}
   .btn-action {{ background: #333; color: #e0e0e0; border: 1px solid #555; padding: 2px 8px; cursor: pointer; font-family: monospace; font-size: 0.85em; margin-right: 2px; }}
   .btn-action:hover {{ background: #444; }}
+  .qt-loading {{ color: #555; }}
+  #active-table th[title], #active-table td.qt-p,
+  #active-table td.qt-tp1, #active-table td.qt-tp2, #active-table td.qt-sl
+    {{ font-size: 0.9em; min-width: 42px; text-align: right; }}
 </style></head><body>
 <h2>🤖 AlertSol Dashboard</h2>
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
@@ -348,9 +368,14 @@ def dashboard():
   <span class="stat">✅ Zamknięte: <b>{stats.get('total_resolved', 0)}</b></span>
 </div>
 
-<h3>Aktywne setupy ({len(active)})</h3>
-<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Status</th><th>W1</th><th>TP1</th><th>TP2</th><th>SL</th><th>SL@TP1</th></tr>
-{active_rows or '<tr><td colspan=9 style="color:#888">Brak aktywnych setupów</td></tr>'}
+<h3>Aktywne setupy ({len(active)}) <small style="color:#888;font-size:0.7em" id="bitget-live-status">ładowanie Bitget…</small></h3>
+<table id="active-table">
+<tr><th>#</th><th>Model</th><th>Kier.</th><th>Status</th><th>W1</th><th>TP1</th><th>TP2</th><th>SL</th><th>SL@TP1</th>
+<th title="SOL w otwartej pozycji (Bitget)" style="background:#1a2a1a">qtP</th>
+<th title="SOL na zleceniu TP1 (Bitget)" style="background:#1a2a1a">qtTP1</th>
+<th title="SOL na zleceniu TP2 (Bitget)" style="background:#1a2a1a">qtTP2</th>
+<th title="SOL na zleceniu SL (Bitget)" style="background:#1a2a1a">qtSL</th></tr>
+{active_rows or '<tr><td colspan=13 style="color:#888">Brak aktywnych setupów</td></tr>'}
 </table>
 
 <h3>Per model</h3>
@@ -481,6 +506,105 @@ function onExitChange(inp) {{
   refreshAllCells(tr, calcPnl(res, d, parseFloat(inp.value)));
 }}
 
+// ── Bitget live data ────────────────────────────────────────────────────────
+async function loadBitgetLive() {{
+  var statusEl = document.getElementById('bitget-live-status');
+  try {{
+    var resp = await fetch('/api/bitget-live');
+    var data = await resp.json();
+    if (data.error) {{
+      if (statusEl) statusEl.textContent = '⚠️ brak Bitget';
+      clearQtCells();
+      return;
+    }}
+
+    var tpsl  = data.tpsl  || {{}};
+    var plans = data.plans || {{}};
+    var rows  = document.querySelectorAll('#active-table tr[data-sid]');
+
+    rows.forEach(function(row) {{
+      var sid     = row.dataset.sid;
+      var planOid = row.dataset.planOid;
+      var tp1Oid  = row.dataset.tp1Oid;
+      var tp2Oid  = row.dataset.tp2Oid;
+      var slOid   = row.dataset.slOid;
+      var posOpen = row.dataset.posOpen === 'true';
+      var tp1Done = row.dataset.tp1Done === 'true';
+      var qtyFull = row.dataset.qtyFull;
+
+      var qpCell  = document.getElementById('qp-'  + sid);
+      var qt1Cell = document.getElementById('qt1-' + sid);
+      var qt2Cell = document.getElementById('qt2-' + sid);
+      var qslCell = document.getElementById('qsl-' + sid);
+
+      // qtP — rozmiar otwartej pozycji
+      if (posOpen) {{
+        // Pozycja otwarta: pokaż exchange_qty_full z DB (plan order size)
+        qpCell.textContent = qtyFull || '—';
+        qpCell.style.color = '#90ee90';
+      }} else if (planOid && plans[planOid]) {{
+        // Czeka na wejście: pokaż rozmiar planu z nawiasem
+        qpCell.textContent = '(' + plans[planOid].size + ')';
+        qpCell.style.color = '#aaa';
+      }} else {{
+        qpCell.textContent = qtyFull ? '(' + qtyFull + ')' : '—';
+        qpCell.style.color = '#aaa';
+      }}
+
+      // qtTP1
+      if (tp1Done) {{
+        qt1Cell.textContent = '✓';
+        qt1Cell.style.color = '#90ee90';
+      }} else if (tp1Oid && tpsl[tp1Oid]) {{
+        qt1Cell.textContent = tpsl[tp1Oid].size;
+        qt1Cell.style.color = tp1Done ? '#90ee90' : '#e0e0e0';
+      }} else if (tp1Oid) {{
+        qt1Cell.textContent = '—';
+        qt1Cell.style.color = '#888';
+      }} else {{
+        qt1Cell.textContent = '—';
+        qt1Cell.style.color = '#555';
+      }}
+
+      // qtTP2
+      if (tp2Oid && tpsl[tp2Oid]) {{
+        qt2Cell.textContent = tpsl[tp2Oid].size;
+        qt2Cell.style.color = '#e0e0e0';
+      }} else {{
+        qt2Cell.textContent = '—';
+        qt2Cell.style.color = '#555';
+      }}
+
+      // qtSL
+      if (slOid && tpsl[slOid]) {{
+        qt2Cell.style.color = '#e0e0e0';
+        qslCell.textContent = tpsl[slOid].size;
+        qslCell.style.color = '#e0e0e0';
+      }} else {{
+        qslCell.textContent = '—';
+        qslCell.style.color = '#555';
+      }}
+    }});
+
+    var now = new Date().toLocaleTimeString('pl-PL', {{hour:'2-digit',minute:'2-digit',second:'2-digit'}});
+    if (statusEl) statusEl.textContent = '✓ ' + now;
+  }} catch(e) {{
+    if (statusEl) statusEl.textContent = '⚠️ błąd: ' + e.message;
+    clearQtCells();
+  }}
+}}
+
+function clearQtCells() {{
+  document.querySelectorAll('.qt-p,.qt-tp1,.qt-tp2,.qt-sl').forEach(function(td) {{
+    td.textContent = '?';
+    td.style.color = '#888';
+  }});
+}}
+
+loadBitgetLive();
+setInterval(loadBitgetLive, 15000);
+// ── koniec Bitget live ───────────────────────────────────────────────────────
+
 async function saveResult(btn) {{
   var tr       = btn.closest('tr');
   var setupId  = tr.dataset.setupId;
@@ -585,75 +709,6 @@ def admin_replace_tps(setup_id: int):
         exchange_tp1_done=False,
     )
     return {"ok": True, "setup_id": setup_id, "result": "TP zresetowane — exchange_trader złoży TP1/TP2 za ~15s (SL bez zmian)"}
-
-
-@app.get("/admin/fix-tpsl-size/{setup_id}")
-def admin_fix_tpsl_size(setup_id: int):
-    """Naprawia rozmiar TPSL dla setupu który wszedł przy istniejącej pozycji zbiorowej.
-    Anuluje wszystkie TPSL ordery na Bitget, przelicza prawidłowy qty z W1,
-    aktualizuje DB — exchange_trader złoży nowe TPSL za ~15s."""
-    import exchange_trader as et
-
-    client = et._client()
-    if client is None:
-        raise HTTPException(status_code=500, detail="Brak konfiguracji BITGET")
-
-    with db._conn() as conn:
-        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
-            row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
-
-    s = db._row_to_dict(row)
-
-    if not s.get("exchange_position_opened") or s.get("exchange_done"):
-        raise HTTPException(status_code=400, detail="Setup nie ma otwartej pozycji lub jest już zamknięty")
-
-    entries = s.get("entries") or []
-    if not entries:
-        raise HTTPException(status_code=400, detail="Brak entries (W1) w setupie")
-
-    w1 = float(entries[0])
-    correct_full = et._round_qty((et.TRADE_USDT * et.LEVERAGE) / w1)
-    correct_half = et._round_qty(correct_full / 2)
-
-    old_full = s.get("exchange_qty_full")
-    old_half = s.get("exchange_qty_half")
-
-    # Anuluj istniejące TPSL na Bitget
-    cancelled = []
-    for label, oid, plan_type in [
-        ("TP1", s.get("exchange_tp1_oid"), "profit_plan"),
-        ("TP2", s.get("exchange_tp2_oid"), "profit_plan"),
-        ("SL",  s.get("exchange_sl_oid"),  "loss_plan"),
-    ]:
-        if oid:
-            et._cancel_order(client, oid, plan_type)
-            cancelled.append(f"{label}={oid[:12]}…")
-
-    # Zaktualizuj DB: popraw qty, wyczyść OID-y TPSL
-    db.update_setup(
-        setup_id,
-        exchange_qty_full=et._fmt_qty(correct_full),
-        exchange_qty_half=et._fmt_qty(correct_half),
-        exchange_tp1_oid=None,
-        exchange_tp2_oid=None,
-        exchange_sl_oid=None,
-        exchange_tp1_done=False,
-    )
-
-    return {
-        "ok": True,
-        "setup_id": setup_id,
-        "w1": w1,
-        "old_qty_full": old_full,
-        "old_qty_half": old_half,
-        "new_qty_full": et._fmt_qty(correct_full),
-        "new_qty_half": et._fmt_qty(correct_half),
-        "cancelled_orders": cancelled,
-        "result": "TPSL anulowane, DB zaktualizowana — exchange_trader złoży nowe TPSL za ~15s",
-    }
 
 
 @app.get("/admin/setup/{setup_id}")
@@ -813,6 +868,64 @@ def admin_diagnose_positions():
             "issue_count":    len(issues),
         },
     }
+
+
+@app.get("/api/bitget-live")
+def api_bitget_live():
+    """Zwraca live dane z Bitget: otwarte pozycje, aktywne TPSL i plan ordery.
+    Używane przez dashboard JS do wypełnienia kolumn qtP/qtTP1/qtTP2/qtSL."""
+    import exchange_trader as et
+
+    client = et._client()
+    if client is None:
+        return {"error": "no_bitget"}
+
+    tpsl_by_id: dict = {}
+    try:
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol": et.SYMBOL, "productType": et.PRODUCT_TYPE, "planType": "profit_loss",
+        })
+        if resp.get("code") == "00000":
+            for o in (resp["data"].get("entrustedList") or []):
+                tpsl_by_id[o["orderId"]] = {
+                    "size":         o.get("size"),
+                    "planType":     o.get("planType"),
+                    "triggerPrice": o.get("triggerPrice"),
+                }
+    except Exception as e:
+        log.warning(f"[bitget-live] TPSL: {e}")
+
+    plan_by_id: dict = {}
+    try:
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol": et.SYMBOL, "productType": et.PRODUCT_TYPE, "planType": "normal_plan",
+        })
+        if resp.get("code") == "00000":
+            for o in (resp["data"].get("entrustedList") or []):
+                plan_by_id[o["orderId"]] = {
+                    "size":         o.get("size"),
+                    "triggerPrice": o.get("triggerPrice"),
+                }
+    except Exception as e:
+        log.warning(f"[bitget-live] plans: {e}")
+
+    positions: dict = {}
+    try:
+        resp = client.get("/api/v2/mix/position/all-position", {
+            "productType": et.PRODUCT_TYPE, "marginCoin": et.MARGIN_COIN,
+        })
+        if resp.get("code") == "00000":
+            for p in (resp.get("data") or []):
+                if float(p.get("total", 0)) > 0:
+                    positions[p["holdSide"]] = {
+                        "total":    p.get("total"),
+                        "avgPrice": p.get("openPriceAvg"),
+                        "unrealPnl": p.get("unrealizedPL"),
+                    }
+    except Exception as e:
+        log.warning(f"[bitget-live] positions: {e}")
+
+    return {"tpsl": tpsl_by_id, "plans": plan_by_id, "positions": positions}
 
 
 @app.get("/api/stats")
