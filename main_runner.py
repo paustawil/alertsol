@@ -715,8 +715,8 @@ def admin_force_position_open(setup_id: int):
 @app.get("/admin/fix-position-qty/{setup_id}")
 def admin_fix_position_qty(setup_id: int, full_qty: float):
     """Jednorazowa korekta rozmiaru TPSL dla setupu z błędnie dużą pozycją.
-    Anuluje istniejące TPSL na Bitget, koryguje qty w DB.
-    Exchange_trader złoży nowe zlecenia o poprawnym rozmiarze za ~15s.
+    MODYFIKUJE (nie anuluje) istniejące zlecenia TPSL na Bitget — zmienia tylko size.
+    Bezpieczne: nie wywołuje "SL cancelled" w exchange_trader, brak kaskadowego zamknięcia.
 
     Przykład: /admin/fix-position-qty/25?full_qty=2.2
     """
@@ -735,67 +735,63 @@ def admin_fix_position_qty(setup_id: int, full_qty: float):
     if not row:
         return {"error": f"Setup #{setup_id} nie znaleziony"}
 
-    s = db._row_to_dict(row)
+    s    = db._row_to_dict(row)
+    tps  = s.get("tps") or []
+    tp1_price = float(tps[0]) if len(tps) > 0 else None
+    tp2_price = float(tps[1]) if len(tps) > 1 else None
+    sl_price  = float(s["sl"]) if s.get("sl") else None
+
     tp1_oid = s.get("exchange_tp1_oid")
     tp2_oid = s.get("exchange_tp2_oid")
     sl_oid  = s.get("exchange_sl_oid")
-
-    # Krok 1: Zablokuj setup dla exchange_trader ZANIM anulujemy na Bitget.
-    # exchange_done=True sprawia że exchange_trader pominie ten setup w cyklu 15s.
-    # Bez tego: exchange_trader może wykryć "SL anulowany" między krokiem 2 a 3
-    # i wywołać resolve_setup("nieokreslone") — race condition.
-    db.update_setup(setup_id, exchange_done=True)
-
-    cancelled = []
-    failed    = []
-
-    # Krok 2: Anuluj istniejące TPSL na Bitget
-    for label, oid, plan_type in [
-        ("TP1", tp1_oid, "profit_plan"),
-        ("TP2", tp2_oid, "profit_plan"),
-        ("SL",  sl_oid,  "loss_plan"),
-    ]:
-        if not oid:
-            continue
-        try:
-            resp = client.post("/api/v2/mix/order/cancel-plan-order", {
-                "symbol":      et.SYMBOL,
-                "productType": et.PRODUCT_TYPE,
-                "orderId":     oid,
-                "planType":    plan_type,
-            })
-            if resp.get("code") == "00000":
-                cancelled.append(label)
-            else:
-                failed.append(f"{label}:{resp.get('msg')}")
-        except Exception as e:
-            failed.append(f"{label}:{e}")
 
     # Przelicz half_qty
     qty_step = et.QTY_STEP
     half_qty = max(math.floor((full_qty / 2) / qty_step) * qty_step, qty_step)
 
-    # Krok 3: Zaktualizuj DB — nowe qty, wyczyść OID, odblokuj setup
-    # exchange_done=False pozwala exchange_traderowi złożyć nowe TPSL
+    modified = []
+    failed   = []
+
+    # Modyfikuj istniejące TPSL — zmień tylko size, zachowaj trigger price.
+    # modify-tpsl-order używa konkretnego orderId — nie wpływa na inne zlecenia.
+    for label, oid, price, qty in [
+        ("TP1", tp1_oid, tp1_price, half_qty),
+        ("TP2", tp2_oid, tp2_price, half_qty),
+        ("SL",  sl_oid,  sl_price,  full_qty),
+    ]:
+        if not oid or price is None:
+            continue
+        try:
+            resp = client.post("/api/v2/mix/order/modify-tpsl-order", {
+                "symbol":       et.SYMBOL,
+                "productType":  et.PRODUCT_TYPE,
+                "marginCoin":   et.MARGIN_COIN,
+                "orderId":      oid,
+                "triggerPrice": et._fmt_price(price),
+                "triggerType":  "mark_price",
+                "size":         et._fmt_qty(qty),
+            })
+            if resp.get("code") == "00000":
+                modified.append(f"{label}→{qty}")
+            else:
+                failed.append(f"{label}:{resp.get('msg')}")
+        except Exception as e:
+            failed.append(f"{label}:{e}")
+
+    # Zaktualizuj DB — tylko qty, OID pozostają bez zmian
     db.update_setup(
         setup_id,
         exchange_qty_full=f"{full_qty:.1f}",
         exchange_qty_half=f"{half_qty:.1f}",
-        exchange_tp1_oid=None,
-        exchange_tp2_oid=None,
-        exchange_sl_oid=None,
-        exchange_tp1_done=False,
-        exchange_done=False,
     )
 
     return {
-        "ok":        len(failed) == 0,
-        "setup_id":  setup_id,
-        "full_qty":  full_qty,
-        "half_qty":  half_qty,
-        "cancelled": cancelled,
-        "failed":    failed,
-        "message":   "exchange_trader złoży nowe TPSL za ~15s",
+        "ok":       len(failed) == 0,
+        "setup_id": setup_id,
+        "full_qty": full_qty,
+        "half_qty": half_qty,
+        "modified": modified,
+        "failed":   failed,
     }
 
 
