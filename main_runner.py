@@ -198,8 +198,10 @@ def dashboard():
         avg_entry  = float(s["avg_entry"]) if s.get("avg_entry") else None
         avg_exit_v = float(s["avg_exit"])  if s.get("avg_exit")  else None
         tps        = s.get("tps") or []
+        entries_list = s.get("entries") or []
+        w1           = float(entries_list[0]) if entries_list else None
 
-        avg_entry_str     = f"{avg_entry:.2f}" if avg_entry else "—"
+        avg_entry_str     = f"{avg_entry:.2f}" if avg_entry else (f"{w1:.2f}" if w1 else "—")
         avg_exit_str      = f"{avg_exit_v:.2f}" if avg_exit_v is not None else "—"
         avg_exit_inp_val  = f"{avg_exit_v:.2f}" if avg_exit_v is not None else ""
 
@@ -237,24 +239,6 @@ def dashboard():
         delta_color   = "lightgreen" if delta   and delta   > 0 else ("gray" if delta   is None else "salmon")
 
         result_label = RESULT_LABELS.get(result_val, result_val or "—")
-
-        # PnL (W1) — zawsze szacowany ze wzoru (TRADE_USDT*lev/W1)*(Δcena)
-        entries_list = s.get("entries") or []
-        w1 = float(entries_list[0]) if entries_list else None
-        pnl_w1 = None
-        if w1 and avg_exit_v and result_val in ("TP1", "TP2", "TP1+BE", "SL"):
-            sign_w1   = 1 if s.get("direction") == "long" else -1
-            fq_w1     = max(math.floor((trade_usdt * 20 / w1) / 0.1) * 0.1, 0.1)
-            hq_w1     = max(math.floor((fq_w1 / 2) / 0.1) * 0.1, 0.1)
-            if result_val == "SL":
-                pnl_w1 = sign_w1 * fq_w1 * (avg_exit_v - w1)
-            elif result_val == "TP1":
-                pnl_w1 = sign_w1 * hq_w1 * (avg_exit_v - w1)
-            else:  # TP2 / TP1+BE
-                pnl_w1 = sign_w1 * (hq_w1 + hq_w1) * (avg_exit_v - w1)
-            pnl_w1 = round(pnl_w1, 2)
-        pnl_w1_str   = f"{pnl_w1:+.2f}" if pnl_w1 is not None else "—"
-        pnl_w1_color = "lightgreen" if pnl_w1 and pnl_w1 > 0 else ("gray" if pnl_w1 is None else "salmon")
 
         # Dane setupu zakodowane w atrybucie data-setup (dla JS)
         # avg_entry: używa W1 jako fallback żeby JS mógł liczyć PnL w trybie edycji
@@ -298,7 +282,6 @@ def dashboard():
             f'</td>'
             f'<td class="pnl-cell" style="color:{pnl_color}">{pnl_str}</td>'
             f'<td class="pnl-pct-cell" style="color:{pnl_pct_color}">{pnl_pct_str}</td>'
-            f'<td style="color:{pnl_w1_color}">{pnl_w1_str}</td>'
             f'<td class="alt-pnl-cell" style="color:{alt_color}">{alt_pnl_str}</td>'
             f'<td class="delta-cell" style="color:{delta_color}">{delta_str}</td>'
             f'<td style="white-space:nowrap">'
@@ -356,8 +339,8 @@ def dashboard():
 </table>
 
 <h3>Ostatnie 20 zamkniętych</h3>
-<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL wyliczony ze wzoru (TRADE_USDT×20/W1)×Δcena — zawsze dostępny">PnL (W1)</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
-{history_rows or '<tr><td colspan=12 style="color:#888">Brak historii</td></tr>'}
+<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
+{history_rows or '<tr><td colspan=11 style="color:#888">Brak historii</td></tr>'}
 </table>
 </body>
 <script>
