@@ -1458,12 +1458,16 @@ def check_pending_with_grok(candles_m15: list[dict], candles_h1: list[dict], cur
 
     for s in pending:
         if s.get("shadow") and s.get("setup_id") in cancel_map:
-            db.update_setup(s["setup_id"],
+            sid = s["setup_id"]
+            db.update_setup(sid,
                             shadow=True,
                             cancel_reason=s.get("cancel_reason", ""),
                             cancel_time=s.get("cancel_time"),
                             cancel_price=s.get("cancel_price"))
-    print(f"[grok-valid] Anulowano {cancelled} setupów, shadow tracking aktywny.")
+            # Natychmiastowe zamknięcie — exchange_trader anuluje plan order
+            # przez get_resolved_with_open_orders() przy następnym sync (co 15s)
+            db.resolve_setup(sid, "anulowany", None, None, None, None)
+    print(f"[grok-valid] Anulowano {cancelled} setupów.")
 
 
 # ── Anti-spam ─────────────────────────────────────────────────────────────────
