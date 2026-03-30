@@ -209,8 +209,9 @@ def dashboard():
             half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
         except (ValueError, TypeError):
             full_qty = half_qty = None
-        if not full_qty and avg_entry:
-            full_qty = max(math.floor((trade_usdt * 20 / avg_entry) / 0.1) * 0.1, 0.1)
+        entry_for_calc = avg_entry or w1
+        if not full_qty and entry_for_calc:
+            full_qty = max(math.floor((trade_usdt * 20 / entry_for_calc) / 0.1) * 0.1, 0.1)
         if not half_qty and full_qty:
             half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
 
@@ -256,8 +257,9 @@ def dashboard():
         pnl_w1_color = "lightgreen" if pnl_w1 and pnl_w1 > 0 else ("gray" if pnl_w1 is None else "salmon")
 
         # Dane setupu zakodowane w atrybucie data-setup (dla JS)
+        # avg_entry: używa W1 jako fallback żeby JS mógł liczyć PnL w trybie edycji
         setup_data = {
-            "avg_entry":    avg_entry,
+            "avg_entry":    avg_entry or w1,
             "w1":           w1,
             "tp1":          tp1_price,
             "tp2":          float(tps[1]) if len(tps) > 1 else None,
@@ -276,7 +278,7 @@ def dashboard():
             sel = " selected" if opt == result_val else ""
             options += f'<option value="{opt}"{sel}>{label}</option>'
 
-        avg_entry_inp = avg_entry if avg_entry else ""
+        avg_entry_inp = avg_entry if avg_entry else (w1 or "")
         history_rows += (
             f'<tr data-setup-id="{sid}" data-setup="{setup_json}">'
             f'<td>#{sid}</td>'
