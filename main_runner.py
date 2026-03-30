@@ -180,6 +180,7 @@ def dashboard():
         tp1_done = "true" if s.get("exchange_tp1_done") else "false"
         tp1_raw  = f"{tps[0]:.2f}" if len(tps) > 0 else ""
         tp2_raw  = f"{tps[1]:.2f}" if len(tps) > 1 else ""
+        sl_raw   = f"{s['sl_after_tp1']:.2f}" if s.get("exchange_tp1_done") and s.get("sl_after_tp1") else (f"{s['sl']:.2f}" if s.get("sl") else "")
         active_rows += (
             f'<tr data-sid="{sid}" data-plan-oid="{plan_oid}" '
             f'data-tp1-oid="{tp1_oid}" data-tp2-oid="{tp2_oid}" data-sl-oid="{sl_oid}" '
@@ -195,7 +196,11 @@ def dashboard():
             f'<span class="av-view">{tp2}</span>'
             f'<input class="av-edit tp2-input" type="number" step="0.01" value="{tp2_raw}" style="width:72px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;font-family:monospace;padding:2px 4px">'
             f'</td>'
-            f"<td>{sl}</td><td>{sl2}</td>"
+            f'<td>'
+            f'<span class="av-view">{sl}</span>'
+            f'<input class="av-edit sl-input" type="number" step="0.01" value="{sl_raw}" style="width:72px;background:#2a2a2a;color:#e0e0e0;border:1px solid #884444;font-family:monospace;padding:2px 4px">'
+            f'</td>'
+            f"<td>{sl2}</td>"
             f'<td class="qt-p"  id="qp-{sid}"><span class="qt-loading">…</span></td>'
             f'<td class="qt-tp1" id="qt1-{sid}"><span class="qt-loading">…</span></td>'
             f'<td class="qt-tp2" id="qt2-{sid}"><span class="qt-loading">…</span></td>'
@@ -653,10 +658,12 @@ async function saveActiveTp(btn) {{
   var sid = tr.dataset.sid;
   var tp1Str = tr.querySelector('.tp1-input').value;
   var tp2Str = tr.querySelector('.tp2-input').value;
+  var slStr  = tr.querySelector('.sl-input').value;
   var tp1 = tp1Str !== '' ? parseFloat(tp1Str) : null;
   var tp2 = tp2Str !== '' ? parseFloat(tp2Str) : null;
-  if (tp1 === null && tp2 === null) {{
-    alert('Wpisz co najmniej jedną wartość (TP1 lub TP2).');
+  var sl  = slStr  !== '' ? parseFloat(slStr)  : null;
+  if (tp1 === null && tp2 === null && sl === null) {{
+    alert('Wpisz co najmniej jedną wartość (TP1, TP2 lub SL).');
     return;
   }}
   btn.textContent = '...'; btn.disabled = true;
@@ -664,15 +671,16 @@ async function saveActiveTp(btn) {{
     var resp = await fetch('/api/update-tps/' + sid, {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{tp1: tp1, tp2: tp2}})
+      body: JSON.stringify({{tp1: tp1, tp2: tp2, sl: sl}})
     }});
     var data = await resp.json();
     if (resp.ok && data.ok) {{
       if (tp1 !== null) tr.querySelector('.tp1-input').closest('td').querySelector('.av-view').textContent = '$' + tp1.toFixed(2);
       if (tp2 !== null) tr.querySelector('.tp2-input').closest('td').querySelector('.av-view').textContent = '$' + tp2.toFixed(2);
+      if (sl  !== null) tr.querySelector('.sl-input').closest('td').querySelector('.av-view').textContent  = '$' + sl.toFixed(2);
       tr.classList.remove('editing-tp');
     }} else {{
-      alert('Błąd zmiany TP: ' + (data.failed || []).join(', ') || data.detail || 'nieznany błąd');
+      alert('Błąd zapisu: ' + (data.failed || []).join(', ') || data.detail || 'nieznany błąd');
     }}
   }} catch(e) {{
     alert('Błąd: ' + e.message);
@@ -1166,6 +1174,7 @@ class ResultUpdate(BaseModel):
 class TpsUpdate(BaseModel):
     tp1: float | None = None
     tp2: float | None = None
+    sl:  float | None = None
 
 
 @app.post("/api/update-tps/{setup_id}")
@@ -1256,6 +1265,37 @@ def api_update_tps(setup_id: int, body: TpsUpdate):
             tps.append(tp2_new)
         else:
             tps = [None, tp2_new]
+
+    # Modify SL on Bitget if order exists
+    sl_new   = body.sl
+    sl_oid   = s.get("exchange_sl_oid")
+    tp1_done = s.get("exchange_tp1_done", False)
+    if sl_new is not None:
+        if sl_oid and client:
+            # Rozmiar SL: po TP1 jest już half_qty, przed TP1 — full_qty.
+            # Zachowujemy istniejący rozmiar (modify nie wymaga size jeśli się nie zmienia).
+            try:
+                resp = client.post("/api/v2/mix/order/modify-tpsl-order", {
+                    "symbol":       et.SYMBOL,
+                    "productType":  et.PRODUCT_TYPE,
+                    "marginCoin":   et.MARGIN_COIN,
+                    "orderId":      sl_oid,
+                    "triggerPrice": et._fmt_price(sl_new),
+                    "triggerType":  "mark_price",
+                })
+                if resp.get("code") == "00000":
+                    modified.append(f"SL→{sl_new}")
+                else:
+                    failed.append(f"SL:{resp.get('msg')}")
+            except Exception as e:
+                failed.append(f"SL:{e}")
+        else:
+            modified.append(f"SL→{sl_new} (tylko DB)")
+        # Aktualizuj odpowiednie pole w DB: sl_after_tp1 gdy po TP1, inaczej sl
+        if tp1_done:
+            db.update_setup(setup_id, sl_after_tp1=sl_new)
+        else:
+            db.update_setup(setup_id, sl=sl_new)
 
     if modified or not failed:
         db.update_setup(setup_id, tps=tps)
