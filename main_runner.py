@@ -546,21 +546,30 @@ async function loadBitgetLive() {{
         // Czeka na wejście: pokaż rozmiar planu z nawiasem
         qpCell.textContent = '(' + plans[planOid].size + ')';
         qpCell.style.color = '#aaa';
+      }} else if (planOid) {{
+        // OID w DB ale nie znaleziono na Bitget — może wykonany lub anulowany
+        qpCell.textContent = qtyFull ? '(' + qtyFull + ')?' : '?';
+        qpCell.style.color = 'orange';
       }} else {{
         qpCell.textContent = qtyFull ? '(' + qtyFull + ')' : '—';
         qpCell.style.color = '#aaa';
       }}
 
       // qtTP1
-      if (tp1Done) {{
+      if (tp1Done && tp1Oid && tpsl[tp1Oid]) {{
+        // Anomalia: oznaczone jako done ale zlecenie wciąż aktywne na Bitget
+        qt1Cell.textContent = '⚠' + tpsl[tp1Oid].size;
+        qt1Cell.style.color = 'orange';
+      }} else if (tp1Done) {{
         qt1Cell.textContent = '✓';
         qt1Cell.style.color = '#90ee90';
       }} else if (tp1Oid && tpsl[tp1Oid]) {{
         qt1Cell.textContent = tpsl[tp1Oid].size;
-        qt1Cell.style.color = tp1Done ? '#90ee90' : '#e0e0e0';
+        qt1Cell.style.color = '#e0e0e0';
       }} else if (tp1Oid) {{
-        qt1Cell.textContent = '—';
-        qt1Cell.style.color = '#888';
+        // OID w DB ale nie znaleziono na Bitget — może anulowane lub wykonane
+        qt1Cell.textContent = '?';
+        qt1Cell.style.color = 'orange';
       }} else {{
         qt1Cell.textContent = '—';
         qt1Cell.style.color = '#555';
@@ -570,6 +579,9 @@ async function loadBitgetLive() {{
       if (tp2Oid && tpsl[tp2Oid]) {{
         qt2Cell.textContent = tpsl[tp2Oid].size;
         qt2Cell.style.color = '#e0e0e0';
+      }} else if (tp2Oid) {{
+        qt2Cell.textContent = '?';
+        qt2Cell.style.color = 'orange';
       }} else {{
         qt2Cell.textContent = '—';
         qt2Cell.style.color = '#555';
@@ -577,9 +589,11 @@ async function loadBitgetLive() {{
 
       // qtSL
       if (slOid && tpsl[slOid]) {{
-        qt2Cell.style.color = '#e0e0e0';
         qslCell.textContent = tpsl[slOid].size;
         qslCell.style.color = '#e0e0e0';
+      }} else if (slOid) {{
+        qslCell.textContent = '?';
+        qslCell.style.color = 'orange';
       }} else {{
         qslCell.textContent = '—';
         qslCell.style.color = '#555';
@@ -696,6 +710,37 @@ def admin_force_position_open(setup_id: int):
         exchange_sl_oid=None,
     )
     return {"ok": True, "setup_id": setup_id, "result": "pozycja oznaczona jako otwarta — exchange_trader złoży TP/SL za ~15s"}
+
+
+@app.get("/admin/reopen-setup/{setup_id}")
+def admin_reopen_setup(setup_id: int):
+    """Przywraca błędnie zamknięty setup jako aktywny z otwartą pozycją.
+    Używaj gdy pozycja jest nadal otwarta na Bitget ale setup został zamknięty przez błąd (np. race condition).
+    Czyści wszystkie OID TPSL — exchange_trader złoży nowe zlecenia za ~15s."""
+    import time
+    # Wyczyść pola wyniku i przywróć status aktywny
+    db.update_setup(
+        setup_id,
+        resolved=False,
+        result=None,
+        avg_exit=None,
+        pnl_usd=None,
+        pnl_pct=None,
+        exit_time=None,
+        resolved_at=None,
+        exchange_done=False,
+        exchange_position_opened=True,
+        exchange_tp1_done=False,
+        exchange_tp1_oid=None,
+        exchange_tp2_oid=None,
+        exchange_sl_oid=None,
+        entry_hit_at=int(time.time()),
+    )
+    return {
+        "ok": True,
+        "setup_id": setup_id,
+        "message": "Setup przywrócony jako aktywny — exchange_trader złoży TPSL za ~15s",
+    }
 
 
 @app.get("/admin/replace-tps/{setup_id}")
