@@ -587,6 +587,75 @@ def admin_replace_tps(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "TP zresetowane — exchange_trader złoży TP1/TP2 za ~15s (SL bez zmian)"}
 
 
+@app.get("/admin/fix-tpsl-size/{setup_id}")
+def admin_fix_tpsl_size(setup_id: int):
+    """Naprawia rozmiar TPSL dla setupu który wszedł przy istniejącej pozycji zbiorowej.
+    Anuluje wszystkie TPSL ordery na Bitget, przelicza prawidłowy qty z W1,
+    aktualizuje DB — exchange_trader złoży nowe TPSL za ~15s."""
+    import exchange_trader as et
+
+    client = et._client()
+    if client is None:
+        raise HTTPException(status_code=500, detail="Brak konfiguracji BITGET")
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
+
+    s = db._row_to_dict(row)
+
+    if not s.get("exchange_position_opened") or s.get("exchange_done"):
+        raise HTTPException(status_code=400, detail="Setup nie ma otwartej pozycji lub jest już zamknięty")
+
+    entries = s.get("entries") or []
+    if not entries:
+        raise HTTPException(status_code=400, detail="Brak entries (W1) w setupie")
+
+    w1 = float(entries[0])
+    correct_full = et._round_qty((et.TRADE_USDT * et.LEVERAGE) / w1)
+    correct_half = et._round_qty(correct_full / 2)
+
+    old_full = s.get("exchange_qty_full")
+    old_half = s.get("exchange_qty_half")
+
+    # Anuluj istniejące TPSL na Bitget
+    cancelled = []
+    for label, oid, plan_type in [
+        ("TP1", s.get("exchange_tp1_oid"), "profit_plan"),
+        ("TP2", s.get("exchange_tp2_oid"), "profit_plan"),
+        ("SL",  s.get("exchange_sl_oid"),  "loss_plan"),
+    ]:
+        if oid:
+            et._cancel_order(client, oid, plan_type)
+            cancelled.append(f"{label}={oid[:12]}…")
+
+    # Zaktualizuj DB: popraw qty, wyczyść OID-y TPSL
+    db.update_setup(
+        setup_id,
+        exchange_qty_full=et._fmt_qty(correct_full),
+        exchange_qty_half=et._fmt_qty(correct_half),
+        exchange_tp1_oid=None,
+        exchange_tp2_oid=None,
+        exchange_sl_oid=None,
+        exchange_tp1_done=False,
+    )
+
+    return {
+        "ok": True,
+        "setup_id": setup_id,
+        "w1": w1,
+        "old_qty_full": old_full,
+        "old_qty_half": old_half,
+        "new_qty_full": et._fmt_qty(correct_full),
+        "new_qty_half": et._fmt_qty(correct_half),
+        "cancelled_orders": cancelled,
+        "result": "TPSL anulowane, DB zaktualizowana — exchange_trader złoży nowe TPSL za ~15s",
+    }
+
+
 @app.get("/admin/setup/{setup_id}")
 def admin_get_setup(setup_id: int):
     """Zwraca pełny stan setupu z bazy — do diagnostyki."""

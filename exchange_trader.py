@@ -559,13 +559,16 @@ def sync():
                     modified = True
                     continue
 
+                # actual_qty = cała pozycja na Bitget (może zawierać inne setupy).
+                # Używamy calc_qty — rozmiaru obliczonego dla TEGO setupu przy plan orderze.
+                # actual_qty służy tylko do weryfikacji czy wejście w ogóle nastąpiło.
                 if actual_qty < calc_qty * 0.8:
                     log.warning(
                         f"[exchange] {label}: częściowe wypełnienie — "
                         f"oczekiwano {calc_qty} SOL, otwarto {actual_qty} SOL"
                     )
 
-                full_qty = _round_qty(actual_qty)
+                full_qty = _round_qty(calc_qty)
                 half_qty = _round_qty(full_qty / 2)
 
                 tp1_id, tp2_id, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
