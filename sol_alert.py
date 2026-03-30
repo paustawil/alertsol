@@ -1189,7 +1189,12 @@ def check_pending(candles_m15: list[dict]):
                 # Jedynym źródłem prawdy jest exchange_trader, który co 15s odpytuje
                 # Bitget i ustawia exchange_position_opened=True gdy plan order zostanie wykonany.
                 if not s.get("exchange_position_opened"):
-                    still_pending.append(s)
+                    if age_h > ENTRY_TIMEOUT_H:
+                        print(f"[pending] #{s.get('setup_id')} Bitget nie weszlo (timeout {ENTRY_TIMEOUT_H}h)")
+                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
+                        # exchange_trader anuluje plan order przy następnym sync przez get_resolved_with_open_orders()
+                    else:
+                        still_pending.append(s)
                     continue
                 # exchange_trader potwierdził otwarcie pozycji w Bitget
                 hit = int(datetime.now(timezone.utc).timestamp())
@@ -1210,7 +1215,7 @@ def check_pending(candles_m15: list[dict]):
                 if hit is None:
                     if age_h > ENTRY_TIMEOUT_H:
                         print(f"[pending] {s['model']} {d}: nie weszlo")
-                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, 0, None)
+                        db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
                         if not s.get("shadow"):
                             try:
                                 sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
@@ -1336,7 +1341,7 @@ def check_pending(candles_m15: list[dict]):
                 except Exception:
                     pass
         elif age_h > TRADE_TIMEOUT_H:
-            db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, 0, None)
+            db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
             still_pending.append(s)
             db.update_setup(s["setup_id"],
