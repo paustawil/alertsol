@@ -885,7 +885,8 @@ ALERTY_HEADER = [
 WYNIKI_HEADER = [
     "ID", "Snapshot", "Model", "Filtr_powód", "Typ", "Kierunek", "Score",
     "Kurs", "W1", "W2", "Warunek", "SL", "TP1", "TP2", "RR",
-    "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik", "PnL $",
+    "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "Wynik",
+    "PnL $", "PnL %", "Alt.PnL$(TP1)", "Δ(real-alt)",
     "Reasoning",
 ]
 ANULOWANE_GROK_HEADER = [
@@ -990,6 +991,31 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         model     = s.get("model", "")
         raw_score = s.get("score", s.get("total", 0))
         score_val = f"{raw_score}%" if model == "Grok" else raw_score
+
+        # PnL %
+        pnl_pct = s.get("pnl_pct")
+        if pnl_pct is None and move:
+            _tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
+            pnl_pct = round(move / _tu * 100, 2) if _tu else None
+        pnl_pct_val = f"{pnl_pct:+.1f}%" if pnl_pct is not None else ""
+
+        # Alternatywny scenariusz: całość na TP1 (tylko dla TP2 i TP1+BE)
+        alt_pnl_val = ""
+        delta_val   = ""
+        if result in ("TP2", "TP1+BE") and eff_entry and tps:
+            tp1_p = float(tps[0])
+            sign  = 1 if s.get("direction") == "long" else -1
+            fq    = (s.get("exchange_qty_full") or "0").replace(",", ".")
+            try:
+                fq_f = float(fq) if fq else 0.0
+            except ValueError:
+                fq_f = 0.0
+            if fq_f <= 0:
+                fq_f = (TRADE_USDT * LEVERAGE) / eff_entry
+            if fq_f > 0:
+                alt_pnl_val = round(sign * fq_f * (tp1_p - eff_entry), 2)
+                delta_val   = round(move - alt_pnl_val, 2)
+
         sh2.append_row([
             s.get("setup_id", "") or "",
             alert_dt,
@@ -1009,7 +1035,8 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
             "+".join(f"W{i+1}" for i in range(n_w)) if n_w > 0 else "",
             round(eff_entry, 2) if eff_entry is not None else "",
             round(eff_exit,  2) if eff_exit  is not None else "",
-            entry_dt, exit_dt, result, round(move, 2),
+            entry_dt, exit_dt, result,
+            round(move, 2), pnl_pct_val, alt_pnl_val, delta_val,
             s.get("reasoning", "") or "",
         ])
         print(f"[sheets] Wyniki: {s.get('model')} {s.get('direction')} -> {result} ${move:.2f} [{entry_dt}-{exit_dt}]")
