@@ -689,9 +689,11 @@ def sync():
                     print(f"[exchange] {label}: TP1 wykonany — SL przesunięty na {new_sl}")
 
                 elif tp1_status == "cancelled":
-                    log.warning(f"[exchange] {label}: TP1 anulowany ręcznie")
-                    s["exchange_tp1_oid"]  = None
-                    s["exchange_tp1_done"] = True
+                    # TP1 anulowany ręcznie (nie wykonany) — wyczyść OID.
+                    # tp1_done pozostaje False, żeby exchange_trader mógł złożyć nowe TP
+                    # przy następnym cyklu (przez ścieżkę "re-place tylko TP").
+                    log.warning(f"[exchange] {label}: TP1 anulowany — zostanie ponownie złożony")
+                    s["exchange_tp1_oid"] = None
                     modified = True
 
             # Sprawdź TP2
