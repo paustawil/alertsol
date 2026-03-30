@@ -623,7 +623,36 @@ def sync():
                     s["exchange_done"]    = True
                     modified = True
                     if sid and sid != "?":
-                        db.resolve_setup(int(sid), "sl", s.get("avg_entry"), None, 0, None)
+                        tp1_was_done = s.get("exchange_tp1_done", False)
+                        tps          = s.get("tps") or []
+                        tp1_price    = float(tps[0]) if tps else None
+                        avg_entry    = s.get("avg_entry")
+                        pnl_usd      = None
+                        if tp1_was_done:
+                            # TP1+BE: pierwsza połowa zamknięta na TP1, druga na SLpoTP1
+                            result    = "TP1+BE"
+                            sl_price  = s.get("sl_after_tp1")
+                            avg_exit  = ((tp1_price + float(sl_price)) / 2
+                                         if tp1_price and sl_price else sl_price)
+                            if avg_entry and sl_price and tp1_price:
+                                hq       = (s.get("exchange_qty_half") or "0").replace(",", ".")
+                                half_qty = float(hq)
+                                sign     = 1 if s.get("direction") == "long" else -1
+                                pnl_usd  = sign * half_qty * (
+                                    (tp1_price      - float(avg_entry)) +
+                                    (float(sl_price) - float(avg_entry))
+                                )
+                        else:
+                            # Czysty SL: pełna pozycja zamknięta na SL
+                            result    = "SL"
+                            sl_price  = s.get("sl")
+                            avg_exit  = sl_price
+                            if avg_entry and sl_price:
+                                fq       = (s.get("exchange_qty_full") or "0").replace(",", ".")
+                                full_qty = float(fq)
+                                sign     = 1 if s.get("direction") == "long" else -1
+                                pnl_usd  = sign * full_qty * (float(sl_price) - float(avg_entry))
+                        db.resolve_setup(int(sid), result, avg_entry, avg_exit, pnl_usd, None)
                     continue
 
                 if sl_status == "cancelled":
@@ -636,9 +665,8 @@ def sync():
                     s["exchange_tp2_oid"] = None
                     s["exchange_done"]    = True
                     modified = True
-                    sid = s.get("setup_id")
-                    if sid:
-                        db.resolve_setup(sid, "nieokreslone", s.get("avg_entry"), None, 0, None)
+                    if sid and sid != "?":
+                        db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
                     continue
 
             # Sprawdź TP1 (jeśli jeszcze nie wykonany)
@@ -676,6 +704,30 @@ def sync():
                     s["exchange_sl_oid"]  = None
                     s["exchange_done"]    = True
                     modified = True
+                    if sid and sid != "?":
+                        tp1_was_done = s.get("exchange_tp1_done", False)
+                        tps          = s.get("tps") or []
+                        tp1_price    = float(tps[0]) if len(tps) > 0 else None
+                        tp2_price    = float(tps[1]) if len(tps) > 1 else None
+                        avg_entry    = s.get("avg_entry")
+                        avg_exit     = None
+                        pnl_usd      = None
+                        if avg_entry and tp2_price:
+                            hq       = (s.get("exchange_qty_half") or "0").replace(",", ".")
+                            half_qty = float(hq)
+                            sign     = 1 if s.get("direction") == "long" else -1
+                            if tp1_was_done and tp1_price:
+                                # Obie połówki: TP1 i TP2
+                                avg_exit = (tp1_price + tp2_price) / 2
+                                pnl_usd  = sign * half_qty * (
+                                    (tp1_price - float(avg_entry)) +
+                                    (tp2_price - float(avg_entry))
+                                )
+                            else:
+                                # Tylko TP2 (edge case)
+                                avg_exit = tp2_price
+                                pnl_usd  = sign * half_qty * (tp2_price - float(avg_entry))
+                        db.resolve_setup(int(sid), "TP2", avg_entry, avg_exit, pnl_usd, None)
 
                 elif tp2_status == "cancelled":
                     log.warning(f"[exchange] {label}: TP2 anulowany ręcznie")
