@@ -952,6 +952,17 @@ def admin_get_setup(setup_id: int):
     return dict(row)
 
 
+@app.post("/admin/init-sheets")
+def admin_init_sheets():
+    """Tworzy brakujące zakładki Google Sheets (Alerty, Wyniki_Railway, Anulowane_Grok)."""
+    try:
+        import sol_alert
+        sol_alert._get_sheets()
+        return {"ok": True, "message": "Zakładki zainicjalizowane (lub już istniały)."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/admin/reset-sheets-export")
 def admin_reset_sheets_export():
     """Resetuje sheets_exported=FALSE dla wszystkich zamkniętych setupów.
