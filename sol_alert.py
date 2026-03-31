@@ -1588,11 +1588,12 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
     new_level = entries[0] if entries else current_price
     direction = setup.get("direction", "-")
 
-    # Nie dodawaj duplikatu — jakikolwiek model ma już ten sam kierunek/poziom w pending
+    # Nie dodawaj duplikatu — jakikolwiek model ma już ten sam kierunek/poziom w aktywnych setupach.
+    # Blokuje ZARÓWNO setupy przed wejściem (entry_hit_at IS NULL) JAK I po wejściu,
+    # żeby uniknąć podwójnego zlecenia na giełdzie przy otwartej pozycji.
     for p in db.get_active_setups():
         if (p["direction"] == direction
-                and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5
-                and p["entry_hit_at"] is None):
+                and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5):
             print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} (już istnieje #{p['setup_id']} od {p['model']})")
             return
 
@@ -1630,6 +1631,10 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
         "entries_hit":     1,
     }
     sid = db.insert_setup(row)
+    if sid is None:
+        # Duplikat wykryty na poziomie DB (race condition) — nie ustawiamy setup_id
+        print(f"[pending] Duplikat DB: {model} {direction} ~${new_level:.2f}")
+        return
     setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
 
 
@@ -2094,10 +2099,13 @@ def main():
         elif not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
             rejection = _rejection_reason(best_algo)
             save_pending(best_algo, "Algorytm", rejection, current)
-            log_to_alerty("Algorytm", rejection, best_algo)
-            save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
-            if best_algo["total"] >= MIN_SCORE:
-                send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
+            if best_algo.get("setup_id"):
+                log_to_alerty("Algorytm", rejection, best_algo)
+                save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
+                if best_algo["total"] >= MIN_SCORE:
+                    send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
+            else:
+                print("[algo] Duplikat pominięty — setup już istnieje, pomijam alert.")
         else:
             print(f"[algo] Duplikat w cooldown, pomijam.")
     else:
@@ -2120,10 +2128,13 @@ def main():
                 elif not was_alerted("Claude", level, direction):
                     rejection = _rejection_reason(claude_result)
                     save_pending(claude_result, "Claude", rejection, current)
-                    log_to_alerty("Claude", rejection, claude_result)
-                    save_alerted("Claude", level, direction)
-                    if score >= MIN_SCORE:
-                        send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+                    if claude_result.get("setup_id"):
+                        log_to_alerty("Claude", rejection, claude_result)
+                        save_alerted("Claude", level, direction)
+                        if score >= MIN_SCORE:
+                            send_telegram(format_alert("Claude", claude_result, current, filter_passed))
+                    else:
+                        print("[claude] Duplikat pominięty — setup już istnieje, pomijam alert.")
                 else:
                     print(f"[claude] Duplikat w cooldown, pomijam.")
             else:
@@ -2153,10 +2164,13 @@ def main():
                 elif not was_alerted("GPT", level, direction):
                     rejection = _rejection_reason(gpt_result)
                     save_pending(gpt_result, "GPT", rejection, current)
-                    log_to_alerty("GPT", rejection, gpt_result)
-                    save_alerted("GPT", level, direction)
-                    if score >= MIN_SCORE:
-                        send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+                    if gpt_result.get("setup_id"):
+                        log_to_alerty("GPT", rejection, gpt_result)
+                        save_alerted("GPT", level, direction)
+                        if score >= MIN_SCORE:
+                            send_telegram(format_alert("GPT", gpt_result, current, filter_passed))
+                    else:
+                        print("[gpt] Duplikat pominięty — setup już istnieje, pomijam alert.")
                 else:
                     print(f"[gpt] Duplikat w cooldown, pomijam.")
             else:
