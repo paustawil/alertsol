@@ -79,3 +79,36 @@ CREATE TABLE IF NOT EXISTS alerts_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_alerts_recent ON alerts_log (model, alerted_at DESC);
+
+-- ── Migracje kolumn (idempotentne — bezpieczne do ponownego uruchomienia) ──────
+-- Uruchamiane przy każdym init_schema() — dodają brakujące kolumny do istniejących tabel.
+
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS entry_trigger          TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS reasoning              TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS llm_scores             JSONB;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS price_at_alert         NUMERIC(10,2);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS sl_after_tp1           NUMERIC(10,2);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS avg_entry              NUMERIC(10,4);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS entries_hit            INT NOT NULL DEFAULT 1;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS sl_adjusted            BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS tp1_hit_at             BIGINT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS avg_exit               NUMERIC(10,4);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exit_time              TIMESTAMPTZ;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS result                 TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS pnl_usd                NUMERIC(10,4);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS pnl_pct                NUMERIC(8,4);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS shadow                 BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS cancel_reason          TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS cancel_time            TIMESTAMPTZ;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS cancel_price           NUMERIC(10,2);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_plan_oid      TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_qty_full      TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_qty_half      TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_position_opened BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_tp1_oid       TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_tp2_oid       TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_sl_oid        TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_tp1_done      BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_done          BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS resolved_at            TIMESTAMPTZ;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS sheets_exported        BOOLEAN NOT NULL DEFAULT FALSE;
