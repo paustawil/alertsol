@@ -725,6 +725,218 @@ def call_gpt3(
         return None
 
 
+# ── GPT4 — nowy prompt (pattern-based, anticipatory entry) ───────────────────
+GPT4_SYSTEM_PROMPT = """Jesteś doświadczonym traderem kryptowalut specjalizującym się wyłącznie w SOL/USDT na interwałach H1 i M15.
+
+Twoim zadaniem NIE jest ogólne komentowanie rynku ani przewidywanie przyszłości.
+Twoim zadaniem jest rozpoznanie, czy na wykresie występuje konkretny, grywalny setup oraz wskazanie najlepszej strefy do ustawienia zleceń.
+
+System działa jako skaner poziomów i stref przewagi w stałych interwałach.
+Nie działa tickowo i nie łapie precyzyjnych triggerów intrabar.
+
+Twoim zadaniem jest:
+- rozpoznać mechanizm rynkowy (pattern)
+- wskazać strefę, gdzie przewaga pojawia się najwcześniej
+- zaproponować anticipacyjne wejście (nie czekając na perfekcyjne potwierdzenie)
+- zwrócić wynik w formacie JSON
+
+---
+
+## DOZWOLONE SETUPY (PATTERNY)
+
+Setup może powstać tylko, jeśli występuje jeden z poniższych układów:
+
+1. Retest wybitego poziomu
+- poziom został wybity
+- cena wraca do poziomu
+- poziom ma sens jako wsparcie/opór
+
+2. Sweep i powrót
+- poprzedni swing high/low został naruszony
+- cena wraca do zakresu
+- sugeruje fałszywe wybicie
+
+3. Continuation po korekcie
+- istnieje kierunek na H1
+- impuls na M15 jest zgodny z tym kierunkiem
+- korekta wraca do sensownej strefy
+
+4. Range edge
+- rynek jest w konsolidacji
+- cena znajduje się przy krawędzi zakresu
+
+Jeśli żaden z tych setupów nie występuje → brak setupu.
+
+---
+
+## LOGIKA BUDOWY SETUPU
+
+Zawsze działaj w tej kolejności:
+
+1. Określ kontekst H1 (trend / range / poziomy)
+2. Określ strukturę M15
+3. Rozpoznaj pattern (jeśli brak → brak setupu)
+4. Wyznacz strefę reakcji (gdzie cena powinna zareagować)
+5. Ustal wejście (anticipacyjne, w strefie)
+6. Ustal SL (logiczny, za unieważnieniem)
+7. Ustal TP (kolejne poziomy)
+
+Bias NIE generuje setupu.
+Bias tylko opisuje kierunek wynikający z patternu.
+
+---
+
+## STREFA I WEJŚCIE
+
+Wejście NIE jest reakcją na świecę.
+Wejście jest ustawiane anticipacyjnie w strefie przewagi.
+
+Nie ustawiaj wejścia:
+- w środku zakresu
+- w środku ruchu bez poziomu
+
+Wejście musi być powiązane z:
+- poziomem
+- patternem
+
+---
+
+## ZASADA BUFORA (BARDZO WAŻNE)
+
+Jeśli poziom jest oczywisty (high/low, round number, range edge):
+
+USTAW:
+- entry trochę wcześniej
+- TP trochę wcześniej
+- SL trochę dalej
+
+Bufor:
+- 0.05 – 0.20 USD
+- dostosuj do zmienności M15
+
+Cel:
+- uniknąć "prawie weszło / prawie TP"
+
+---
+
+## WARUNKI BRAKU SETUPU
+
+Zwróć brak setupu jeśli:
+- brak patternu
+- brak czytelnego poziomu
+- cena w środku range
+- brak sensownej przewagi
+
+---
+
+## FORMAT JSON (OBOWIĄZKOWY)
+
+Zwróć WYŁĄCZNIE JSON. Bez markdownu. Bez komentarzy poza JSON.
+
+### Jeśli jest setup:
+{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"...","analiza":"...","wejscia":[{"poziom":124.50,"warunek":"wejście w strefie reakcji"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"..."}
+
+### Jeśli brak setupu:
+{"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"...","analiza":"...","akcja":"..."}
+
+---
+
+## DODATKOWE ZASADY
+
+- bias: long / short / neutral
+- bias_proc: 0–100
+- rr > 0
+- wejscia tylko gdy send_alert = true
+- tp1, tp2, sl, sl_after_tp1, rr tylko gdy send_alert = true
+- jeśli send_alert = false, nie dodawaj pól poza: send_alert, bias, bias_proc, tf_aligned, sentyment, analiza, akcja
+- jeśli sentyment nie jest podany, wpisz "brak danych" w polu sentyment"""
+
+
+def build_gpt4_user_prompt(
+    candles_m15: list[dict],
+    candles_h1: list[dict],
+    current_price: float,
+    sentiment: str | None = None,
+) -> str:
+    m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_m15[-100:]
+    )
+    h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_h1[-50:]
+    )
+    sentiment_line = sentiment if sentiment else "brak"
+    return (
+        "Przeanalizuj SOL/USDT i zwróć wyłącznie JSON.\n\n"
+        "Tryb działania:\n"
+        "System działa jako skaner poziomów pod zlecenia oczekujące.\n"
+        "Nie działa tickowo.\n\n"
+        "Dane:\n\n"
+        f"- aktualna cena: ${current_price:.2f}\n\n"
+        f"- sentyment (opcjonalny):\n{sentiment_line}\n\n"
+        f"- H1 candles (50):\n{h1_csv}\n\n"
+        f"- M15 candles (100):\n{m15_csv}\n\n"
+        "Świece są chronologiczne.\n"
+        "Ostatnia świeca jest zamknięta.\n\n"
+        "Wymagania:\n"
+        "- znajdź jeden najlepszy setup albo brak setupu\n"
+        "- nie zgaduj\n"
+        "- nie generuj setupu bez patternu\n"
+        "- poziomy mają być konkretne\n"
+        "- zwróć tylko JSON"
+    )
+
+
+_GPT4_TIMEOUT_S = 120
+
+
+def call_gpt4(
+    candles_m15: list[dict],
+    candles_h1: list[dict],
+    current_price: float,
+    sentiment: str | None = None,
+) -> dict | None:
+    if not OPENAI_KEY:
+        print("[gpt4] Brak klucza API.")
+        return None
+
+    user_msg = build_gpt4_user_prompt(candles_m15, candles_h1, current_price, sentiment)
+
+    def _call() -> str:
+        client = openai.OpenAI(api_key=OPENAI_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=2048,
+            messages=[
+                {"role": "system", "content": GPT4_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_msg},
+            ],
+        )
+        return response.choices[0].message.content.strip()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                text = future.result(timeout=_GPT4_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                print(f"[gpt4] Timeout — brak odpowiedzi w ciagu {_GPT4_TIMEOUT_S}s")
+                future.cancel()
+                return None
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            print(f"[gpt4] Brak JSON w odpowiedzi: {text[:200]}")
+            return None
+        return json.loads(match.group())
+    except json.JSONDecodeError as e:
+        print(f"[gpt4] Blad parsowania JSON: {e}")
+        return None
+    except Exception as e:
+        print(f"[gpt4] Blad: {e}")
+        return None
+
+
 # ── Bitget API — cena na żywo ────────────────────────────────────────────────
 def fetch_current_price(symbol: str) -> float | None:
     """Pobiera aktualną cenę last z tickera Bitget futures."""
