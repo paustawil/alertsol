@@ -1501,6 +1501,23 @@ def api_update_result(setup_id: int, body: ResultUpdate):
     }
 
 
+@app.post("/admin/run-gpt3-backtest")
+def admin_run_gpt3_backtest():
+    """Uruchamia backtest GPT3 w tle. Wyniki trafiają do arkusza 'GPT3 test'."""
+    import threading
+    import gpt3_backtest
+
+    def _run():
+        try:
+            gpt3_backtest.run_backtest()
+        except Exception as e:
+            logging.error(f"[gpt3-backtest] Błąd: {e}", exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return {"ok": True, "message": "Backtest GPT3 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT3 test' (~30-60 min)."}
+
+
 # ── Uruchomienie ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
