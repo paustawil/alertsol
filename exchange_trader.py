@@ -505,6 +505,12 @@ def sync():
 
         # ── Anuluj gdy setup odrzucony przed wejściem ─────────────────────────
         if (shadow or cancelled) and plan_oid and not pos_open:
+            if plan_oid == "PENDING":
+                # Rezerwacja bez realnego OID — wyczyść bez odpytywania Bitget
+                s["exchange_plan_oid"] = None
+                s["exchange_done"]     = True
+                modified = True
+                continue
             print(f"[exchange] {label}: anulowany → cancel plan order {plan_oid}")
             _cancel_order(client, plan_oid, "normal_plan")
             s["exchange_plan_oid"] = None
@@ -517,6 +523,11 @@ def sync():
             if exchange_slot_taken:
                 print(f"[exchange] {label}: pominięty — slot zajęty (tryb jedna pozycja na raz)")
                 continue
+            # Atomicznie zarezerwuj slot przed wywołaniem API — chroni przed race condition
+            # gdy Railway (co 15s) i GitHub Actions (co 5min) wywołują sync() równocześnie.
+            if not db.claim_plan_order(s["setup_id"]):
+                print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
+                continue
             w1       = entries[0]
             full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
             oid      = _place_entry_plan_order(client, s, full_qty)
@@ -527,10 +538,19 @@ def sync():
                 s["exchange_position_opened"] = False
                 modified = True
                 print(f"[exchange] {label}: plan order złożony ({_fmt_qty(full_qty)} SOL @ W1={w1})")
+            else:
+                # API call nie udał się — zwolnij rezerwację żeby następny sync() mógł spróbować
+                db.release_plan_order_claim(s["setup_id"])
             continue
 
         # ── Plan order złożony, pozycja jeszcze nie otwarta ───────────────────
         if plan_oid and not pos_open:
+            if plan_oid == "PENDING":
+                # Stała rezerwacja bez OID — proces poprzedni musiał się wysypać; resetuj
+                print(f"[exchange] {label}: stale PENDING claim — reset, next sync retry")
+                s["exchange_plan_oid"] = None
+                modified = True
+                continue
             status = _plan_order_status(client, plan_oid)
             print(f"[exchange] {label}: plan order status = {status}")
 

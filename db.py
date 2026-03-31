@@ -280,6 +280,44 @@ def save_alerted(model: str, level: float, direction: str) -> None:
 
 # ── Exchange trader integration ───────────────────────────────────────────────
 
+def claim_plan_order(setup_id: int) -> bool:
+    """
+    Atomicznie rezerwuje prawo do złożenia plan order dla danego setupu.
+    Ustawia exchange_plan_oid = 'PENDING' w jednej operacji UPDATE WHERE IS NULL.
+    Zwraca True jeśli rezerwacja się udała (ten proces może złożyć order),
+    False jeśli inny proces już zarezerwował lub złożył order.
+
+    Chroni przed race condition między Railway (co 15s) a GitHub Actions (co 5min)
+    gdy oba wywołują sync() jednocześnie i widzą plan_oid=NULL dla nowego setupu.
+    """
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE setups
+                SET exchange_plan_oid = 'PENDING'
+                WHERE setup_id = %s
+                  AND exchange_plan_oid IS NULL
+                  AND entry_hit_at IS NULL
+                  AND resolved = FALSE
+                RETURNING setup_id
+                """,
+                (setup_id,),
+            )
+            return cur.fetchone() is not None
+
+
+def release_plan_order_claim(setup_id: int) -> None:
+    """Zwalnia rezerwację 'PENDING' gdy API call do Bitget nie udał się."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE setups SET exchange_plan_oid = NULL "
+                "WHERE setup_id = %s AND exchange_plan_oid = 'PENDING'",
+                (setup_id,),
+            )
+
+
 def load_pending() -> list[dict]:
     """
     Zwraca aktywne setupy i zapamiętuje snapshot do change-detection.
