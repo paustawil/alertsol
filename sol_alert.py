@@ -975,10 +975,11 @@ def log_to_alerty(model: str, rejection: str, setup: dict):
 
 
 def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
-                  eff_entry, eff_exit, move: float) -> bool:
-    """Zapisuje wynik rozwiązanego setupu do Sheet 2. Zwraca True jeśli sukces."""
+                  eff_entry, eff_exit, move: float, *, _sh2=None) -> bool:
+    """Zapisuje wynik rozwiązanego setupu do Sheet 2. Zwraca True jeśli sukces.
+    Opcjonalny _sh2 pozwala przekazać już otwarty worksheet (batch export — 1 połączenie)."""
     try:
-        _, sh2   = _get_sheets()
+        sh2 = _sh2 if _sh2 is not None else _get_sheets()[1]
         _at      = s["alert_time"]
         if isinstance(_at, str):
             _at = datetime.fromisoformat(_at)
