@@ -907,7 +907,7 @@ def _get_sheets(reset: bool = False):
 
     for name, header, rows in [
         ("Alerty", ALERTY_HEADER, 1000),
-        ("Wyniki", WYNIKI_HEADER, 1000),
+        ("Wyniki_Railway", WYNIKI_HEADER, 1000),
         ("Anulowane_Grok", ANULOWANE_GROK_HEADER, 500),
     ]:
         try:
@@ -920,7 +920,7 @@ def _get_sheets(reset: bool = False):
             sh.append_row(header)
         if name == "Alerty":
             sh1 = sh
-        elif name == "Wyniki":
+        elif name == "Wyniki_Railway":
             sh2 = sh
 
     return sh1, sh2
