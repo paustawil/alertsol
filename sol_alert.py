@@ -1144,13 +1144,12 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
     new_level = entries[0] if entries else current_price
     direction = setup.get("direction", "-")
 
-    # Nie dodawaj duplikatu — ten sam model/kierunek/poziom już w pending
+    # Nie dodawaj duplikatu — jakikolwiek model ma już ten sam kierunek/poziom w pending
     for p in db.get_active_setups():
-        if (p["model"] == model
-                and p["direction"] == direction
+        if (p["direction"] == direction
                 and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5
                 and p["entry_hit_at"] is None):
-            print(f"[pending] Duplikat pominiêty: {model} {direction} ~${new_level:.2f}")
+            print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} (już istnieje #{p['setup_id']} od {p['model']})")
             return
 
     # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
@@ -1773,9 +1772,13 @@ def main():
                     "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
                 }
                 save_pending(grok_setup, "Grok", "", current)  # ustawia grok_setup["setup_id"]
-                log_to_alerty("Grok", "", grok_setup)
-
-            send_telegram(format_grok_alert(grok_result, current, grok_setup.get("setup_id") if entries else None))
+                if grok_setup.get("setup_id"):
+                    log_to_alerty("Grok", "", grok_setup)
+                    send_telegram(format_grok_alert(grok_result, current, grok_setup["setup_id"]))
+                else:
+                    print("[grok] Duplikat pominięty — setup już istnieje, pomijam alert.")
+            else:
+                send_telegram(format_grok_alert(grok_result, current, None))
         else:
             print(f"[grok] Brak konkretnego setupu — pomijam Telegram i arkusz.")
     else:
@@ -1828,9 +1831,13 @@ def main():
                         "reasoning":    " | ".join(filter(None, [gpt_r_result.get("analiza", ""), gpt_r_result.get("akcja", "")])),
                     }
                     save_pending(gpt_r_setup, "GPT-R", "", current)
-                    log_to_alerty("GPT-R", "", gpt_r_setup)
-
-                send_telegram(format_grok_alert(gpt_r_result, current, gpt_r_setup.get("setup_id") if gpt_r_setup else None, model_name="GPT-R"))
+                    if gpt_r_setup.get("setup_id"):
+                        log_to_alerty("GPT-R", "", gpt_r_setup)
+                        send_telegram(format_grok_alert(gpt_r_result, current, gpt_r_setup["setup_id"], model_name="GPT-R"))
+                    else:
+                        print("[gpt-r] Duplikat pominięty — setup już istnieje, pomijam alert.")
+                else:
+                    send_telegram(format_grok_alert(gpt_r_result, current, None, model_name="GPT-R"))
             else:
                 print(f"[gpt-r] Brak konkretnego setupu — pomijam Telegram i arkusz.")
         else:
