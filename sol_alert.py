@@ -39,7 +39,7 @@ MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzuco
 ENABLE_CLAUDE        = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT           = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT3
-ENABLE_GPT3          = True   # nowy model z podziałem system/user
+ENABLE_GPT3          = False  # aktywować po weryfikacji backtestem
 
 
 # ── System prompt dla Claude ──────────────────────────────────────────────────
@@ -2076,65 +2076,8 @@ def main():
     else:
         print("[gpt-r] Pominieto (ENABLE_GPT_RELAXED=False).")
 
-    # ── 6. GPT3 (system/user split, bez web search) ───────────────────────────
-    if ENABLE_GPT3:
-        print("[gpt3] Wysylam dane do analizy...")
-        gpt3_result = call_gpt3(candles_m15, candles_h1, current)
-
-        if gpt3_result:
-            bias       = gpt3_result.get("bias", "neutral")
-            bias_proc  = gpt3_result.get("bias_proc", 0)
-            send_alert = gpt3_result.get("send_alert", False)
-            tf_aligned = gpt3_result.get("tf_aligned", True)
-            print(f"[gpt3] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
-
-            if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
-                print(f"[gpt3] Odrzucono: bias_proc={bias_proc}% < prog {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnal.")
-                send_alert = False
-
-            if send_alert and bias != "neutral":
-                wejscia = gpt3_result.get("wejscia", [])
-                entries = [w["poziom"] for w in wejscia if "poziom" in w]
-                if entries:
-                    akcja_lower = gpt3_result.get("akcja", "").lower()
-                    if "pullback" in akcja_lower:
-                        warunek = "pullback"
-                    elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
-                        warunek = "przebicie"
-                    else:
-                        w1_lvl = entries[0]
-                        if bias == "short":
-                            warunek = "przebicie" if w1_lvl < current else "pullback"
-                        else:
-                            warunek = "przebicie" if w1_lvl > current else "pullback"
-
-                    gpt3_setup = {
-                        "type":         "",
-                        "direction":    bias,
-                        "score":        bias_proc,
-                        "kurs":         round(current, 2),
-                        "entries":      entries,
-                        "warunek":      warunek,
-                        "sl":           gpt3_result.get("sl"),
-                        "sl_after_tp1": gpt3_result.get("sl_after_tp1"),
-                        "tps":          [t for t in [gpt3_result.get("tp1"), gpt3_result.get("tp2")] if t is not None],
-                        "rr":           gpt3_result.get("rr", 0),
-                        "reasoning":    " | ".join(filter(None, [gpt3_result.get("analiza", ""), gpt3_result.get("akcja", "")])),
-                    }
-                    save_pending(gpt3_setup, "GPT3", "", current)
-                    if gpt3_setup.get("setup_id"):
-                        log_to_alerty("GPT3", "", gpt3_setup)
-                        send_telegram(format_grok_alert(gpt3_result, current, gpt3_setup["setup_id"], model_name="GPT3"))
-                    else:
-                        print("[gpt3] Duplikat pominięty — setup już istnieje, pomijam alert.")
-                else:
-                    send_telegram(format_grok_alert(gpt3_result, current, None, model_name="GPT3"))
-            else:
-                print(f"[gpt3] Brak konkretnego setupu — pomijam Telegram i arkusz.")
-        else:
-            print("[gpt3] Brak odpowiedzi.")
-    else:
-        print("[gpt3] Pominięto (ENABLE_GPT3=False).")
+    # ── 6. GPT3 — zintegrowany po weryfikacji backtestem ─────────────────────
+    # (integracja z główną pętlą zostanie dodana po weryfikacji wyników backtestu)
 
     # Składa plan order dla nowo zapisanych setupów (natychmiast po wygenerowaniu alertu)
     exchange_trader.sync()

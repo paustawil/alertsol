@@ -31,7 +31,7 @@ OUTCOME_WINDOW_S = 24 * 3600  # 24h na rozstrzygnięcie po wejściu
 
 SHEET_HEADER = [
     "Data i godzina", "Kierunek", "Pewność", "W", "TP1", "TP2", "SL",
-    "Wynik", "Czas do entry", "Delta",
+    "Wynik", "Czas do entry", "Delta (TP1+TP2)", "DeltaTP1",
 ]
 
 # ── Import promptów z sol_alert.py ───────────────────────────────────────────
@@ -170,7 +170,7 @@ def evaluate_outcome(
 
     if not entries or tp1 is None or sl is None:
         return {"entry_activated": False, "entry_ts": None, "entry_price": None,
-                "wynik": "no entry", "czas_do_entry_h": None, "delta": None}
+                "wynik": "no entry", "czas_do_entry_h": None, "delta": None, "delta_tp1": None}
 
     entry_deadline = signal_ts + ENTRY_WINDOW_S
 
@@ -191,7 +191,7 @@ def evaluate_outcome(
 
     if entry_ts is None:
         return {"entry_activated": False, "entry_ts": None, "entry_price": None,
-                "wynik": "no entry", "czas_do_entry_h": None, "delta": None}
+                "wynik": "no entry", "czas_do_entry_h": None, "delta": None, "delta_tp1": None}
 
     czas_h = _round_to_quarter((entry_ts - signal_ts) / 3600)
 
@@ -257,7 +257,7 @@ def evaluate_outcome(
         else:
             final_wynik = "SL"
 
-    # ── Delta ─────────────────────────────────────────────────────────────────
+    # ── Delta (strategia TP1+TP2, po TP1 SL na BE) ───────────────────────────
     avg_entry = entry_price
     if final_wynik == "TP1+TP2" and tp1 is not None and tp2 is not None:
         avg_exit = (tp1 + tp2) / 2
@@ -272,6 +272,42 @@ def evaluate_outcome(
     else:
         delta = round(avg_entry - avg_exit, 4)
 
+    # ── DeltaTP1 (zamykamy całość na TP1, ignorujemy TP2) ────────────────────
+    # Szukamy pierwszego zdarzenia: TP1 trafiony LUB SL trafiony
+    delta_tp1: float | None = None
+    for c in future_m15:
+        if c["time"] <= entry_ts:
+            continue
+        if c["time"] > entry_ts + OUTCOME_WINDOW_S:
+            break
+        if direction == "long":
+            tp1_hit_c = c["high"] >= tp1
+            sl_hit_c  = c["low"]  <= sl
+        else:
+            tp1_hit_c = c["low"]  <= tp1
+            sl_hit_c  = c["high"] >= sl
+
+        if tp1_hit_c and sl_hit_c:
+            # Zakładamy pierwsze zdarzenie to to, które jest bliżej entry
+            if direction == "long":
+                tp1_hit_c = (tp1 - avg_entry) <= (avg_entry - sl)
+            else:
+                tp1_hit_c = (avg_entry - tp1) <= (sl - avg_entry)
+
+        if sl_hit_c and not tp1_hit_c:
+            exit_tp1 = sl
+            break
+        if tp1_hit_c:
+            exit_tp1 = tp1
+            break
+    else:
+        exit_tp1 = sl  # timeout = SL
+
+    if direction == "long":
+        delta_tp1 = round(exit_tp1 - avg_entry, 4)
+    else:
+        delta_tp1 = round(avg_entry - exit_tp1, 4)
+
     return {
         "entry_activated":  True,
         "entry_ts":         entry_ts,
@@ -279,6 +315,7 @@ def evaluate_outcome(
         "wynik":            final_wynik,
         "czas_do_entry_h":  czas_h,
         "delta":            delta,
+        "delta_tp1":        delta_tp1,
     }
 
 
@@ -376,9 +413,10 @@ def run_backtest() -> None:
 
         wynik         = outcome["wynik"]
         czas_str      = f"{outcome['czas_do_entry_h']}h" if outcome["czas_do_entry_h"] is not None else ""
-        delta_val     = outcome["delta"] if outcome["delta"] is not None else ""
+        delta_val     = outcome["delta"]    if outcome["delta"]    is not None else ""
+        delta_tp1_val = outcome["delta_tp1"] if outcome["delta_tp1"] is not None else ""
 
-        print(f"  Wynik: {wynik} | czas do entry: {czas_str} | delta: {delta_val}")
+        print(f"  Wynik: {wynik} | czas do entry: {czas_str} | delta: {delta_val} | deltaTP1: {delta_tp1_val}")
 
         kierunek = bias.upper()  # LONG lub SHORT
         sheet.append_row([
@@ -392,6 +430,7 @@ def run_backtest() -> None:
             wynik,
             czas_str,
             delta_val,
+            delta_tp1_val,
         ])
 
     print("\n=== Backtest zakończony ===")
