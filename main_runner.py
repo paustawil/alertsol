@@ -1501,6 +1501,23 @@ def api_update_result(setup_id: int, body: ResultUpdate):
     }
 
 
+@app.post("/admin/run-gpt5-backtest")
+def admin_run_gpt5_backtest():
+    """Uruchamia backtest GPT5 (vision: wykresy PNG) w tle. Wyniki: arkusz 'GPT5 test'."""
+    import threading
+    import gpt5_backtest
+
+    def _run():
+        try:
+            gpt5_backtest.run_backtest()
+        except Exception as e:
+            logging.error(f"[gpt5-backtest] Błąd: {e}", exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return {"ok": True, "message": "Backtest GPT5 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT5 test' (~60-90 min)."}
+
+
 @app.post("/admin/run-gpt4-backtest")
 def admin_run_gpt4_backtest():
     """Uruchamia backtest GPT4 w tle. Wyniki trafiają do arkusza 'GPT4 test'."""
