@@ -995,6 +995,12 @@ def admin_run_sheets_export():
     unexported = db.get_unexported_resolved()
     exported_ok, exported_fail, errors = 0, 0, []
 
+    # Otwórz arkusze raz dla całego batcha — unika rate limitingu Google Sheets API
+    try:
+        _, sh2 = sol_alert._get_sheets()
+    except Exception as e:
+        return {"ok": False, "stage": "open_sheets", "error": str(e)}
+
     for s in unexported:
         sid = s.get("setup_id")
         try:
@@ -1009,14 +1015,14 @@ def admin_run_sheets_export():
             if s.get("shadow"):
                 ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
             else:
-                ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
+                ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move, _sh2=sh2)
 
             if ok:
                 db.mark_sheets_exported(sid)
                 exported_ok += 1
             else:
                 exported_fail += 1
-                errors.append({"setup_id": sid, "error": "log_to_wyniki zwróciło False"})
+                errors.append({"setup_id": sid, "error": "eksport zwrócił False — sprawdź logi Railway"})
         except Exception as e:
             exported_fail += 1
             errors.append({"setup_id": sid, "error": str(e)})
