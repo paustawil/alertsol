@@ -109,14 +109,41 @@ def get_active_setups() -> list[dict]:
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
-def insert_setup(row: dict) -> int:
+def insert_setup(row: dict) -> int | None:
     """
     Wstawia nowy setup do bazy. Zwraca nowo nadany setup_id (SERIAL).
     row: słownik z polami odpowiadającymi kolumnom tabeli setups
          (bez setup_id — generowany przez DB).
     """
+    params = {
+        "alert_time":      row.get("alert_time"),
+        "alert_timestamp": row.get("alert_timestamp"),
+        "model":           row.get("model", ""),
+        "rejection":       row.get("rejection", ""),
+        "type":            row.get("type", ""),
+        "direction":       row.get("direction", ""),
+        "score":           row.get("score"),
+        "kurs":            row.get("kurs"),
+        "price_at_alert":  row.get("price_at_alert"),
+        "warunek":         row.get("warunek"),
+        "entry_trigger":   row.get("entry_trigger"),
+        "reasoning":       row.get("reasoning"),
+        "llm_scores":      json.dumps(row["llm_scores"]) if row.get("llm_scores") else None,
+        "entries":         json.dumps(row.get("entries", [])),
+        "tps":             json.dumps(row.get("tps", [])),
+        "sl":              row.get("sl"),
+        "sl_after_tp1":    row.get("sl_after_tp1"),
+        "rr":              row.get("rr"),
+        "entry_hit_at":    row.get("entry_hit_at"),
+        "entries_hit":     row.get("entries_hit", 1),
+        "sl_adjusted":     row.get("sl_adjusted", False),
+    }
+
     with _conn() as conn:
         with conn.cursor() as cur:
+            # Atomiczny INSERT z dedup na poziomie DB — chroni przed race condition
+            # gdy Railway i GitHub Actions wywołują main() jednocześnie.
+            # Blokuje duplikaty: ten sam kierunek + poziom wejścia ±0.5 USD wśród aktywnych setupów.
             cur.execute(
                 """
                 INSERT INTO setups (
@@ -125,40 +152,28 @@ def insert_setup(row: dict) -> int:
                     entry_trigger, reasoning, llm_scores,
                     entries, tps, sl, sl_after_tp1, rr,
                     entry_hit_at, entries_hit, sl_adjusted
-                ) VALUES (
+                )
+                SELECT
                     %(alert_time)s, %(alert_timestamp)s, %(model)s, %(rejection)s, %(type)s,
                     %(direction)s, %(score)s, %(kurs)s, %(price_at_alert)s, %(warunek)s,
                     %(entry_trigger)s, %(reasoning)s, %(llm_scores)s,
                     %(entries)s, %(tps)s, %(sl)s, %(sl_after_tp1)s, %(rr)s,
                     %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM setups
+                    WHERE resolved = FALSE
+                      AND direction = %(direction)s
+                      AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
                 )
                 RETURNING setup_id
                 """,
-                {
-                    "alert_time":      row.get("alert_time"),
-                    "alert_timestamp": row.get("alert_timestamp"),
-                    "model":           row.get("model", ""),
-                    "rejection":       row.get("rejection", ""),
-                    "type":            row.get("type", ""),
-                    "direction":       row.get("direction", ""),
-                    "score":           row.get("score"),
-                    "kurs":            row.get("kurs"),
-                    "price_at_alert":  row.get("price_at_alert"),
-                    "warunek":         row.get("warunek"),
-                    "entry_trigger":   row.get("entry_trigger"),
-                    "reasoning":       row.get("reasoning"),
-                    "llm_scores":      json.dumps(row["llm_scores"]) if row.get("llm_scores") else None,
-                    "entries":         json.dumps(row.get("entries", [])),
-                    "tps":             json.dumps(row.get("tps", [])),
-                    "sl":              row.get("sl"),
-                    "sl_after_tp1":    row.get("sl_after_tp1"),
-                    "rr":              row.get("rr"),
-                    "entry_hit_at":    row.get("entry_hit_at"),
-                    "entries_hit":     row.get("entries_hit", 1),
-                    "sl_adjusted":     row.get("sl_adjusted", False),
-                },
+                params,
             )
-            setup_id = cur.fetchone()[0]
+            result = cur.fetchone()
+            if result is None:
+                log.info(f"[db] Duplikat na poziomie DB — pominięto ({row.get('model')} {row.get('direction')})")
+                return None
+            setup_id = result[0]
     log.info(f"[db] Nowy setup #{setup_id} ({row.get('model')} {row.get('direction')})")
     return setup_id
 
