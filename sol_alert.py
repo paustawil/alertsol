@@ -1486,7 +1486,7 @@ def log_to_alerty(model: str, rejection: str, setup: dict):
         tps     = setup.get("tps", [])
         now     = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
         raw_score = setup.get("total", setup.get("score", 0))
-        score_val = f"{raw_score}%" if model == "Grok" else raw_score
+        score_val = f"{raw_score}%" if model in ("Grok", "Grok2") else raw_score
         sh1.append_row([
             setup.get("setup_id", "") or "",
             now,
@@ -1528,7 +1528,7 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         n_w      = s.get("entries_hit", 1)
         model     = s.get("model", "")
         raw_score = s.get("score", s.get("total", 0))
-        score_val = f"{raw_score}%" if model == "Grok" else raw_score
+        score_val = f"{raw_score}%" if model in ("Grok", "Grok2") else raw_score
 
         # PnL %
         pnl_pct = s.get("pnl_pct")
@@ -2440,14 +2440,14 @@ def main():
                     "rr":           grok_result.get("rr", 0),
                     "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
                 }
-                save_pending(grok_setup, "Grok", "", current)  # ustawia grok_setup["setup_id"]
+                save_pending(grok_setup, "Grok2", "", current)  # ustawia grok_setup["setup_id"]
                 if grok_setup.get("setup_id"):
-                    log_to_alerty("Grok", "", grok_setup)
-                    send_telegram(format_grok_alert(grok_result, current, grok_setup["setup_id"]))
+                    log_to_alerty("Grok2", "", grok_setup)
+                    send_telegram(format_grok_alert(grok_result, current, grok_setup["setup_id"], model_name="Grok2"))
                 else:
                     print("[grok] Duplikat pominięty — setup już istnieje, pomijam alert.")
             else:
-                send_telegram(format_grok_alert(grok_result, current, None))
+                send_telegram(format_grok_alert(grok_result, current, None, model_name="Grok2"))
         else:
             print(f"[grok] Brak konkretnego setupu — pomijam Telegram i arkusz.")
     else:
