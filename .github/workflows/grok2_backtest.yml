@@ -1,4 +1,4 @@
-name: Grok2 Backtest (Grok vs Grok2 — 48h porównanie)
+name: Grok2 Backtest (Grok vs Grok2)
 
 on:
   workflow_dispatch:
@@ -6,11 +6,24 @@ on:
       grok2_only:
         description: 'Pomiń stary Grok — testuj tylko Grok2 (oszczędność kredytów)'
         type: boolean
-        default: false
+        default: true
+      hours:
+        description: 'Ile godzin wstecz testować'
+        type: number
+        default: 48
+      end_offset:
+        description: 'Offset końca w godzinach od teraz (np. 48 = pomiń ostatnie 48h)'
+        type: number
+        default: 0
+      sheet_suffix:
+        description: 'Sufiks nazwy arkusza (np. "v2" → "Grok2 test v2")'
+        type: string
+        default: ''
 
 jobs:
   grok2-backtest:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repo
@@ -31,6 +44,7 @@ jobs:
           XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          ARGS=""
+          ARGS="--hours ${{ inputs.hours }} --end-offset ${{ inputs.end_offset }}"
           [ "${{ inputs.grok2_only }}" = "true" ] && ARGS="$ARGS --grok2-only"
+          [ -n "${{ inputs.sheet_suffix }}" ] && ARGS="$ARGS --sheet-suffix '${{ inputs.sheet_suffix }}'"
           python grok2_backtest.py $ARGS
