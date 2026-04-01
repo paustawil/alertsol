@@ -27,6 +27,7 @@ import hmac
 import hashlib
 import base64
 import logging
+import threading
 import requests
 import db
 
@@ -423,9 +424,16 @@ def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty
 
 # ── Główna funkcja synchronizacji ─────────────────────────────────────────────
 
+_sync_lock = threading.Lock()
+
 def sync():
     """
-    Główna pętla — wywoływana przez exchange_sync.yml co 5 minut (lub ręcznie).
+    Główna pętla — wywoływana przez scheduler co 15s i sol_alert.main() na końcu.
+
+    Lock gwarantuje, że tylko jeden wątek wykonuje sync() w danym momencie.
+    Bez tego wątek sol_alert (wywołujący sync() z main()) i wątek exchange_sync
+    mogą jednocześnie odczytać stan setupu, a potem jeden nadpisuje zmiany drugiego
+    — co prowadzi do podwójnych zleceń na Bitget.
 
     Stany setupu:
       NOWY            → składa plan order przy W1
@@ -436,6 +444,16 @@ def sync():
                           TP2 executed → anuluj SL
       ANULOWANY       → anuluje plan order jeśli jeszcze nie wykonany
     """
+    if not _sync_lock.acquire(blocking=False):
+        print("[exchange] sync() już działa w innym wątku — pomijam")
+        return
+    try:
+        _sync_inner()
+    finally:
+        _sync_lock.release()
+
+
+def _sync_inner():
     client = _client()
     if client is None:
         return
