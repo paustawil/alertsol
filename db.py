@@ -449,7 +449,9 @@ def get_summary_stats() -> dict:
             cur.execute(
                 """
                 SELECT model,
-                       COUNT(*) FILTER (WHERE resolved = TRUE)              AS total,
+                       COUNT(*)                                              AS all_setups,
+                       COUNT(*) FILTER (WHERE resolved = TRUE
+                           AND result IN ('TP1','TP2','TP1+BE','SL'))        AS entered,
                        ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
                                                                              AS pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE

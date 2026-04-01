@@ -351,9 +351,13 @@ def dashboard():
 
     by_model_rows = ""
     for m in (stats.get("by_model") or []):
-        wr = f"{m['wins']}/{m['total']}" if m.get("total") else "—"
-        pnl_m = f"{float(m['pnl_usd']):+.2f}" if m.get("pnl_usd") else "—"
-        by_model_rows += f"<tr><td>{m['model']}</td><td>{wr}</td><td>{pnl_m}</td></tr>\n"
+        all_s   = m.get("all_setups") or 0
+        entered = m.get("entered") or 0
+        wins    = m.get("wins") or 0
+        entry_pct = f"{entered / all_s * 100:.0f}%" if all_s else "—"
+        win_pct   = f"{wins / entered * 100:.0f}%" if entered else "—"
+        pnl_m     = f"{float(m['pnl_usd']):+.2f}" if m.get("pnl_usd") else "—"
+        by_model_rows += f"<tr><td>{m['model']}</td><td>{entry_pct}</td><td>{win_pct}</td><td>{pnl_m}</td></tr>\n"
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -404,8 +408,8 @@ def dashboard():
 </table>
 
 <h3>Per model</h3>
-<table><tr><th>Model</th><th>W/Total</th><th>PnL $</th></tr>
-{by_model_rows or '<tr><td colspan=3 style="color:#888">Brak danych</td></tr>'}
+<table><tr><th>Model</th><th title="% setupów które weszły na giełdę">% entry</th><th title="% wygranych (TP1+BE+TP2) z uruchomionych">% win</th><th>PnL $</th></tr>
+{by_model_rows or '<tr><td colspan=4 style="color:#888">Brak danych</td></tr>'}
 </table>
 
 <h3>Ostatnie 20 zamkniętych</h3>
