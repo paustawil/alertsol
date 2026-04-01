@@ -432,24 +432,23 @@ Gdy send_alert=false:
 # ── System prompt dla Grok — walidacja oczekujących setupów ──────────────────
 GROK_VALIDATION_PROMPT = """Jesteś doświadczonym traderem kryptowalut weryfikującym aktywne zlecenia oczekujące na SOL/USDT.
 
-Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, reżim rynkowy, lista setupów) są dostarczone w wiadomości użytkownika.
+Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, pozycja ceny w zakresie, lista setupów) są dostarczone w wiadomości użytkownika.
 
 Twoje zadanie:
 1. Oceń aktualną sytuację techniczną H1 i M15 na podstawie dostarczonych danych.
-2. Przeczytaj REŻIM RYNKOWY (CONSOLIDATION / BREAKOUT_UP / BREAKOUT_DOWN).
+2. Sprawdź pozycję ceny w zakresie H1 (dostarczana jako 0-100%).
 3. Dla każdego setupu zdecyduj: keep=true (zachowaj) lub keep=false (anuluj).
 
 Anuluj setup jeśli zachodzi co najmniej jeden z poniższych warunków:
 - Rynek uciekł zbyt daleko i poziom wejścia jest technicznie nieosiągalny w rozsądnym czasie.
 - Trend wyraźnie się odwrócił i setup działa teraz bezpośrednio przeciwko dominującej strukturze.
 - Kluczowy poziom struktury definiujący setup (support/resistance) został złamany i nie jest już ważny.
-- W KONSOLIDACJI: Setup jest long przy pozycji >80% zakresu lub short przy <20% — stracił sens strukturalny.
-- W BREAKOUT: Setup jest PRZECIWKO kierunkowi wybicia (np. long przy BREAKOUT_DOWN lub short przy BREAKOUT_UP) — natychmiast anuluj.
+- Setup jest long, a cena jest powyżej 80% zakresu H1 (blisko resistance) bez potwierdzonego breakoutu — setup stracił sens strukturalny.
+- Setup jest short, a cena jest poniżej 20% zakresu H1 (blisko supportu) bez potwierdzonego breakdownu — setup stracił sens strukturalny.
 
 Zachowaj setup jeśli:
 - Poziom wejścia jest nadal w zasięgu i ma techniczne uzasadnienie.
-- W KONSOLIDACJI: kierunek jest spójny z pozycją w zakresie.
-- W BREAKOUT: kierunek jest zgodny z wybiciem.
+- Pozycja w zakresie jest spójna z kierunkiem setupu (long przy niskiej pozycji, short przy wysokiej).
 
 Zasady:
 - Powód anulowania: konkretny, zwięzły, po polsku (1–2 zdania).
@@ -457,42 +456,31 @@ Zasady:
 - Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Format:
-{"decyzje":[{"setup_id":1,"keep":false,"powod":"BREAKOUT_DOWN aktywny — long przeciwko wybicia, anuluj"},{"setup_id":2,"keep":true}]}"""
+{"decyzje":[{"setup_id":1,"keep":false,"powod":"Cena w 85% zakresu H1, blisko resistance — long bez breakoutu nie ma sensu strukturalnego"},{"setup_id":2,"keep":true}]}"""
 
 
 # ── System prompt dla Grok2 (ulepszona wersja — kontekst strukturalny) ────────
 GROK2_PROMPT = """Jesteś doświadczonym traderem kryptowalut, specjalizującym się w SOL/USDT na interwałach M15 i H1.
 
-Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, reżim rynkowy, pozycja ceny w zakresie) są dostarczone w wiadomości użytkownika.
+Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, pozycja ceny w zakresie) są dostarczone w wiadomości użytkownika.
 
 Twoje zadanie:
 1. Krótko oceń sentyment na podstawie dostarczonych danych: BTC/ETH/SOL, Fear & Greed.
-2. PRZECZYTAJ REŻIM RYNKOWY z user message (CONSOLIDATION / BREAKOUT_UP / BREAKOUT_DOWN) i zastosuj odpowiednią strategię:
-
-=== STRATEGIA: KONSOLIDACJA (CONSOLIDATION) ===
-- Handluj OD granic zakresu: long od supportu, short od resistance.
-- Sprawdź pozycję w zakresie H1 (0% = support, 100% = resistance):
-  - Pozycja > 80%: NIE proponuj longa. Szukaj shorta od oporu lub czekaj.
-  - Pozycja < 20%: NIE proponuj shorta. Szukaj longa od wsparcia lub czekaj.
-  - Pozycja 20-80%: kontynuacja trendu dopuszczalna, ale TP musi respektować najbliższy S/R.
-- TP celuj do przeciwnej granicy zakresu — nie dalej.
-- ZASADA NADRZĘDNA: Momentum M15 NIE nadpisuje struktury H1. Trzy zielone świece M15 pod resistance to potencjalny short, nie long.
-
-=== STRATEGIA: BREAKOUT (BREAKOUT_UP / BREAKOUT_DOWN) ===
-- Handluj W KIERUNKU wybicia. Przy BREAKOUT_DOWN: szukaj SHORT. Przy BREAKOUT_UP: szukaj LONG.
-- NIE łap dna (long przy BREAKOUT_DOWN) ani szczytu (short przy BREAKOUT_UP) — to najbardziej kosztowny błąd.
-- Wejścia — zaproponuj do 2 poziomów:
-  - Agresywny: kontynuacja po krótkim pullbacku (np. retest na M15).
-  - Konserwatywny: retest przebitego poziomu S/R (stary support → nowy resistance lub odwrotnie).
-- TP: breakouty generują impuls — celuj dalej niż w konsolidacji. Szukaj kolejnych stref S/R z wyższych TF.
-- SL: nad/pod przebity poziom (jeśli cena tam wraca, breakout był fałszywy).
-- Volume potwierdza breakout: wysoki volume = silny sygnał. Niski volume przy wybiciu = ostrożnie, może fałszywy.
-
+2. KONTEKST STRUKTURALNY (OBOWIĄZKOWY) — zanim cokolwiek zaproponujesz:
+   - Sprawdź dostarczoną "pozycję w zakresie H1" (0% = support, 100% = resistance).
+   - Jeśli pozycja > 80% (blisko resistance): NIE proponuj nowego longa chyba że widzisz potwierdzony breakout (zamknięcie H1 powyżej resistance + retest). Szukaj raczej shorta od oporu lub czekaj.
+   - Jeśli pozycja < 20% (blisko supportu): NIE proponuj nowego shorta chyba że widzisz potwierdzony breakdown (zamknięcie H1 poniżej supportu + retest). Szukaj raczej longa od wsparcia lub czekaj.
+   - Jeśli pozycja 20-80%: kontynuacja trendu jest dopuszczalna, ale TP musi respektować najbliższy poziom strukturalny.
+   - ZASADA NADRZĘDNA: Momentum krótkoterminowe (M15) NIE może nadpisać struktury H1. Trzy zielone świece M15 pod resistance to nie jest setup na longa — to potencjalny short.
 3. Przeanalizuj strukturę techniczną H1 i M15: kluczowe supporty i resistancey, trend, formacje, RSI, MACD. Bez lania wody.
-4. Volume — interpretuj w kontekście reżimu (patrz punkt 2).
+4. Volume — interpretuj w kontekście struktury:
+   - Rosnący volume przy podejściu do S/R = potwierdzenie siły ruchu
+   - Malejący volume przy podejściu do S/R = ruch słabnie, prawdopodobne odrzucenie
+   - Volume spike na świecy odrzucenia (długi knot) = silny sygnał odwrócenia
+   - Brak volume przy breakoucie = fałszywy breakout, nie wchodź
 5. Podaj bias (long / short / neutral) z prawdopodobieństwem w %.
 6. Jeśli bias nie jest neutral — zaproponuj 1–2 konkretne poziomy wejścia z warunkiem aktywacji.
-7. Podaj TP1 (bezpieczny, bliższy) i TP2 (ambitny, ale realistyczny).
+7. Podaj TP1 (bezpieczny, bliższy) i TP2 (ambitny, ale realistyczny). TP MUSI respektować najbliższy poziom strukturalny — nie celuj przez resistance (long) ani przez support (short).
 8. Podaj ciasny SL i przybliżone R:R (minimum 1:2).
 9. Na końcu: co teraz robisz (np. "Czekam na pullback do X i wchodzę long").
 
@@ -503,8 +491,7 @@ Zasady:
   a) H1 i M15 wskazują ten sam kierunek (tf_aligned=true) — jeśli timeframy są sprzeczne, send_alert=false.
   b) bias_proc >= 65 — jeśli przekonanie jest niższe, oznacza to zawahanie rynku, ustaw send_alert=false.
   c) Widzisz wyraźny, konkretny setup z jasnym entry, SL i TP.
-  d) W KONSOLIDACJI: setup NIE jest kontynuacją M15 prosto w resistance (long) lub support (short).
-  e) W BREAKOUT: bias MUSI być zgodny z kierunkiem wybicia. BREAKOUT_DOWN → tylko short. BREAKOUT_UP → tylko long.
+  d) Setup NIE jest kontynuacją M15 prosto w resistance (long) lub support (short) na H1.
 - Przy bocznym rynku, choppingu, sprzecznych sygnałach H1/M15 lub niskim przekonaniu — send_alert=false.
 - tf_aligned: Oceń czy H1 i M15 pokazują ten sam kierunek. true = zgodne, false = sprzeczne lub jeden neutralny.
 - sl_after_tp1: Po osiągnięciu TP1 SL należy przesunąć. Znajdź ostatni strukturalny support (long) lub resistance (short) między W1 a TP1. Jeśli taki poziom istnieje i jest w strefie zysku (powyżej W1 dla long, poniżej W1 dla short) — użyj go jako sl_after_tp1. Jeśli nie — użyj W1 (break-even). Zawsze podaj tę wartość gdy send_alert=true.
@@ -512,7 +499,7 @@ Zasady:
 Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Gdy send_alert=true:
-{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem reżimu","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem pozycji w zakresie","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
 
 Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
@@ -1529,45 +1516,26 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
     # Sentyment z Bitget + F&G
     sentiment_line = _fetch_sentiment_line()
 
-    # Reżim rynkowy + zakres
-    regime = detect_market_regime(candles_m15, candles_h1, current_price)
-    rng_size = regime["range_size"]
-    support = regime["support"]
-    resistance = regime["resistance"]
-
+    # Pozycja w zakresie H1
+    rng = detect_range(candles_h1)
+    rng_size = rng["range_size"]
     if rng_size > 0:
-        range_pos = max(0.0, min(100.0, (current_price - support) / rng_size * 100))
+        range_pos = max(0.0, min(100.0, (current_price - rng["support"]) / rng_size * 100))
     else:
         range_pos = 50.0
-
-    # Buduj blok reżimu
-    if regime["regime"] == "CONSOLIDATION":
-        if range_pos > 80:
-            range_label = "blisko resistance"
-        elif range_pos < 20:
-            range_label = "blisko supportu"
-        else:
-            range_label = "środek zakresu"
-        regime_block = (
-            f"REŻIM RYNKOWY: KONSOLIDACJA (CONSOLIDATION)\n"
-            f"Zakres H1: support ${support:.2f} — resistance ${resistance:.2f} (range ${rng_size:.2f})\n"
-            f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n"
-            f"Brak sygnałów wybicia — handluj w zakresie."
-        )
+    if range_pos > 80:
+        range_label = "blisko resistance"
+    elif range_pos < 20:
+        range_label = "blisko supportu"
     else:
-        direction_label = "W DÓŁ (poniżej supportu)" if regime["regime"] == "BREAKOUT_DOWN" else "W GÓRĘ (powyżej resistance)"
-        regime_block = (
-            f"REŻIM RYNKOWY: BREAKOUT {direction_label}\n"
-            f"Przebity zakres H1: support ${support:.2f} — resistance ${resistance:.2f}\n"
-            f"Sygnały: {regime['details']}\n"
-            f"Volume: {regime['vol_ratio']}x średniej\n"
-            f"ZASADA: Handluj w kierunku wybicia. NIE otwieraj pozycji przeciwko breakoutowi."
-        )
+        range_label = "środek zakresu"
 
     user_msg = (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
-        f"{regime_block}\n\n"
+        f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
+        f"(range ${rng_size:.2f})\n"
+        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
@@ -2243,42 +2211,27 @@ def call_grok_validation(pending_non_entered: list[dict], candles_m15: list[dict
         "alert_time": s["alert_time"],
     } for s in pending_non_entered], ensure_ascii=False)
 
-    # Sentyment i reżim rynkowy — identycznie jak w call_grok()
+    # Sentyment i pozycja w zakresie — identycznie jak w call_grok()
     sentiment_line = _fetch_sentiment_line()
-    regime = detect_market_regime(candles_m15, candles_h1, current_price)
-    support = regime["support"]
-    resistance = regime["resistance"]
-    rng_size = regime["range_size"]
-
-    if regime["regime"] == "CONSOLIDATION":
-        if rng_size > 0:
-            range_pos = max(0.0, min(100.0, (current_price - support) / rng_size * 100))
-        else:
-            range_pos = 50.0
-        if range_pos > 80:
-            range_label = "blisko resistance"
-        elif range_pos < 20:
-            range_label = "blisko supportu"
-        else:
-            range_label = "środek zakresu"
-        regime_block = (
-            f"REŻIM RYNKOWY: KONSOLIDACJA (CONSOLIDATION)\n"
-            f"Zakres H1: support ${support:.2f} — resistance ${resistance:.2f} (range ${rng_size:.2f})\n"
-            f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})"
-        )
+    rng = detect_range(candles_h1)
+    rng_size = rng["range_size"]
+    if rng_size > 0:
+        range_pos = max(0.0, min(100.0, (current_price - rng["support"]) / rng_size * 100))
     else:
-        direction_label = "W DÓŁ (poniżej supportu)" if regime["regime"] == "BREAKOUT_DOWN" else "W GÓRĘ (powyżej resistance)"
-        regime_block = (
-            f"REŻIM RYNKOWY: BREAKOUT {direction_label}\n"
-            f"Przebity zakres H1: support ${support:.2f} — resistance ${resistance:.2f}\n"
-            f"Sygnały: {regime['details']}\n"
-            f"ZASADA: Anuluj setupy PRZECIWKO kierunkowi wybicia."
-        )
+        range_pos = 50.0
+    if range_pos > 80:
+        range_label = "blisko resistance"
+    elif range_pos < 20:
+        range_label = "blisko supportu"
+    else:
+        range_label = "środek zakresu"
 
     user_msg = (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
-        f"{regime_block}\n\n"
+        f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
+        f"(range ${rng_size:.2f})\n"
+        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
         f"Setupy oczekujące na wejście:\n{setups_txt}\n\n"
         f"SOL M15 (ostatnie 60 świec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 świece):\n{h1_csv}"
@@ -2537,15 +2490,6 @@ def breakout_scan():
         bias_proc = grok_result.get("bias_proc", 0)
         print(f"[breakout-scan] Grok: {bias} ({bias_proc}%) send_alert={send_alert}")
 
-        # Filtr reżimowy: TWARDY BLOK
-        if send_alert and bias != "neutral":
-            if regime["regime"] == "BREAKOUT_DOWN" and bias == "long":
-                print(f"[breakout-scan] ODRZUCONO: LONG podczas BREAKOUT_DOWN")
-                send_alert = False
-            elif regime["regime"] == "BREAKOUT_UP" and bias == "short":
-                print(f"[breakout-scan] ODRZUCONO: SHORT podczas BREAKOUT_UP")
-                send_alert = False
-
         if send_alert and bias_proc >= MIN_GROK_BIAS_PROC and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])
             entries = [w["poziom"] for w in wejscia if "poziom" in w]
@@ -2723,15 +2667,6 @@ def main():
         if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
             print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnał.")
             send_alert = False
-
-        # Filtr reżimowy: TWARDY BLOK na setupy przeciwko breakoutowi
-        if send_alert and bias != "neutral":
-            if regime["regime"] == "BREAKOUT_DOWN" and bias == "long":
-                print(f"[grok] ODRZUCONO: LONG podczas BREAKOUT_DOWN — blokada reżimowa.")
-                send_alert = False
-            elif regime["regime"] == "BREAKOUT_UP" and bias == "short":
-                print(f"[grok] ODRZUCONO: SHORT podczas BREAKOUT_UP — blokada reżimowa.")
-                send_alert = False
 
         if send_alert and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])
