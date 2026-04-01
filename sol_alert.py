@@ -2507,6 +2507,15 @@ def breakout_scan():
         bias_proc = grok_result.get("bias_proc", 0)
         print(f"[breakout-scan] Grok: {bias} ({bias_proc}%) send_alert={send_alert}")
 
+        # Filtr reżimowy: TWARDY BLOK
+        if send_alert and bias != "neutral":
+            if regime["regime"] == "BREAKOUT_DOWN" and bias == "long":
+                print(f"[breakout-scan] ODRZUCONO: LONG podczas BREAKOUT_DOWN")
+                send_alert = False
+            elif regime["regime"] == "BREAKOUT_UP" and bias == "short":
+                print(f"[breakout-scan] ODRZUCONO: SHORT podczas BREAKOUT_UP")
+                send_alert = False
+
         if send_alert and bias_proc >= MIN_GROK_BIAS_PROC and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])
             entries = [w["poziom"] for w in wejscia if "poziom" in w]
@@ -2684,6 +2693,15 @@ def main():
         if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
             print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnał.")
             send_alert = False
+
+        # Filtr reżimowy: TWARDY BLOK na setupy przeciwko breakoutowi
+        if send_alert and bias != "neutral":
+            if regime["regime"] == "BREAKOUT_DOWN" and bias == "long":
+                print(f"[grok] ODRZUCONO: LONG podczas BREAKOUT_DOWN — blokada reżimowa.")
+                send_alert = False
+            elif regime["regime"] == "BREAKOUT_UP" and bias == "short":
+                print(f"[grok] ODRZUCONO: SHORT podczas BREAKOUT_UP — blokada reżimowa.")
+                send_alert = False
 
         if send_alert and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])

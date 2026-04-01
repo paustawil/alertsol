@@ -744,9 +744,20 @@ def run_backtest() -> None:
 
             # ── Grok2 (nowy) ─────────────────────────────────────────────────
             sentiment_line = build_sentiment_line_historical(btc_h1, eth_h1, fg_history, signal_ts)
+            regime = detect_market_regime(ctx_m15, ctx_h1, current_price)
             user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info)
             grok2_result = call_grok_raw(GROK2_PROMPT, user_msg_v2, use_web_search=False, label="grok2")
             time.sleep(1)
+
+            # Twardy filtr reżimowy — odrzuć setupy przeciwko breakoutowi
+            if grok2_result and grok2_result.get("send_alert"):
+                bias = grok2_result.get("bias", "neutral")
+                if regime["regime"] == "BREAKOUT_DOWN" and bias == "long":
+                    print(f"  [grok2] BLOKADA: LONG podczas BREAKOUT_DOWN → send_alert=false")
+                    grok2_result["send_alert"] = False
+                elif regime["regime"] == "BREAKOUT_UP" and bias == "short":
+                    print(f"  [grok2] BLOKADA: SHORT podczas BREAKOUT_UP → send_alert=false")
+                    grok2_result["send_alert"] = False
 
             outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2)
             if outcome2:
