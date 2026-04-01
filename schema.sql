@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS setups (
     exchange_tp1_done         BOOLEAN NOT NULL DEFAULT FALSE,
     exchange_done             BOOLEAN NOT NULL DEFAULT FALSE,
 
+    -- Hipotetyczne wyniki (dla setupów które nie weszły)
+    hypo_result       TEXT,
+    hypo_pnl_usd      NUMERIC(10,4),
+
     -- Zamknięcie
     resolved          BOOLEAN NOT NULL DEFAULT FALSE,
     resolved_at       TIMESTAMPTZ,
@@ -112,3 +116,7 @@ ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_tp1_done      BOOLEAN NOT N
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_done          BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS resolved_at            TIMESTAMPTZ;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS sheets_exported        BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Hipotetyczne wyniki dla setupów które nie weszły (np. brak slotu na Bitget)
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS hypo_result            TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS hypo_pnl_usd           NUMERIC(10,4);
