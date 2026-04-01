@@ -524,22 +524,8 @@ def get_period_stats(period: str) -> dict:
             # Entry rate
             entry_rate = round(entered / total_setups * 100, 1) if total_setups > 0 else 0
 
-            # Win rate: TP1 count / (TP1 + SL)
-            # Per user request: "TP1 / (TP1 + SL)" — only TP1 hits count as wins here
-            cur.execute(
-                f"""
-                SELECT
-                    COUNT(*) FILTER (WHERE result = 'TP1')  AS tp1_count,
-                    COUNT(*) FILTER (WHERE result = 'SL')   AS sl_count
-                FROM setups
-                WHERE {time_filter} AND result IN ('TP1','SL')
-                """,
-                time_params,
-            )
-            wr = dict(cur.fetchone())
-            tp1_count = wr["tp1_count"] or 0
-            sl_count = wr["sl_count"] or 0
-            win_rate = round(tp1_count / (tp1_count + sl_count) * 100, 1) if (tp1_count + sl_count) > 0 else 0
+            # Win rate: all wins (TP1+TP2+TP1+BE) / all entered (wins + SL)
+            win_rate = round(wins / entered * 100, 1) if entered > 0 else 0
 
             # Max simultaneous open positions — count overlapping setups
             # Use entry_hit_at (Unix ts) and exit_time to determine overlap
@@ -595,8 +581,8 @@ def get_period_stats(period: str) -> dict:
         "entered": entered,
         "entry_rate": entry_rate,
         "win_rate": win_rate,
-        "tp1_count": tp1_count,
-        "sl_count": sl_count,
+        "wins": wins,
+        "losses": losses,
         "total_income": total_income,
         "avg_daily_pnl": avg_daily_pnl,
         "avg_daily_mult": avg_daily_mult,
