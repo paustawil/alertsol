@@ -8,6 +8,7 @@ Wymaga zmiennej środowiskowej DATABASE_URL (Railway dostarcza automatycznie).
 import json
 import logging
 import os
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -22,7 +23,9 @@ log = logging.getLogger(__name__)
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 # Snapshot dla change-detection w save_pending_list()
-_baseline: dict[int, dict] = {}
+# Thread-local: każdy wątek (exchange_sync / sol_alert) ma własny baseline,
+# żeby równoczesne wywołania sync() nie nadpisywały sobie nawzajem snapshotu.
+_thread_local = threading.local()
 
 # Pola exchange_* monitorowane przez exchange_trader.py
 _EXCHANGE_FIELDS = [
@@ -141,9 +144,12 @@ def insert_setup(row: dict) -> int | None:
 
     with _conn() as conn:
         with conn.cursor() as cur:
-            # Atomiczny INSERT z dedup na poziomie DB — chroni przed race condition
-            # gdy Railway i GitHub Actions wywołują main() jednocześnie.
-            # Blokuje duplikaty: ten sam kierunek + poziom wejścia ±0.5 USD wśród aktywnych setupów.
+            # Advisory lock serializuje równoczesne INSERTy dla tego samego kierunku.
+            # Bez tego READ COMMITTED pozwala dwóm transakcjom (Railway + GitHub Actions)
+            # przejść WHERE NOT EXISTS jednocześnie i wstawić duplikat.
+            lock_key = f"insert_setup_{params.get('direction', '')}"
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+
             cur.execute(
                 """
                 INSERT INTO setups (
@@ -337,10 +343,10 @@ def load_pending() -> list[dict]:
     """
     Zwraca aktywne setupy i zapamiętuje snapshot do change-detection.
     Odpowiednik _load_pending() z exchange_trader.py.
+    Baseline jest thread-local — bezpieczny przy równoczesnych sync().
     """
-    global _baseline
     rows = get_active_setups()
-    _baseline = {r["setup_id"]: {f: r.get(f) for f in _EXCHANGE_FIELDS} for r in rows}
+    _thread_local.baseline = {r["setup_id"]: {f: r.get(f) for f in _EXCHANGE_FIELDS} for r in rows}
     return rows
 
 
@@ -349,11 +355,12 @@ def save_pending_list(pending: list[dict]) -> None:
     Zapisuje tylko te pola exchange_*, które zmieniły się względem snapshotu.
     Odpowiednik _save_pending() z exchange_trader.py.
     """
+    baseline_map = getattr(_thread_local, "baseline", {})
     for s in pending:
         sid = s.get("setup_id")
         if sid is None:
             continue
-        baseline = _baseline.get(sid, {})
+        baseline = baseline_map.get(sid, {})
         changed = {
             f: s[f]
             for f in _EXCHANGE_FIELDS
@@ -449,7 +456,9 @@ def get_summary_stats() -> dict:
             cur.execute(
                 """
                 SELECT model,
-                       COUNT(*) FILTER (WHERE resolved = TRUE)              AS total,
+                       COUNT(*)                                              AS all_setups,
+                       COUNT(*) FILTER (WHERE resolved = TRUE
+                           AND result IN ('TP1','TP2','TP1+BE','SL'))        AS entered,
                        ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
                                                                              AS pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE
@@ -462,6 +471,132 @@ def get_summary_stats() -> dict:
             row["by_model"] = [dict(r) for r in cur.fetchall()]
 
     return row
+
+
+def get_period_stats(period: str) -> dict:
+    """Zwraca statystyki za podany okres: 1d, 24h, 7d, 30d.
+    - max_capital: maksymalna jednoczesna liczba otwartych pozycji * trade_usdt
+    - avg_daily_pnl: średni dzienny PnL
+    - total_income: łączny dochód
+    - entry_rate: uruchomione / złożone zlecenia
+    - win_rate: TP1 / (TP1 + SL)
+    """
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+
+    # Determine time window
+    if period == "24h":
+        interval = "24 hours"
+    elif period == "7d":
+        interval = "7 days"
+    elif period == "30d":
+        interval = "30 days"
+    else:  # 1d — calendar day
+        interval = None  # special handling
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if interval:
+                time_filter = "alert_time >= NOW() - %(interval)s::interval"
+                time_params: dict = {"interval": interval}
+            else:
+                time_filter = "alert_time::date = CURRENT_DATE"
+                time_params = {}
+
+            # Total setups in period
+            cur.execute(
+                f"SELECT COUNT(*) AS total FROM setups WHERE {time_filter}",
+                time_params,
+            )
+            total_setups = cur.fetchone()["total"] or 0
+
+            # Entered = resolved with trading result (TP1/TP2/TP1+BE/SL)
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','SL')) AS entered,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE'))       AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                          AS losses,
+                    COALESCE(ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2), 0) AS total_income
+                FROM setups
+                WHERE {time_filter}
+                """,
+                time_params,
+            )
+            row = dict(cur.fetchone())
+            entered = row["entered"] or 0
+            wins = row["wins"] or 0
+            losses = row["losses"] or 0
+            total_income = float(row["total_income"])
+
+            # Entry rate
+            entry_rate = round(entered / total_setups * 100, 1) if total_setups > 0 else 0
+
+            # Win rate: all wins (TP1+TP2+TP1+BE) / all entered (wins + SL)
+            win_rate = round(wins / entered * 100, 1) if entered > 0 else 0
+
+            # Max simultaneous open positions — count overlapping setups
+            # Use entry_hit_at (Unix ts) and exit_time to determine overlap
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS max_open
+                FROM (
+                    SELECT alert_time,
+                           generate_series(
+                               date_trunc('hour', COALESCE(
+                                   to_timestamp(entry_hit_at) AT TIME ZONE 'UTC',
+                                   alert_time
+                               )),
+                               date_trunc('hour', COALESCE(exit_time, NOW())),
+                               interval '1 hour'
+                           ) AS h
+                    FROM setups
+                    WHERE {time_filter}
+                      AND (entry_hit_at IS NOT NULL OR exchange_position_opened = TRUE)
+                ) sub
+                GROUP BY h
+                ORDER BY max_open DESC
+                LIMIT 1
+                """,
+                time_params,
+            )
+            max_row = cur.fetchone()
+            max_open = max_row["max_open"] if max_row else 0
+            max_capital = round(max_open * trade_usdt, 2)
+            max_capital_mult = round(max_open * 1.0, 1)  # multiplier of trade_usdt
+
+            # Average daily PnL
+            cur.execute(
+                f"""
+                SELECT
+                    COALESCE(ROUND(SUM(pnl_usd)::numeric, 2), 0) AS sum_pnl,
+                    COUNT(DISTINCT resolved_at::date) AS days
+                FROM setups
+                WHERE {time_filter} AND resolved = TRUE AND pnl_usd IS NOT NULL
+                """,
+                time_params,
+            )
+            avg_row = dict(cur.fetchone())
+            sum_pnl = float(avg_row["sum_pnl"])
+            days = avg_row["days"] or 1
+            avg_daily_pnl = round(sum_pnl / days, 2)
+            avg_daily_mult = round(avg_daily_pnl / trade_usdt, 3) if trade_usdt else 0
+
+    return {
+        "period": period,
+        "trade_usdt": trade_usdt,
+        "total_setups": total_setups,
+        "entered": entered,
+        "entry_rate": entry_rate,
+        "win_rate": win_rate,
+        "wins": wins,
+        "losses": losses,
+        "total_income": total_income,
+        "avg_daily_pnl": avg_daily_pnl,
+        "avg_daily_mult": avg_daily_mult,
+        "max_capital": max_capital,
+        "max_capital_mult": max_capital_mult,
+        "max_open_positions": max_open,
+    }
 
 
 def get_recent_resolved(limit: int = 20) -> list[dict]:
@@ -482,3 +617,68 @@ def get_recent_resolved(limit: int = 20) -> list[dict]:
                 (limit,),
             )
             return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def get_resolved_filtered(
+    results: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Zwraca zamknięte setupy z filtrami + total count."""
+    where = ["resolved = TRUE"]
+    params: dict = {}
+
+    if results:
+        where.append("result = ANY(%(results)s)")
+        params["results"] = results
+
+    if date_from:
+        where.append("resolved_at >= %(date_from)s::date")
+        params["date_from"] = date_from
+
+    if date_to:
+        where.append("resolved_at < (%(date_to)s::date + interval '1 day')")
+        params["date_to"] = date_to
+
+    where_sql = " AND ".join(where)
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT COUNT(*) AS cnt FROM setups WHERE {where_sql}", params)
+            total = cur.fetchone()["cnt"]
+
+            cur.execute(
+                f"""
+                SELECT setup_id, alert_time, model, direction, score,
+                       result, avg_entry, avg_exit, pnl_usd, pnl_pct,
+                       exit_time, entries, tps, sl, sl_after_tp1,
+                       exchange_qty_full, exchange_qty_half,
+                       hypo_result, hypo_pnl_usd
+                FROM setups
+                WHERE {where_sql}
+                ORDER BY resolved_at DESC
+                LIMIT %(limit)s OFFSET %(offset)s
+                """,
+                {**params, "limit": limit, "offset": offset},
+            )
+            rows = [_row_to_dict(r) for r in cur.fetchall()]
+
+    return {"total": total, "rows": rows}
+
+
+def save_hypo_result(setup_id: int, hypo_result: str, hypo_pnl_usd: float | None) -> None:
+    """Zapisuje hipotetyczny wynik dla setupu który nie weszął."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE setups
+                SET hypo_result  = %(hypo_result)s,
+                    hypo_pnl_usd = %(hypo_pnl_usd)s
+                WHERE setup_id = %(setup_id)s
+                """,
+                {"setup_id": setup_id, "hypo_result": hypo_result,
+                 "hypo_pnl_usd": hypo_pnl_usd},
+            )

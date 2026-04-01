@@ -4,6 +4,7 @@ SOL Alert Bot v2
 Algorytm vs Claude Sonnet — porównanie dwóch podejść do detekcji setupów SOL/USDT
 """
 
+import math
 import os
 import json
 import re
@@ -1886,6 +1887,102 @@ def _hits(candle: dict, price: float, direction: str, side: str, entry_trigger: 
     return False
 
 
+def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
+    """Oblicza hipotetyczny wynik dla setupu 'nie weszlo' i zapisuje do DB.
+
+    Symuluje trade na świecach M15: szuka wejścia (W1), potem monitoruje
+    TP1/TP2/SL — tak samo jak backtest.simulate_result, ale bez importu backtest.py.
+    """
+    sid = setup.get("setup_id")
+    if not sid:
+        return
+    try:
+        entries      = setup.get("entries") or []
+        sl           = setup.get("sl")
+        sl_after_tp1 = setup.get("sl_after_tp1")
+        tps          = setup.get("tps") or []
+        tp1          = tps[0] if tps else None
+        tp2          = tps[1] if len(tps) > 1 else None
+        d            = setup.get("direction", "long")
+        w1           = entries[0] if entries else None
+
+        if not entries or sl is None or w1 is None:
+            return
+
+        after_alert = [c for c in candles_m15 if c["time"] > setup["alert_timestamp"]]
+        if not after_alert:
+            return
+
+        # Szukamy wejścia (max 16 świec = 4h)
+        entry_ts = None
+        for c in after_alert[:16]:
+            if _hits(c, w1, d, "entry"):
+                entry_ts = c["time"]
+                break
+        if entry_ts is None:
+            return  # nie weszło nawet hipotetycznie
+
+        # Monitorujemy po wejściu (max 96 świec = 24h)
+        after_entry  = [c for c in after_alert if c["time"] > entry_ts]
+        result       = None
+        tp1_hit_at   = None
+        sl_adjusted  = False
+        effective_sl = sl
+
+        for c in after_entry[:96]:
+            sl_hit  = _hits(c, effective_sl, d, "sl")
+            tp2_hit = tp2 is not None and _hits(c, tp2, d, "tp")
+            tp1_now = tp1 is not None and _hits(c, tp1, d, "tp")
+
+            if tp2_hit:
+                result = "TP2"
+                break
+            if tp1_now and sl_hit and tp1_hit_at is None:
+                result = "SL"
+                break
+            if tp1_now and tp1_hit_at is None:
+                tp1_hit_at = c["time"]
+                if sl_after_tp1 is not None and not sl_adjusted:
+                    effective_sl = sl_after_tp1
+                    sl_adjusted  = True
+                continue
+            if sl_hit:
+                if tp1_hit_at is not None:
+                    result = "TP1+BE" if sl_adjusted and sl_after_tp1 is not None and abs(effective_sl - w1) < 0.05 else "TP1+SL"
+                else:
+                    result = "SL"
+                break
+
+        if result is None:
+            return  # timeout — brak danych
+
+        # Oblicz avg exit
+        if result == "SL":
+            eff_exit = sl
+        elif result == "TP2":
+            eff_exit = (tp1 + tp2) / 2 if tp1 else tp2
+        else:  # TP1+BE, TP1+SL
+            eff_exit = (tp1 + effective_sl) / 2 if tp1 else effective_sl
+
+        eff_entry = w1
+
+        # PnL w USD
+        trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+        full_qty   = max(math.floor((trade_usdt * 20 / eff_entry) / 0.1) * 0.1, 0.1)
+        half_qty   = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+        sign       = 1 if d == "long" else -1
+
+        if result == "SL":
+            hypo_pnl = round(sign * full_qty * (eff_exit - eff_entry), 2)
+        else:  # TP2, TP1+BE, TP1+SL — obie połówki
+            hypo_pnl = round(sign * (half_qty + half_qty) * (eff_exit - eff_entry), 2)
+
+        db.save_hypo_result(sid, result, hypo_pnl)
+        print(f"[pending] #{sid} hypo: {result} PnL={hypo_pnl}")
+    except Exception as e:
+        print(f"[pending] #{sid} hypo calc error: {e}")
+
+
 def check_pending(candles_m15: list[dict]):
     pending = db.get_active_setups()
     if not pending: return
@@ -1910,6 +2007,7 @@ def check_pending(candles_m15: list[dict]):
                     if age_h > ENTRY_TIMEOUT_H:
                         print(f"[pending] #{s.get('setup_id')} Bitget nie weszlo (timeout {ENTRY_TIMEOUT_H}h)")
                         db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
+                        _calc_hypo_result(s, candles_m15)
                         # exchange_trader anuluje plan order przy następnym sync przez get_resolved_with_open_orders()
                     else:
                         still_pending.append(s)
@@ -1934,6 +2032,7 @@ def check_pending(candles_m15: list[dict]):
                     if age_h > ENTRY_TIMEOUT_H:
                         print(f"[pending] {s['model']} {d}: nie weszlo")
                         db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
+                        _calc_hypo_result(s, candles_m15)
                         if not s.get("shadow"):
                             try:
                                 sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""

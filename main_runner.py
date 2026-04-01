@@ -10,8 +10,6 @@ Uruchamia 3 zadania w tle:
 + FastAPI web dashboard dostępny pod URL przydzielonym przez Railway.
 """
 
-import html as _html
-import json as _json
 import logging
 import math
 import os
@@ -167,7 +165,6 @@ def dashboard():
     try:
         active = db.get_active_setups()
         stats  = db.get_summary_stats()
-        recent = db.get_recent_resolved(20)
     except Exception as e:
         return HTMLResponse(f"<pre>Błąd DB: {e}</pre>", status_code=500)
 
@@ -235,144 +232,15 @@ def dashboard():
 
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
 
-    RESULT_LABELS = {
-        "TP1": "TP1", "TP2": "TP2", "TP1+BE": "TP1+BE", "SL": "SL",
-        "nieokreslone": "Nieokreślone", "nie weszlo": "Nie weszło", "anulowany": "Anulowane",
-    }
-    RESULT_OPTS = [
-        ("TP1","TP1"), ("TP2","TP2"), ("TP1+BE","TP1+BE"), ("SL","SL"),
-        ("nieokreslone","Nieokreślone"), ("nie weszlo","Nie weszło"), ("anulowany","Anulowane"),
-    ]
-
-    history_rows = ""
-    for s in recent:
-        sid        = s["setup_id"]
-        result_val = s.get("result") or ""
-        pnl_val    = float(s["pnl_usd"]) if s.get("pnl_usd") is not None else None
-        pnl_str    = f"{pnl_val:+.2f}" if pnl_val is not None else "—"
-        pnl_color  = "lightgreen" if pnl_val and pnl_val > 0 else ("gray" if pnl_val is None else "salmon")
-        avg_entry  = float(s["avg_entry"]) if s.get("avg_entry") else None
-        avg_exit_v = float(s["avg_exit"])  if s.get("avg_exit")  else None
-        tps        = s.get("tps") or []
-        entries_list = s.get("entries") or []
-        w1           = float(entries_list[0]) if entries_list else None
-
-        TRADING_RESULTS = {"TP1", "TP2", "TP1+BE", "SL"}
-        # Wejście: pokaż W1 tylko dla rzeczywistych transakcji
-        if avg_entry:
-            avg_entry_str = f"{avg_entry:.2f}"
-        elif result_val in TRADING_RESULTS and w1:
-            avg_entry_str = f"{w1:.2f}"
-        else:
-            avg_entry_str = "—"
-        avg_exit_str      = f"{avg_exit_v:.2f}" if avg_exit_v is not None else "—"
-        avg_exit_inp_val  = f"{avg_exit_v:.2f}" if avg_exit_v is not None else ""
-
-        # Qty — z bazy lub oszacowane
-        try:
-            full_qty = float(s["exchange_qty_full"]) if s.get("exchange_qty_full") else None
-            half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
-        except (ValueError, TypeError):
-            full_qty = half_qty = None
-        entry_for_calc = avg_entry or (w1 if result_val in TRADING_RESULTS else None)
-        if not full_qty and entry_for_calc:
-            full_qty = max(math.floor((trade_usdt * 20 / entry_for_calc) / 0.1) * 0.1, 0.1)
-        if not half_qty and full_qty:
-            half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
-
-        # PnL$ — z bazy lub obliczony on-the-fly gdy pnl_usd=NULL
-        if pnl_val is None and result_val in TRADING_RESULTS and avg_exit_v and entry_for_calc and full_qty:
-            _sign = 1 if s.get("direction") == "long" else -1
-            _hq   = half_qty or max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
-            if result_val == "SL":
-                pnl_val = round(_sign * full_qty * (avg_exit_v - entry_for_calc), 2)
-            elif result_val == "TP1":
-                pnl_val = round(_sign * _hq * (avg_exit_v - entry_for_calc), 2)
-            elif result_val in ("TP2", "TP1+BE"):
-                pnl_val = round(_sign * (_hq + _hq) * (avg_exit_v - entry_for_calc), 2)
-        pnl_str   = f"{pnl_val:+.2f}" if pnl_val is not None else "—"
-        pnl_color = "lightgreen" if pnl_val and pnl_val > 0 else ("gray" if pnl_val is None else "salmon")
-
-        # PnL %
-        pnl_pct = float(s["pnl_pct"]) if s.get("pnl_pct") is not None else None
-        if pnl_pct is None and pnl_val is not None and trade_usdt:
-            pnl_pct = round(pnl_val / trade_usdt * 100, 2)
-        pnl_pct_str   = f"{pnl_pct:+.1f}%" if pnl_pct is not None else "—"
-        pnl_pct_color = "lightgreen" if pnl_pct and pnl_pct > 0 else ("gray" if pnl_pct is None else "salmon")
-
-        # Alternatywny scenariusz: całość zamknięta na TP1 (TP2 i TP1+BE)
-        alt_pnl = None
-        delta   = None
-        tp1_price = float(tps[0]) if tps else None
-        if result_val in ("TP2", "TP1+BE") and tp1_price and entry_for_calc and full_qty:
-            sign    = 1 if s.get("direction") == "long" else -1
-            alt_pnl = round(sign * full_qty * (tp1_price - entry_for_calc), 2)
-            if pnl_val is not None:
-                delta = round(pnl_val - alt_pnl, 2)
-        alt_pnl_str   = f"{alt_pnl:+.2f}" if alt_pnl is not None else "—"
-        delta_str     = f"{delta:+.2f}"   if delta   is not None else "—"
-        alt_color     = "lightgreen" if alt_pnl and alt_pnl > 0 else ("gray" if alt_pnl is None else "salmon")
-        delta_color   = "lightgreen" if delta   and delta   > 0 else ("gray" if delta   is None else "salmon")
-
-        result_label = RESULT_LABELS.get(result_val, result_val or "—")
-
-        # Dane setupu zakodowane w atrybucie data-setup (dla JS)
-        # avg_entry: używa W1 jako fallback żeby JS mógł liczyć PnL w trybie edycji
-        setup_data = {
-            "avg_entry":    avg_entry or w1,
-            "w1":           w1,
-            "tp1":          tp1_price,
-            "tp2":          float(tps[1]) if len(tps) > 1 else None,
-            "sl":           float(s["sl"]) if s.get("sl") else None,
-            "sl_after_tp1": float(s["sl_after_tp1"]) if s.get("sl_after_tp1") else None,
-            "direction":    s.get("direction", "long"),
-            "full_qty":     full_qty,
-            "half_qty":     half_qty,
-            "trade_usdt":   trade_usdt,
-        }
-        setup_json = _html.escape(_json.dumps(setup_data))
-
-        # Dropdown wynik
-        options = ""
-        for opt, label in RESULT_OPTS:
-            sel = " selected" if opt == result_val else ""
-            options += f'<option value="{opt}"{sel}>{label}</option>'
-
-        avg_entry_inp = avg_entry if avg_entry else (w1 if result_val in TRADING_RESULTS and w1 else "")
-        history_rows += (
-            f'<tr data-setup-id="{sid}" data-setup="{setup_json}">'
-            f'<td>#{sid}</td>'
-            f'<td>{s["model"]}</td>'
-            f'<td>{s["direction"].upper()}</td>'
-            f'<td>'
-            f'<span class="vmode avg-entry-display">{avg_entry_str}</span>'
-            f'<input class="emode avg-entry-input" type="number" step="0.01" value="{avg_entry_inp}" oninput="onEntryChange(this)">'
-            f'</td>'
-            f'<td>'
-            f'<span class="vmode result-display">{result_label}</span>'
-            f'<select class="emode result-select" onchange="onResultChange(this)">{options}</select>'
-            f'</td>'
-            f'<td>'
-            f'<span class="vmode exit-display">{avg_exit_str}</span>'
-            f'<input class="emode avg-exit-input" type="number" step="0.01" value="{avg_exit_inp_val}" oninput="onExitChange(this)">'
-            f'</td>'
-            f'<td class="pnl-cell" style="color:{pnl_color}">{pnl_str}</td>'
-            f'<td class="pnl-pct-cell" style="color:{pnl_pct_color}">{pnl_pct_str}</td>'
-            f'<td class="alt-pnl-cell" style="color:{alt_color}">{alt_pnl_str}</td>'
-            f'<td class="delta-cell" style="color:{delta_color}">{delta_str}</td>'
-            f'<td style="white-space:nowrap">'
-            f'<button class="btn-edit vmode" onclick="editRow(this)">Edytuj</button>'
-            f'<button class="btn-action emode" onclick="saveResult(this)">Zapisz</button>'
-            f'<button class="btn-action emode" onclick="cancelEdit(this)">Anuluj</button>'
-            f'</td>'
-            f'</tr>\n'
-        )
-
     by_model_rows = ""
     for m in (stats.get("by_model") or []):
-        wr = f"{m['wins']}/{m['total']}" if m.get("total") else "—"
-        pnl_m = f"{float(m['pnl_usd']):+.2f}" if m.get("pnl_usd") else "—"
-        by_model_rows += f"<tr><td>{m['model']}</td><td>{wr}</td><td>{pnl_m}</td></tr>\n"
+        all_s   = m.get("all_setups") or 0
+        entered = m.get("entered") or 0
+        wins    = m.get("wins") or 0
+        entry_pct = f"{entered / all_s * 100:.0f}%" if all_s else "—"
+        win_pct   = f"{wins / entered * 100:.0f}%" if entered else "—"
+        pnl_m     = f"{float(m['pnl_usd']):+.2f}" if m.get("pnl_usd") else "—"
+        by_model_rows += f"<tr><td>{m['model']}</td><td>{entry_pct}</td><td>{win_pct}</td><td>{pnl_m}</td></tr>\n"
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -400,12 +268,89 @@ def dashboard():
   .av-edit {{ display: none; }}
   tr.editing-tp .av-edit {{ display: inline; }}
   tr.editing-tp .av-view {{ display: none; }}
+
+  /* ── Indicators panel ──────────────────────────────────────────────── */
+  .indicators-panel {{ background: #222; border: 1px solid #444; border-radius: 8px; padding: 16px 20px; margin-bottom: 18px; }}
+  .indicators-panel h3 {{ margin: 0 0 10px 0; font-size: 1em; color: #80deea; }}
+  .ind-row {{ display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; }}
+  .ind-card {{ background: #2a2a2a; border: 1px solid #444; border-radius: 6px; padding: 8px 14px; min-width: 140px; }}
+  .ind-card .label {{ font-size: 0.75em; color: #888; margin-bottom: 2px; }}
+  .ind-card .value {{ font-size: 1.15em; font-weight: bold; color: #e0e0e0; }}
+  .ind-card .sub {{ font-size: 0.8em; color: #aaa; }}
+  .settings-input {{ background: #1a1a1a; color: #e0e0e0; border: 1px solid #555; padding: 3px 6px; font-family: monospace; font-size: 0.95em; width: 70px; border-radius: 3px; }}
+  .period-btn {{ background: #333; color: #aaa; border: 1px solid #555; padding: 3px 10px; cursor: pointer; font-family: monospace; font-size: 0.85em; border-radius: 3px; }}
+  .period-btn.active {{ background: #1a5276; color: #e0e0e0; border-color: #5dade2; }}
+  .period-btn:hover {{ background: #444; }}
+  .settings-save {{ background: #1a5276; color: #e0e0e0; border: 1px solid #5dade2; padding: 3px 12px; cursor: pointer; font-family: monospace; font-size: 0.85em; border-radius: 3px; }}
+  .settings-save:hover {{ background: #2471a3; }}
 </style></head><body>
 <h2>🤖 AlertSol Dashboard</h2>
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
 
+<!-- ── Ustawienia ──────────────────────────────────────────────────────── -->
+<div class="indicators-panel">
+  <h3>⚙️ Ustawienia</h3>
+  <div class="ind-row">
+    <div class="ind-card">
+      <div class="label">Kwota zlecenia (USDT)</div>
+      <div class="value"><input type="number" step="1" min="1" id="set-trade-usdt" class="settings-input" value="—"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Częstotliwość alertów (min)</div>
+      <div class="value"><input type="number" step="1" min="1" max="60" id="set-alert-interval" class="settings-input" value="—"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Maks. otwartych zleceń</div>
+      <div class="value"><input type="number" step="1" min="1" max="20" id="set-max-positions" class="settings-input" value="—"></div>
+    </div>
+    <div style="display:flex;align-items:flex-end">
+      <button class="settings-save" id="settings-save-btn" onclick="saveSettings()">Zapisz ustawienia</button>
+      <span id="settings-status" style="margin-left:8px;font-size:0.8em;color:#888"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Wyniki za okres ────────────────────────────────────────────────── -->
+<div class="indicators-panel">
+  <h3>📈 Wyniki
+    <span style="margin-left:14px">
+      <button class="period-btn active" data-period="24h" onclick="setPeriod('24h',this)">24h</button>
+      <button class="period-btn" data-period="1d" onclick="setPeriod('1d',this)">Dziś</button>
+      <button class="period-btn" data-period="7d" onclick="setPeriod('7d',this)">7 dni</button>
+      <button class="period-btn" data-period="30d" onclick="setPeriod('30d',this)">30 dni</button>
+    </span>
+    <span id="period-loading" style="margin-left:8px;font-size:0.7em;color:#888"></span>
+  </h3>
+  <div class="ind-row" id="period-stats-row">
+    <div class="ind-card">
+      <div class="label">Maks. zaangażowana kwota</div>
+      <div class="value" id="ps-max-capital">—</div>
+      <div class="sub" id="ps-max-capital-mult"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Średni dzienny zwrot</div>
+      <div class="value" id="ps-avg-daily">—</div>
+      <div class="sub" id="ps-avg-daily-mult"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Łączny dochód</div>
+      <div class="value" id="ps-total-income">—</div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Entry rate</div>
+      <div class="value" id="ps-entry-rate">—</div>
+      <div class="sub" id="ps-entry-detail"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Win rate (wygrane / uruchomione)</div>
+      <div class="value" id="ps-win-rate">—</div>
+      <div class="sub" id="ps-win-detail"></div>
+    </div>
+  </div>
+</div>
+
 <div>
-  <span class="stat">📊 Win rate: <b>{win_rate}</b></span>
+  <span class="stat">📊 Win rate (all-time): <b>{win_rate}</b></span>
   <span class="stat">💰 Łączny PnL: <b>{total_pnl}</b></span>
   <span class="stat">🎯 Aktywne: <b>{len(active)}</b></span>
   <span class="stat">✅ Zamknięte: <b>{stats.get('total_resolved', 0)}</b></span>
@@ -423,14 +368,34 @@ def dashboard():
 </table>
 
 <h3>Per model</h3>
-<table><tr><th>Model</th><th>W/Total</th><th>PnL $</th></tr>
-{by_model_rows or '<tr><td colspan=3 style="color:#888">Brak danych</td></tr>'}
+<table><tr><th>Model</th><th title="% setupów które weszły na giełdę">% entry</th><th title="% wygranych (TP1+BE+TP2) z uruchomionych">% win</th><th>PnL $</th></tr>
+{by_model_rows or '<tr><td colspan=4 style="color:#888">Brak danych</td></tr>'}
 </table>
 
-<h3>Ostatnie 20 zamkniętych</h3>
-<table><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
-{history_rows or '<tr><td colspan=11 style="color:#888">Brak historii</td></tr>'}
+<h3>Zamknięte setupy <span id="hist-count" style="color:#888;font-size:0.7em"></span></h3>
+<div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+  <label style="color:#aaa;font-size:0.85em">Wynik:</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP1"> TP1</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP2"> TP2</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP1+BE"> TP1+BE</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="SL"> SL</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="nie weszlo"> Nie weszło</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="anulowany"> Anulowane</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="nieokreslone"> Nieokreślone</label>
+  <span style="margin-left:12px;color:#aaa;font-size:0.85em">Od:</span>
+  <input type="date" id="date-from" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;font-family:monospace;padding:2px 4px">
+  <span style="color:#aaa;font-size:0.85em">Do:</span>
+  <input type="date" id="date-to" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;font-family:monospace;padding:2px 4px">
+  <button class="btn-action" onclick="loadHistory(true)">Filtruj</button>
+  <button class="btn-action" onclick="exportCsv()" title="Eksport CSV">Eksport CSV</button>
+</div>
+<table id="history-table">
+<thead><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th title="Hipotetyczny wynik gdyby setup wszedł">Hypo</th><th></th></tr></thead>
+<tbody id="hist-body"><tr><td colspan=12 style="color:#888">Ładowanie...</td></tr></tbody>
 </table>
+<div style="text-align:center;margin:10px 0">
+  <button class="btn-action" id="load-more-btn" onclick="loadHistory(false)" style="display:none">Załaduj więcej</button>
+</div>
 </body>
 <script>
 var RESULT_LABELS = {{
@@ -781,6 +746,242 @@ async function saveResult(btn) {{
     setTimeout(function() {{ btn.textContent = 'Zapisz'; btn.style.color = ''; btn.disabled = false; }}, 2000);
   }}
 }}
+
+// ── Historia z filtrami ──────────────────────────────────────────────────────
+var TRADE_USDT = {trade_usdt};
+var RESULT_OPTS_ARR = ['TP1','TP2','TP1+BE','SL','nieokreslone','nie weszlo','anulowany'];
+var histOffset = 0;
+var HIST_PAGE  = 50;
+
+function getFilterParams() {{
+  var checked = [];
+  document.querySelectorAll('.res-filter:checked').forEach(function(cb) {{ checked.push(cb.value); }});
+  var params = new URLSearchParams();
+  if (checked.length) params.set('results', checked.join(','));
+  var df = document.getElementById('date-from').value;
+  var dt = document.getElementById('date-to').value;
+  if (df) params.set('date_from', df);
+  if (dt) params.set('date_to', dt);
+  return params;
+}}
+
+function buildHistRow(s) {{
+  var TRADING = {{'TP1':1,'TP2':1,'TP1+BE':1,'SL':1}};
+  var entries = s.entries || [];
+  var tps     = s.tps || [];
+  var w1      = entries[0] || null;
+  var avgE    = s.avg_entry || null;
+  var avgX    = s.avg_exit  || null;
+  var result  = s.result || '';
+  var dir     = s.direction || 'long';
+  var sign    = dir === 'long' ? 1 : -1;
+
+  // Qty
+  var fq = s.exchange_qty_full ? parseFloat(s.exchange_qty_full) : null;
+  var hq = s.exchange_qty_half ? parseFloat(s.exchange_qty_half) : null;
+  var efc = avgE || (TRADING[result] ? w1 : null);
+  if (!fq && efc) fq = Math.max(Math.floor((TRADE_USDT * 20 / efc) / 0.1) * 0.1, 0.1);
+  if (!hq && fq) hq = Math.max(Math.floor((fq / 2) / 0.1) * 0.1, 0.1);
+
+  // PnL
+  var pnl = s.pnl_usd != null ? s.pnl_usd : null;
+  if (pnl == null && TRADING[result] && avgX && efc && fq) {{
+    if (result === 'SL')       pnl = sign * fq * (avgX - efc);
+    else if (result === 'TP1') pnl = sign * hq * (avgX - efc);
+    else                       pnl = sign * (hq + hq) * (avgX - efc);
+    pnl = Math.round(pnl * 100) / 100;
+  }}
+  var pnlPct = s.pnl_pct != null ? s.pnl_pct : (pnl != null ? Math.round(pnl / TRADE_USDT * 10000) / 100 : null);
+
+  // Alt PnL (TP1-only)
+  var tp1p = tps[0] || null;
+  var alt = null, dlt = null;
+  if ((result === 'TP2' || result === 'TP1+BE') && tp1p && efc && fq) {{
+    alt = Math.round(sign * fq * (tp1p - efc) * 100) / 100;
+    if (pnl != null) dlt = Math.round((pnl - alt) * 100) / 100;
+  }}
+
+  var fmt  = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2); }};
+  var fmtP = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }};
+  var clr  = function(v) {{ return v == null ? 'gray' : (v > 0 ? 'lightgreen' : 'salmon'); }};
+
+  var entryStr = avgE ? avgE.toFixed(2) : (TRADING[result] && w1 ? w1.toFixed(2) : '—');
+  var exitStr  = avgX != null ? avgX.toFixed(2) : '—';
+  var resLabel = RESULT_LABELS[result] || result || '—';
+
+  // Hypo
+  var hypoStr = '';
+  if (s.hypo_result) {{
+    var hpnl = s.hypo_pnl_usd != null ? ' (' + fmt(s.hypo_pnl_usd) + ')' : '';
+    hypoStr = '<span title="Hipotetyczny wynik">' + (RESULT_LABELS[s.hypo_result] || s.hypo_result) + hpnl + '</span>';
+  }}
+
+  // Setup data JSON for edit mode
+  var sd = {{
+    avg_entry: avgE || w1, w1: w1, tp1: tp1p, tp2: tps[1] || null,
+    sl: s.sl || null, sl_after_tp1: s.sl_after_tp1 || null,
+    direction: dir, full_qty: fq, half_qty: hq, trade_usdt: TRADE_USDT
+  }};
+  var sdJson = JSON.stringify(sd).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+
+  // Result dropdown
+  var opts = '';
+  RESULT_OPTS_ARR.forEach(function(o) {{
+    var lbl = RESULT_LABELS[o] || o;
+    opts += '<option value="' + o + '"' + (o === result ? ' selected' : '') + '>' + lbl + '</option>';
+  }});
+
+  var exitInp = avgX != null ? avgX.toFixed(2) : '';
+  var entryInp = avgE ? avgE : (TRADING[result] && w1 ? w1 : '');
+
+  return '<tr data-setup-id="' + s.setup_id + '" data-setup="' + sdJson + '">'
+    + '<td>#' + s.setup_id + '</td>'
+    + '<td>' + s.model + '</td>'
+    + '<td>' + dir.toUpperCase() + '</td>'
+    + '<td><span class="vmode avg-entry-display">' + entryStr + '</span>'
+    +   '<input class="emode avg-entry-input" type="number" step="0.01" value="' + entryInp + '" oninput="onEntryChange(this)"></td>'
+    + '<td><span class="vmode result-display">' + resLabel + '</span>'
+    +   '<select class="emode result-select" onchange="onResultChange(this)">' + opts + '</select></td>'
+    + '<td><span class="vmode exit-display">' + exitStr + '</span>'
+    +   '<input class="emode avg-exit-input" type="number" step="0.01" value="' + exitInp + '" oninput="onExitChange(this)"></td>'
+    + '<td class="pnl-cell" style="color:' + clr(pnl) + '">' + fmt(pnl) + '</td>'
+    + '<td class="pnl-pct-cell" style="color:' + clr(pnlPct) + '">' + fmtP(pnlPct) + '</td>'
+    + '<td class="alt-pnl-cell" style="color:' + clr(alt) + '">' + fmt(alt) + '</td>'
+    + '<td class="delta-cell" style="color:' + clr(dlt) + '">' + fmt(dlt) + '</td>'
+    + '<td>' + hypoStr + '</td>'
+    + '<td style="white-space:nowrap">'
+    +   '<button class="btn-edit vmode" onclick="editRow(this)">Edytuj</button>'
+    +   '<button class="btn-action emode" onclick="saveResult(this)">Zapisz</button>'
+    +   '<button class="btn-action emode" onclick="cancelEdit(this)">Anuluj</button>'
+    + '</td></tr>';
+}}
+
+async function loadHistory(reset) {{
+  if (reset) histOffset = 0;
+  var params = getFilterParams();
+  params.set('limit', HIST_PAGE);
+  params.set('offset', histOffset);
+  try {{
+    var resp = await fetch('/api/resolved?' + params.toString());
+    var data = await resp.json();
+    var body = document.getElementById('hist-body');
+    if (reset) body.innerHTML = '';
+    if (!data.rows || data.rows.length === 0) {{
+      if (reset) body.innerHTML = '<tr><td colspan=12 style="color:#888">Brak wyników</td></tr>';
+    }} else {{
+      data.rows.forEach(function(s) {{ body.innerHTML += buildHistRow(s); }});
+    }}
+    histOffset += (data.rows || []).length;
+    var total = data.total || 0;
+    document.getElementById('hist-count').textContent = '(' + histOffset + '/' + total + ')';
+    document.getElementById('load-more-btn').style.display = histOffset < total ? '' : 'none';
+  }} catch(e) {{
+    document.getElementById('hist-body').innerHTML = '<tr><td colspan=12 style="color:salmon">Błąd: ' + e.message + '</td></tr>';
+  }}
+}}
+
+function exportCsv() {{
+  var params = getFilterParams();
+  window.open('/api/resolved/csv?' + params.toString());
+}}
+
+loadHistory(true);
+// ── koniec historii ──────────────────────────────────────────────────────────
+
+// ── Ustawienia ──────────────────────────────────────────────────────────────
+async function loadSettings() {{
+  try {{
+    var resp = await fetch('/api/settings');
+    var data = await resp.json();
+    document.getElementById('set-trade-usdt').value = data.trade_usdt;
+    document.getElementById('set-alert-interval').value = data.alert_interval;
+    document.getElementById('set-max-positions').value = data.max_positions;
+  }} catch(e) {{
+    console.error('loadSettings:', e);
+  }}
+}}
+
+async function saveSettings() {{
+  var btn = document.getElementById('settings-save-btn');
+  var st  = document.getElementById('settings-status');
+  btn.disabled = true; btn.textContent = '...';
+  try {{
+    var body = {{
+      trade_usdt:     parseFloat(document.getElementById('set-trade-usdt').value) || null,
+      alert_interval: parseInt(document.getElementById('set-alert-interval').value) || null,
+      max_positions:  parseInt(document.getElementById('set-max-positions').value) || null,
+    }};
+    var resp = await fetch('/api/settings', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(body)
+    }});
+    var data = await resp.json();
+    if (data.ok) {{
+      st.textContent = '✓ Zapisano'; st.style.color = 'lightgreen';
+    }} else {{
+      st.textContent = '✗ Błąd'; st.style.color = 'salmon';
+    }}
+  }} catch(e) {{
+    st.textContent = '✗ ' + e.message; st.style.color = 'salmon';
+  }}
+  btn.disabled = false; btn.textContent = 'Zapisz ustawienia';
+  setTimeout(function() {{ st.textContent = ''; }}, 4000);
+}}
+
+loadSettings();
+
+// ── Wyniki za okres ─────────────────────────────────────────────────────────
+var currentPeriod = '24h';
+
+function setPeriod(p, btn) {{
+  currentPeriod = p;
+  document.querySelectorAll('.period-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  loadPeriodStats();
+}}
+
+async function loadPeriodStats() {{
+  var loading = document.getElementById('period-loading');
+  loading.textContent = 'ładowanie...';
+  try {{
+    var resp = await fetch('/api/period-stats?period=' + currentPeriod);
+    var d = await resp.json();
+
+    var fmt  = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2); }};
+    var clr  = function(v) {{ return v == null ? '#e0e0e0' : (v >= 0 ? 'lightgreen' : 'salmon'); }};
+    var tu   = d.trade_usdt || 100;
+
+    // Max capital
+    document.getElementById('ps-max-capital').textContent = '$' + d.max_capital.toFixed(0);
+    document.getElementById('ps-max-capital').style.color = '#e0e0e0';
+    document.getElementById('ps-max-capital-mult').textContent = d.max_capital_mult.toFixed(1) + 'x × $' + tu.toFixed(0) + ' (' + d.max_open_positions + ' poz.)';
+
+    // Avg daily
+    document.getElementById('ps-avg-daily').textContent = fmt(d.avg_daily_pnl) + ' $';
+    document.getElementById('ps-avg-daily').style.color = clr(d.avg_daily_pnl);
+    document.getElementById('ps-avg-daily-mult').textContent = (d.avg_daily_mult >= 0 ? '+' : '') + (d.avg_daily_mult * 100).toFixed(1) + '% kwoty';
+
+    // Total income
+    document.getElementById('ps-total-income').textContent = fmt(d.total_income) + ' $';
+    document.getElementById('ps-total-income').style.color = clr(d.total_income);
+
+    // Entry rate
+    document.getElementById('ps-entry-rate').textContent = d.entry_rate.toFixed(1) + '%';
+    document.getElementById('ps-entry-detail').textContent = d.entered + ' / ' + d.total_setups + ' zleceń';
+
+    // Win rate
+    document.getElementById('ps-win-rate').textContent = d.win_rate.toFixed(1) + '%';
+    document.getElementById('ps-win-detail').textContent = d.wins + ' wygranych / ' + d.entered + ' uruchomionych';
+
+    loading.textContent = '';
+  }} catch(e) {{
+    loading.textContent = '⚠️ ' + e.message;
+  }}
+}}
+
+loadPeriodStats();
+// ── koniec wskaźników ───────────────────────────────────────────────────────
 </script>
 </html>"""
     return HTMLResponse(html)
@@ -1267,6 +1468,63 @@ def api_stats():
     }
 
 
+@app.get("/api/resolved")
+def api_resolved(
+    results: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Zamknięte setupy z filtrami. results = lista oddzielona przecinkami."""
+    result_list = [r.strip() for r in results.split(",") if r.strip()] if results else None
+    data = db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset)
+    return data
+
+
+@app.get("/api/resolved/csv")
+def api_resolved_csv(
+    results: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    """Eksport wyfiltrowanych setupów do CSV."""
+    from fastapi.responses import Response
+    import csv
+    import io
+
+    result_list = [r.strip() for r in results.split(",") if r.strip()] if results else None
+    data = db.get_resolved_filtered(result_list, date_from, date_to, limit=5000, offset=0)
+    rows = data["rows"]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "ID", "Data", "Model", "Kierunek", "Wynik", "Wejście", "Wyjście",
+        "PnL $", "PnL %", "Hypo wynik", "Hypo PnL $",
+    ])
+    for s in rows:
+        writer.writerow([
+            s.get("setup_id"),
+            str(s.get("alert_time", ""))[:19],
+            s.get("model"),
+            s.get("direction"),
+            s.get("result"),
+            s.get("avg_entry") or "",
+            s.get("avg_exit") or "",
+            s.get("pnl_usd") or "",
+            s.get("pnl_pct") or "",
+            s.get("hypo_result") or "",
+            s.get("hypo_pnl_usd") or "",
+        ])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=alertsol_export.csv"},
+    )
+
+
 class ResultUpdate(BaseModel):
     result: str
     avg_exit: float | None = None
@@ -1277,6 +1535,12 @@ class TpsUpdate(BaseModel):
     tp1: float | None = None
     tp2: float | None = None
     sl:  float | None = None
+
+
+class SettingsUpdate(BaseModel):
+    trade_usdt: float | None = None
+    alert_interval: int | None = None
+    max_positions: int | None = None
 
 
 @app.post("/api/update-tps/{setup_id}")
@@ -1601,6 +1865,75 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         "avg_exit":  avg_exit,
         "pnl_usd":  round(pnl_usd, 2) if pnl_usd is not None else None,
     }
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    """Zwraca aktualne ustawienia systemu."""
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    max_positions = int(os.getenv("BITGET_MAX_POSITIONS", "5"))
+    # Alert interval: extract from scheduler job
+    alert_minutes = 15
+    try:
+        job = scheduler.get_job("sol_alert")
+        if job and hasattr(job.trigger, "fields"):
+            for f in job.trigger.fields:
+                if f.name == "minute":
+                    expr = str(f)
+                    parts = expr.split(",")
+                    if len(parts) >= 2:
+                        alert_minutes = int(parts[1]) - int(parts[0])
+    except Exception:
+        pass
+    return {
+        "trade_usdt": trade_usdt,
+        "alert_interval": alert_minutes,
+        "max_positions": max_positions,
+    }
+
+
+@app.post("/api/settings")
+def api_update_settings(body: SettingsUpdate):
+    """Aktualizuje ustawienia systemu w runtime (env vars + scheduler)."""
+    updated = []
+
+    if body.trade_usdt is not None and body.trade_usdt > 0:
+        os.environ["BITGET_TRADE_USDT"] = str(body.trade_usdt)
+        updated.append(f"trade_usdt={body.trade_usdt}")
+
+    if body.max_positions is not None and body.max_positions > 0:
+        os.environ["BITGET_MAX_POSITIONS"] = str(body.max_positions)
+        # Update exchange_trader module-level var if already imported
+        try:
+            import exchange_trader
+            exchange_trader.MAX_POSITIONS = body.max_positions
+        except Exception:
+            pass
+        updated.append(f"max_positions={body.max_positions}")
+
+    if body.alert_interval is not None and body.alert_interval > 0:
+        minutes = body.alert_interval
+        # Build cron minute expression: 0, N, 2N, ... < 60
+        cron_parts = [str(m) for m in range(0, 60, minutes)]
+        cron_expr = ",".join(cron_parts)
+        try:
+            scheduler.reschedule_job(
+                "sol_alert",
+                trigger=CronTrigger(minute=cron_expr),
+            )
+            updated.append(f"alert_interval={minutes}min (cron: {cron_expr})")
+        except Exception as e:
+            updated.append(f"alert_interval=BŁĄD: {e}")
+
+    return {"ok": True, "updated": updated}
+
+
+@app.get("/api/period-stats")
+def api_period_stats(period: str = "24h"):
+    """Statystyki za okres: 1d, 24h, 7d, 30d."""
+    if period not in ("1d", "24h", "7d", "30d"):
+        raise HTTPException(status_code=400, detail="Dozwolone okresy: 1d, 24h, 7d, 30d")
+    return db.get_period_stats(period)
 
 
 @app.post("/admin/run-gpt5-backtest")
