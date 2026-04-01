@@ -517,40 +517,58 @@ def run_backtest() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--grok2-only", action="store_true",
                         help="Pomiń stary Grok — testuj tylko Grok2 (oszczędność kredytów)")
+    parser.add_argument("--hours", type=int, default=48,
+                        help="Ile godzin wstecz testować (domyślnie 48)")
+    parser.add_argument("--end-offset", type=int, default=0,
+                        help="Offset końca w godzinach od teraz (np. 48 = zacznij od miejsca gdzie skończył się poprzedni test)")
+    parser.add_argument("--sheet-suffix", type=str, default="",
+                        help="Sufiks nazwy arkusza (np. 'v2' → 'Grok2 test v2')")
     args = parser.parse_args()
 
     run_grok1 = not args.grok2_only
+    num_hours = args.hours
+    end_offset_h = args.end_offset
 
     print("=== Grok2 Backtest — start ===")
     if run_grok1:
         print("Tryb: Grok (stary) vs Grok2 (nowy)")
     else:
         print("Tryb: tylko Grok2 (--grok2-only)")
+    print(f"Okres: {num_hours}h wstecz, end-offset: {end_offset_h}h")
 
     # ── 1. Pobierz dane historyczne ──────────────────────────────────────────
     now_ts = int(time.time())
+    end_ts = now_ts - end_offset_h * 3600
 
-    print("Pobieranie świec M15 (550 szt)...")
-    all_m15 = fetch_klines_paginated(SYMBOL, "15m", total=550, end_ts_s=now_ts)
+    # Potrzebujemy: 60 M15 kontekstu + num_hours*4 testowe + 24*4 outcome
+    m15_total = 60 + num_hours * 4 + 96 + 50  # zapas
+    # H1: 50 kontekstu + num_hours testowe + 24 outcome
+    h1_total = 50 + num_hours + 24 + 10  # zapas
+
+    print(f"Pobieranie świec M15 ({m15_total} szt)...")
+    all_m15 = fetch_klines_paginated(SYMBOL, "15m", total=m15_total, end_ts_s=end_ts)
     print(f"  Pobrano {len(all_m15)} świec M15 ({_ts_fmt(all_m15[0]['time'])} – {_ts_fmt(all_m15[-1]['time'])})")
 
-    print("Pobieranie świec H1 (150 szt)...")
-    all_h1 = fetch_klines_paginated(SYMBOL, "1h", total=150, end_ts_s=now_ts)
+    print(f"Pobieranie świec H1 ({h1_total} szt)...")
+    all_h1 = fetch_klines_paginated(SYMBOL, "1h", total=h1_total, end_ts_s=end_ts)
     print(f"  Pobrano {len(all_h1)} świec H1 ({_ts_fmt(all_h1[0]['time'])} – {_ts_fmt(all_h1[-1]['time'])})")
 
-    # ── 2. Pobierz sentyment (jeden raz — aktualny, bo backtestowo F&G i BTC/ETH nie zmieniają się drastycznie w 48h) ──
+    # ── 2. Pobierz sentyment (jeden raz) ─────────────────────────────────────
     print("Pobieranie danych sentymentu...")
     sentiment_line = build_sentiment_line()
     print(f"  Sentyment: {sentiment_line}")
 
-    # ── 3. Wyznacz 48 punktów testowych ──────────────────────────────────────
-    latest_full_hour = (now_ts // 3600) * 3600
-    test_hours = [latest_full_hour - i * 3600 for i in range(48, 0, -1)]
+    # ── 3. Wyznacz punkty testowe ────────────────────────────────────────────
+    latest_full_hour = (end_ts // 3600) * 3600
+    test_hours = [latest_full_hour - i * 3600 for i in range(num_hours, 0, -1)]
 
     # ── 4. Przygotuj arkusze ─────────────────────────────────────────────────
-    print("Łączenie z Google Sheets...")
-    sheet_grok2 = get_test_sheet("Grok2 test")
-    sheet_grok  = get_test_sheet("Grok test") if run_grok1 else None
+    sfx = f" {args.sheet_suffix}" if args.sheet_suffix else ""
+    sheet_name_grok2 = f"Grok2 test{sfx}"
+    sheet_name_grok  = f"Grok test{sfx}"
+    print(f"Łączenie z Google Sheets ({sheet_name_grok2})...")
+    sheet_grok2 = get_test_sheet(sheet_name_grok2)
+    sheet_grok  = get_test_sheet(sheet_name_grok) if run_grok1 else None
     print("Gotowe.")
 
     # ── 5. Statystyki ────────────────────────────────────────────────────────
@@ -560,7 +578,7 @@ def run_backtest() -> None:
     # ── 6. Pętla testowa ─────────────────────────────────────────────────────
     for i, signal_ts in enumerate(test_hours):
         label = _ts_fmt(signal_ts)
-        print(f"\n[{i+1}/48] {label}")
+        print(f"\n[{i+1}/{num_hours}] {label}")
 
         # Kontekst świec
         ctx_m15 = [c for c in all_m15 if c["time"] <= signal_ts - 900][-60:]
@@ -620,7 +638,7 @@ def run_backtest() -> None:
         if not run_grok1 and name == "grok":
             continue
         print(f"\n{name.upper()}:")
-        print(f"  Alerty (send_alert=true): {s['alerts']}/48")
+        print(f"  Alerty (send_alert=true): {s['alerts']}/{num_hours}")
         print(f"  Wejścia aktywowane:       {s['entries']}")
         if s["entries"] > 0:
             print(f"  Suma delta (TP1+TP2):     {s['delta_sum']:+.2f}")
