@@ -34,6 +34,7 @@ OUTCOME_WINDOW_S = 24 * 3600
 SHEET_HEADER = [
     "Data i godzina", "Kierunek", "Pewność", "W", "TP1", "TP2", "SL",
     "Wynik", "Czas do entry", "Delta (TP1+TP2)", "DeltaTP1",
+    "Reżim", "Analiza",
 ]
 
 
@@ -533,27 +534,38 @@ def process_and_write(
     regime: dict | None = None,
 ) -> dict | None:
     """Przetwarza wynik Groka, ewaluuje outcome i zapisuje do arkusza. Zwraca outcome."""
+    regime_label = regime.get("regime", "?") if regime else "?"
+    regime_score = regime.get("score", 0) if regime else 0
+    regime_str = f"{regime_label} ({regime_score})"
+
     if grok_result is None:
         print(f"  [{model_label}] Brak odpowiedzi.")
-        sheet.append_row([label, "", "", "", "", "", "", f"błąd {model_label}", "", ""])
+        sheet.append_row([label, "", "", "", "", "", "", f"błąd {model_label}", "", "", "", regime_str, ""])
         return None
 
     send_alert = grok_result.get("send_alert", False)
     bias       = grok_result.get("bias", "neutral")
     bias_proc  = grok_result.get("bias_proc", 0)
+    analiza    = grok_result.get("analiza", "")
+    akcja      = grok_result.get("akcja", "")
+    reasoning  = f"{analiza} | {akcja}" if analiza and akcja else analiza or akcja
 
     # Graduated counter-trend filter (only for Grok2 with regime data)
+    filter_note = ""
     if send_alert and regime is not None and bias != "neutral":
         min_bias = countertrend_bias_threshold(regime, bias)
         if bias_proc < min_bias:
             ct_label = " (kontr-trend)" if min_bias > MIN_GROK_BIAS_PROC else ""
             print(f"  [{model_label}] Odrzucono: bias_proc={bias_proc}% < próg {min_bias}%{ct_label}")
+            filter_note = f"[FILTR: {bias} {bias_proc}% < {min_bias}%{ct_label}] "
             send_alert = False
 
     print(f"  [{model_label}] send_alert={send_alert} | bias={bias} ({bias_proc}%)")
 
     if not send_alert or bias == "neutral":
-        sheet.append_row([label, "null", bias_proc, "", "", "", "", "no entry", "", ""])
+        sheet.append_row([label, bias if bias != "neutral" else "null", bias_proc,
+                          "", "", "", "", "no entry", "", "", "",
+                          regime_str, filter_note + reasoning])
         return {"wynik": "no entry", "delta": None, "delta_tp1": None}
 
     tp1 = grok_result.get("tp1", "")
@@ -585,6 +597,8 @@ def process_and_write(
         czas_str,
         delta_val,
         delta_tp1_val,
+        regime_str,
+        reasoning,
     ])
 
     return outcome
@@ -719,8 +733,8 @@ def run_backtest() -> None:
             if len(ctx_m15) < 30 or len(ctx_h1) < 10:
                 print(f"  Za mało danych (M15:{len(ctx_m15)}, H1:{len(ctx_h1)}), pomijam.")
                 if sheet_grok:
-                    sheet_grok.append_row([label, "", "", "", "", "", "", "brak danych", "", ""])
-                sheet_grok2.append_row([label, "", "", "", "", "", "", "brak danych", "", ""])
+                    sheet_grok.append_row([label, "", "", "", "", "", "", "brak danych", "", "", "", "", ""])
+                sheet_grok2.append_row([label, "", "", "", "", "", "", "brak danych", "", "", "", "", ""])
                 continue
 
             current_price = ctx_m15[-1]["close"]
