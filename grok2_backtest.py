@@ -60,26 +60,86 @@ def fetch_bitget_price(symbol: str) -> float | None:
     return None
 
 
-def fetch_fear_greed() -> tuple[int | None, str | None]:
-    """Pobiera aktualny Fear & Greed Index z alternative.me. Zwraca (wartość, etykieta)."""
+def fetch_fear_greed_history(days: int = 30) -> dict[str, tuple[int, str]]:
+    """Pobiera historię F&G z alternative.me. Zwraca {data_YYYY-MM-DD: (wartość, etykieta)}."""
+    result: dict[str, tuple[int, str]] = {}
     try:
         r = requests.get(
-            "https://api.alternative.me/fng/?limit=1&format=json",
-            timeout=5,
+            "https://api.alternative.me/fng/",
+            params={"limit": str(days), "format": "json"},
+            timeout=10,
         )
         r.raise_for_status()
-        entry = r.json()["data"][0]
-        return int(entry["value"]), entry["value_classification"]
+        for entry in r.json().get("data", []):
+            ts = int(entry["timestamp"])
+            date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            result[date_str] = (int(entry["value"]), entry["value_classification"])
     except Exception as e:
-        print(f"[sentiment] Błąd pobierania F&G: {e}")
-    return None, None
+        print(f"[sentiment] Błąd pobierania historii F&G: {e}")
+    print(f"  F&G: pobrano {len(result)} dni historii")
+    return result
 
 
+def fetch_price_history(symbol: str, total: int, end_ts_s: int) -> list[dict]:
+    """Pobiera historyczne świece H1 dla BTC/ETH z Bitget."""
+    return fetch_klines_paginated(symbol, "1h", total=total, end_ts_s=end_ts_s)
+
+
+def build_sentiment_line_historical(
+    btc_candles: list[dict],
+    eth_candles: list[dict],
+    fg_history: dict[str, tuple[int, str]],
+    signal_ts: int,
+) -> str:
+    """Buduje linię sentymentu z historycznych danych dla danego punktu czasowego."""
+    # BTC/ETH — ostatnia zamknięta świeca H1 przed signal_ts
+    btc_price = None
+    for c in reversed(btc_candles):
+        if c["time"] <= signal_ts:
+            btc_price = c["close"]
+            break
+
+    eth_price = None
+    for c in reversed(eth_candles):
+        if c["time"] <= signal_ts:
+            eth_price = c["close"]
+            break
+
+    # F&G — wartość z tego dnia (F&G publikuje raz dziennie)
+    signal_date = datetime.fromtimestamp(signal_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    fg_val, fg_label = fg_history.get(signal_date, (None, None))
+
+    # Jeśli brak dokładnej daty, szukaj najbliższej wcześniejszej
+    if fg_val is None:
+        for offset_days in range(1, 4):
+            prev_date = datetime.fromtimestamp(signal_ts - offset_days * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
+            if prev_date in fg_history:
+                fg_val, fg_label = fg_history[prev_date]
+                break
+
+    parts = []
+    if btc_price:
+        parts.append(f"BTC ${btc_price:,.0f}")
+    if eth_price:
+        parts.append(f"ETH ${eth_price:,.0f}")
+    if fg_val is not None:
+        parts.append(f"Fear & Greed: {fg_val}/100 ({fg_label})")
+
+    return " | ".join(parts) if parts else "brak danych sentymentu"
+
+
+# Zachowane dla kompatybilności (nie używane w backteście)
 def build_sentiment_line() -> str:
     """Buduje linię sentymentu z aktualnych danych Bitget + F&G."""
     btc = fetch_bitget_price("BTCUSDT")
     eth = fetch_bitget_price("ETHUSDT")
-    fg_val, fg_label = fetch_fear_greed()
+    try:
+        r = requests.get("https://api.alternative.me/fng/?limit=1&format=json", timeout=5)
+        r.raise_for_status()
+        entry = r.json()["data"][0]
+        fg_val, fg_label = int(entry["value"]), entry["value_classification"]
+    except Exception:
+        fg_val, fg_label = None, None
 
     parts = []
     if btc:
@@ -590,10 +650,24 @@ def run_backtest() -> None:
     all_h1 = fetch_klines_paginated(SYMBOL, "1h", total=h1_total, end_ts_s=data_end_ts)
     print(f"  Pobrano {len(all_h1)} świec H1 ({_ts_fmt(all_h1[0]['time'])} – {_ts_fmt(all_h1[-1]['time'])})")
 
-    # ── 2. Pobierz sentyment (jeden raz) ─────────────────────────────────────
-    print("Pobieranie danych sentymentu...")
-    sentiment_line = build_sentiment_line()
-    print(f"  Sentyment: {sentiment_line}")
+    # ── 2. Pobierz historyczne dane sentymentu ─────────────────────────────────
+    print("Pobieranie historycznych danych sentymentu...")
+
+    # F&G — historia dzienna
+    fg_days = (data_end_ts - from_ts) // 86400 + 5  # zapas
+    fg_history = fetch_fear_greed_history(days=max(fg_days, 30))
+
+    # BTC/ETH — historyczne świece H1 (ten sam zakres co SOL)
+    btc_h1_total = h1_total
+    eth_h1_total = h1_total
+
+    print(f"Pobieranie świec BTC H1 ({btc_h1_total} szt)...")
+    btc_h1 = fetch_klines_paginated("BTCUSDT", "1h", total=btc_h1_total, end_ts_s=data_end_ts)
+    print(f"  BTC H1: {len(btc_h1)} świec ({_ts_fmt(btc_h1[0]['time'])} – {_ts_fmt(btc_h1[-1]['time'])})")
+
+    print(f"Pobieranie świec ETH H1 ({eth_h1_total} szt)...")
+    eth_h1 = fetch_klines_paginated("ETHUSDT", "1h", total=eth_h1_total, end_ts_s=data_end_ts)
+    print(f"  ETH H1: {len(eth_h1)} świec ({_ts_fmt(eth_h1[0]['time'])} – {_ts_fmt(eth_h1[-1]['time'])})")
 
     # ── 3. Wyznacz punkty testowe ────────────────────────────────────────────
     test_hours = [from_ts + i * 3600 for i in range(num_hours)]
@@ -653,6 +727,7 @@ def run_backtest() -> None:
                             stats["grok"]["delta_tp1_sum"] += outcome1["delta_tp1"]
 
             # ── Grok2 (nowy) ─────────────────────────────────────────────────
+            sentiment_line = build_sentiment_line_historical(btc_h1, eth_h1, fg_history, signal_ts)
             user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info)
             grok2_result = call_grok_raw(GROK2_PROMPT, user_msg_v2, use_web_search=False, label="grok2")
             time.sleep(1)
