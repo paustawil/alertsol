@@ -466,6 +466,146 @@ def get_summary_stats() -> dict:
     return row
 
 
+def get_period_stats(period: str) -> dict:
+    """Zwraca statystyki za podany okres: 1d, 24h, 7d, 30d.
+    - max_capital: maksymalna jednoczesna liczba otwartych pozycji * trade_usdt
+    - avg_daily_pnl: średni dzienny PnL
+    - total_income: łączny dochód
+    - entry_rate: uruchomione / złożone zlecenia
+    - win_rate: TP1 / (TP1 + SL)
+    """
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+
+    # Determine time window
+    if period == "24h":
+        interval = "24 hours"
+    elif period == "7d":
+        interval = "7 days"
+    elif period == "30d":
+        interval = "30 days"
+    else:  # 1d — calendar day
+        interval = None  # special handling
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if interval:
+                time_filter = "alert_time >= NOW() - %(interval)s::interval"
+                time_params: dict = {"interval": interval}
+            else:
+                time_filter = "alert_time::date = CURRENT_DATE"
+                time_params = {}
+
+            # Total setups in period
+            cur.execute(
+                f"SELECT COUNT(*) AS total FROM setups WHERE {time_filter}",
+                time_params,
+            )
+            total_setups = cur.fetchone()["total"] or 0
+
+            # Entered = resolved with trading result (TP1/TP2/TP1+BE/SL)
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','SL')) AS entered,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE'))       AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                          AS losses,
+                    COALESCE(ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2), 0) AS total_income
+                FROM setups
+                WHERE {time_filter}
+                """,
+                time_params,
+            )
+            row = dict(cur.fetchone())
+            entered = row["entered"] or 0
+            wins = row["wins"] or 0
+            losses = row["losses"] or 0
+            total_income = float(row["total_income"])
+
+            # Entry rate
+            entry_rate = round(entered / total_setups * 100, 1) if total_setups > 0 else 0
+
+            # Win rate: TP1 count / (TP1 + SL)
+            # Per user request: "TP1 / (TP1 + SL)" — only TP1 hits count as wins here
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE result = 'TP1')  AS tp1_count,
+                    COUNT(*) FILTER (WHERE result = 'SL')   AS sl_count
+                FROM setups
+                WHERE {time_filter} AND result IN ('TP1','SL')
+                """,
+                time_params,
+            )
+            wr = dict(cur.fetchone())
+            tp1_count = wr["tp1_count"] or 0
+            sl_count = wr["sl_count"] or 0
+            win_rate = round(tp1_count / (tp1_count + sl_count) * 100, 1) if (tp1_count + sl_count) > 0 else 0
+
+            # Max simultaneous open positions — count overlapping setups
+            # Use entry_hit_at (Unix ts) and exit_time to determine overlap
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS max_open
+                FROM (
+                    SELECT alert_time,
+                           generate_series(
+                               date_trunc('hour', COALESCE(
+                                   to_timestamp(entry_hit_at) AT TIME ZONE 'UTC',
+                                   alert_time
+                               )),
+                               date_trunc('hour', COALESCE(exit_time, NOW())),
+                               interval '1 hour'
+                           ) AS h
+                    FROM setups
+                    WHERE {time_filter}
+                      AND (entry_hit_at IS NOT NULL OR exchange_position_opened = TRUE)
+                ) sub
+                GROUP BY h
+                ORDER BY max_open DESC
+                LIMIT 1
+                """,
+                time_params,
+            )
+            max_row = cur.fetchone()
+            max_open = max_row["max_open"] if max_row else 0
+            max_capital = round(max_open * trade_usdt, 2)
+            max_capital_mult = round(max_open * 1.0, 1)  # multiplier of trade_usdt
+
+            # Average daily PnL
+            cur.execute(
+                f"""
+                SELECT
+                    COALESCE(ROUND(SUM(pnl_usd)::numeric, 2), 0) AS sum_pnl,
+                    COUNT(DISTINCT resolved_at::date) AS days
+                FROM setups
+                WHERE {time_filter} AND resolved = TRUE AND pnl_usd IS NOT NULL
+                """,
+                time_params,
+            )
+            avg_row = dict(cur.fetchone())
+            sum_pnl = float(avg_row["sum_pnl"])
+            days = avg_row["days"] or 1
+            avg_daily_pnl = round(sum_pnl / days, 2)
+            avg_daily_mult = round(avg_daily_pnl / trade_usdt, 3) if trade_usdt else 0
+
+    return {
+        "period": period,
+        "trade_usdt": trade_usdt,
+        "total_setups": total_setups,
+        "entered": entered,
+        "entry_rate": entry_rate,
+        "win_rate": win_rate,
+        "tp1_count": tp1_count,
+        "sl_count": sl_count,
+        "total_income": total_income,
+        "avg_daily_pnl": avg_daily_pnl,
+        "avg_daily_mult": avg_daily_mult,
+        "max_capital": max_capital,
+        "max_capital_mult": max_capital_mult,
+        "max_open_positions": max_open,
+    }
+
+
 def get_recent_resolved(limit: int = 20) -> list[dict]:
     """Zwraca ostatnie zamknięte setupy dla dashboardu."""
     with _conn() as conn:
