@@ -203,12 +203,16 @@ def _set_leverage(client: BitgetClient):
 
 def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> str | None:
     """
-    Składa jeden plan order przy W1 — pełna pozycja, bez presetów TP/SL.
+    Składa plan order przy W1 z preset TP1 i SL (jeśli dostępne).
+    Po triggerze plan order, preset TP/SL stają się osobnymi TPSL orderami na Bitget.
     Zwraca orderId lub None.
     """
     direction = s["direction"]
     w1        = s["entries"][0]
     side      = "buy" if direction == "long" else "sell"
+    tps       = s.get("tps", [])
+    tp1       = tps[0] if len(tps) > 0 else None
+    sl        = s.get("sl")
 
     params = {
         "symbol":       SYMBOL,
@@ -226,11 +230,22 @@ def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> s
         "orderType":    "limit",
     }
 
+    # Preset TP/SL — aktywują się automatycznie po wejściu w pozycję
+    if tp1 is not None:
+        params["stopSurplusTriggerPrice"] = _fmt_price(tp1)
+        params["stopSurplusTriggerType"]  = "mark_price"
+    if sl is not None:
+        params["stopLossTriggerPrice"] = _fmt_price(sl)
+        params["stopLossTriggerType"]  = "mark_price"
+
     try:
         resp = client.post("/api/v2/mix/order/place-plan-order", params)
         if resp.get("code") == "00000":
             oid = resp["data"]["orderId"]
-            print(f"[exchange] Plan order złożony: {oid} | {side} {_fmt_qty(full_qty)} SOL @ trigger {w1}")
+            tp_sl_info = f"TP1={tp1}" if tp1 else ""
+            if sl:
+                tp_sl_info += f" SL={sl}"
+            print(f"[exchange] Plan order złożony: {oid} | {side} {_fmt_qty(full_qty)} SOL @ trigger {w1} | {tp_sl_info}")
             return oid
         log.error(f"[exchange] place_entry_plan_order: code={resp.get('code')} msg={resp.get('msg')}")
     except Exception as e:
@@ -396,6 +411,31 @@ def _cancel_order(client: BitgetClient, order_id: str, plan_type: str):
             log.warning(f"[exchange] cancel {order_id}: code={resp.get('code')} msg={resp.get('msg')}")
     except Exception as e:
         log.warning(f"[exchange] cancel {order_id}: {e}")
+
+
+def _find_preset_tpsl(client: BitgetClient, hold_side: str) -> tuple[str | None, str | None]:
+    """
+    Szuka aktywnych TPSL orderów (z presetu plan order) dla danej strony pozycji.
+    Zwraca (tp_order_id, sl_order_id) lub (None, None).
+    """
+    tp_id = sl_id = None
+    try:
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "planType":    "profit_loss",
+        })
+        if resp.get("code") == "00000":
+            for o in (resp["data"].get("entrustedList") or []):
+                if o.get("posSide", o.get("holdSide", "")) == hold_side:
+                    plan_type = o.get("planType", "")
+                    if plan_type == "profit_plan" and tp_id is None:
+                        tp_id = o["orderId"]
+                    elif plan_type == "loss_plan" and sl_id is None:
+                        sl_id = o["orderId"]
+    except Exception as e:
+        log.warning(f"[exchange] _find_preset_tpsl: {e}")
+    return tp_id, sl_id
 
 
 def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty: float):
@@ -568,16 +608,25 @@ def sync():
                 full_qty = _round_qty(calc_qty)
                 half_qty = _round_qty(full_qty / 2)
 
-                tp1_id, tp2_id, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
+                # Sprawdź czy preset TP/SL z plan order już istnieją
+                preset_tp, preset_sl = _find_preset_tpsl(client, direction)
+                if preset_tp and preset_sl:
+                    tp1_id, sl_id = preset_tp, preset_sl
+                    print(f"[exchange] {label}: preset TPSL znalezione (TP1={tp1_id} SL={sl_id})")
+                else:
+                    # Fallback — złóż TPSL ręcznie
+                    print(f"[exchange] {label}: brak preset TPSL, składam ręcznie...")
+                    tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
+
                 s["exchange_position_opened"] = True
                 s["exchange_qty_full"]        = _fmt_qty(full_qty)
                 s["exchange_qty_half"]        = _fmt_qty(half_qty)
                 s["exchange_tp1_oid"]         = tp1_id
-                s["exchange_tp2_oid"]         = tp2_id
+                s["exchange_tp2_oid"]         = None
                 s["exchange_sl_oid"]          = sl_id
                 modified = True
-                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL), TPSL złożone "
-                      f"(TP1={tp1_id} TP2={tp2_id} SL={sl_id})")
+                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL), TPSL aktywne "
+                      f"(TP1={tp1_id} SL={sl_id})")
             continue
 
         # ── Pozycja otwarta, SL jest ale brak TP — re-place tylko TP ─────────
