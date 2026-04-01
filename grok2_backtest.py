@@ -576,58 +576,70 @@ def run_backtest() -> None:
              "grok2": {"alerts": 0, "entries": 0, "delta_sum": 0.0, "delta_tp1_sum": 0.0}}
 
     # ── 6. Pętla testowa ─────────────────────────────────────────────────────
+    errors = 0
     for i, signal_ts in enumerate(test_hours):
         label = _ts_fmt(signal_ts)
         print(f"\n[{i+1}/{num_hours}] {label}")
 
-        # Kontekst świec
-        ctx_m15 = [c for c in all_m15 if c["time"] <= signal_ts - 900][-60:]
-        ctx_h1  = [c for c in all_h1  if c["time"] <= signal_ts - 3600][-50:]
+        try:
+            # Kontekst świec
+            ctx_m15 = [c for c in all_m15 if c["time"] <= signal_ts - 900][-60:]
+            ctx_h1  = [c for c in all_h1  if c["time"] <= signal_ts - 3600][-50:]
 
-        if len(ctx_m15) < 30 or len(ctx_h1) < 10:
-            print(f"  Za mało danych (M15:{len(ctx_m15)}, H1:{len(ctx_h1)}), pomijam.")
-            if sheet_grok:
-                sheet_grok.append_row([label, "", "", "", "", "", "", "brak danych", "", ""])
-            sheet_grok2.append_row([label, "", "", "", "", "", "", "brak danych", "", ""])
-            continue
+            if len(ctx_m15) < 30 or len(ctx_h1) < 10:
+                print(f"  Za mało danych (M15:{len(ctx_m15)}, H1:{len(ctx_h1)}), pomijam.")
+                if sheet_grok:
+                    sheet_grok.append_row([label, "", "", "", "", "", "", "brak danych", "", ""])
+                sheet_grok2.append_row([label, "", "", "", "", "", "", "brak danych", "", ""])
+                continue
 
-        current_price = ctx_m15[-1]["close"]
-        future_m15 = [c for c in all_m15 if c["time"] > signal_ts]
+            current_price = ctx_m15[-1]["close"]
+            future_m15 = [c for c in all_m15 if c["time"] > signal_ts]
 
-        # Range info dla Grok2
-        range_info = detect_range(ctx_h1)
+            # Range info dla Grok2
+            range_info = detect_range(ctx_h1)
 
-        # ── Grok (stary) ─────────────────────────────────────────────────────
-        grok1_result = None
-        if run_grok1:
-            user_msg_v1 = build_user_msg_grok(ctx_m15, ctx_h1, current_price)
-            grok1_result = call_grok_raw(GROK_PROMPT, user_msg_v1, use_web_search=True, label="grok")
+            # ── Grok (stary) ─────────────────────────────────────────────────
+            grok1_result = None
+            if run_grok1:
+                user_msg_v1 = build_user_msg_grok(ctx_m15, ctx_h1, current_price)
+                grok1_result = call_grok_raw(GROK_PROMPT, user_msg_v1, use_web_search=True, label="grok")
+                time.sleep(1)
+
+                outcome1 = process_and_write(label, "grok", grok1_result, future_m15, signal_ts, sheet_grok)
+                if outcome1:
+                    if outcome1["wynik"] != "no entry":
+                        stats["grok"]["alerts"] += 1
+                        if outcome1.get("delta") is not None:
+                            stats["grok"]["entries"] += 1
+                            stats["grok"]["delta_sum"] += outcome1["delta"]
+                        if outcome1.get("delta_tp1") is not None:
+                            stats["grok"]["delta_tp1_sum"] += outcome1["delta_tp1"]
+
+            # ── Grok2 (nowy) ─────────────────────────────────────────────────
+            user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info)
+            grok2_result = call_grok_raw(GROK2_PROMPT, user_msg_v2, use_web_search=False, label="grok2")
             time.sleep(1)
 
-            outcome1 = process_and_write(label, "grok", grok1_result, future_m15, signal_ts, sheet_grok)
-            if outcome1:
-                if outcome1["wynik"] != "no entry":
-                    stats["grok"]["alerts"] += 1
-                    if outcome1.get("delta") is not None:
-                        stats["grok"]["entries"] += 1
-                        stats["grok"]["delta_sum"] += outcome1["delta"]
-                    if outcome1.get("delta_tp1") is not None:
-                        stats["grok"]["delta_tp1_sum"] += outcome1["delta_tp1"]
+            outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2)
+            if outcome2:
+                if outcome2["wynik"] != "no entry":
+                    stats["grok2"]["alerts"] += 1
+                    if outcome2.get("delta") is not None:
+                        stats["grok2"]["entries"] += 1
+                        stats["grok2"]["delta_sum"] += outcome2["delta"]
+                    if outcome2.get("delta_tp1") is not None:
+                        stats["grok2"]["delta_tp1_sum"] += outcome2["delta_tp1"]
 
-        # ── Grok2 (nowy) ─────────────────────────────────────────────────────
-        user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info)
-        grok2_result = call_grok_raw(GROK2_PROMPT, user_msg_v2, use_web_search=False, label="grok2")
-        time.sleep(1)
-
-        outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2)
-        if outcome2:
-            if outcome2["wynik"] != "no entry":
-                stats["grok2"]["alerts"] += 1
-                if outcome2.get("delta") is not None:
-                    stats["grok2"]["entries"] += 1
-                    stats["grok2"]["delta_sum"] += outcome2["delta"]
-                if outcome2.get("delta_tp1") is not None:
-                    stats["grok2"]["delta_tp1_sum"] += outcome2["delta_tp1"]
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            print(f"  [BŁĄD] Iteracja {i+1} ({label}) pominięta: {exc}")
+            errors += 1
+            if errors >= 5:
+                print(f"\n[ABORT] Zbyt wiele błędów ({errors}), przerywam.")
+                break
+            time.sleep(2)
 
     # ── 7. Podsumowanie ──────────────────────────────────────────────────────
     print("\n" + "=" * 60)
