@@ -1096,85 +1096,103 @@ def detect_market_regime(
     """
     Rozpoznaje reżim rynkowy: CONSOLIDATION / BREAKOUT_UP / BREAKOUT_DOWN.
 
-    Używa M15 (szybka detekcja) + H1 (zakres referencyjny).
-    Zwraca dict z: regime, support, resistance, details.
+    Zakres referencyjny = H1[-40:-8] (pomija ostatnie 8h żeby nie przesuwał się
+    razem z trendem). Porównuje aktualną cenę z tym stabilnym zakresem.
     """
-    rng = detect_range(candles_h1, n=32)
-    support = rng["support"]
-    resistance = rng["resistance"]
-    rng_size = rng["range_size"]
+    # Zakres REFERENCYJNY — starsze świece, nie obejmuje ostatnich 8h
+    if len(candles_h1) < 20:
+        rng = detect_range(candles_h1, n=min(len(candles_h1), 32))
+        ref_support = rng["support"]
+        ref_resistance = rng["resistance"]
+    else:
+        ref_candles = candles_h1[-40:-8] if len(candles_h1) >= 40 else candles_h1[:-8]
+        ref_resistance = max(c["high"] for c in ref_candles)
+        ref_support = min(c["low"] for c in ref_candles)
 
+    rng_size = ref_resistance - ref_support
     if rng_size <= 0:
-        return {"regime": "CONSOLIDATION", **rng, "details": "brak zakresu"}
+        return {"regime": "CONSOLIDATION", "support": ref_support, "resistance": ref_resistance,
+                "range_size": 0, "details": "brak zakresu"}
 
     # ── Volume: średnia z ostatnich 10 M15 vs bieżąca ────────────────────────
     recent_m15 = candles_m15[-12:]
     avg_vol = sum(c["volume"] for c in recent_m15[:-2]) / max(len(recent_m15[:-2]), 1)
-    last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2  # avg z ostatnich 2 świec
+    last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Sygnał 1: Cena zamknięcia M15 poza zakresem ──────────────────────────
+    # ── Sygnał 1: Cena poza zakresem referencyjnym ───────────────────────────
     last_3_closes = [c["close"] for c in candles_m15[-3:]]
-    closes_below = sum(1 for c in last_3_closes if c < support)
-    closes_above = sum(1 for c in last_3_closes if c > resistance)
+    closes_below = sum(1 for c in last_3_closes if c < ref_support)
+    closes_above = sum(1 for c in last_3_closes if c > ref_resistance)
 
-    # ── Sygnał 2: Momentum — dystans od granicy zakresu ──────────────────────
-    pct_below_support = (support - current_price) / support * 100 if current_price < support else 0
-    pct_above_resistance = (current_price - resistance) / resistance * 100 if current_price > resistance else 0
+    # ── Sygnał 2: Momentum — dystans od granicy referencyjnej ────────────────
+    pct_below_support = (ref_support - current_price) / ref_support * 100 if current_price < ref_support else 0
+    pct_above_resistance = (current_price - ref_resistance) / ref_resistance * 100 if current_price > ref_resistance else 0
 
-    # ── Sygnał 3: Struktura H1 — lower lows / higher highs ──────────────────
-    h1_recent = candles_h1[-6:]
+    # ── Sygnał 3: Struktura H1 — lower lows / higher highs (ostatnie 8h) ────
+    h1_recent = candles_h1[-8:]
     h1_lows = [c["low"] for c in h1_recent]
     h1_highs = [c["high"] for c in h1_recent]
     lower_lows = sum(1 for i in range(1, len(h1_lows)) if h1_lows[i] < h1_lows[i - 1])
     higher_highs = sum(1 for i in range(1, len(h1_highs)) if h1_highs[i] > h1_highs[i - 1])
 
+    # ── Sygnał 4: Przesunięcie zakresu — najniższy dołek z ostatnich 8h vs ref support
+    recent_low = min(c["low"] for c in candles_h1[-8:])
+    recent_high = max(c["high"] for c in candles_h1[-8:])
+    range_shift_down = (ref_support - recent_low) / rng_size * 100 if recent_low < ref_support else 0
+    range_shift_up = (recent_high - ref_resistance) / rng_size * 100 if recent_high > ref_resistance else 0
+
     # ── Decyzja: BREAKOUT DOWN ────────────────────────────────────────────────
     breakdown_score = 0
     breakdown_details = []
 
-    if current_price < support:
+    if current_price < ref_support:
         breakdown_score += 1
-        breakdown_details.append(f"cena ${current_price:.2f} poniżej supportu ${support:.2f}")
+        breakdown_details.append(f"cena ${current_price:.2f} poniżej ref. supportu ${ref_support:.2f}")
     if closes_below >= 2:
         breakdown_score += 1
-        breakdown_details.append(f"{closes_below}/3 zamknięć M15 poniżej supportu")
+        breakdown_details.append(f"{closes_below}/3 zamknięć M15 poniżej ref. supportu")
     if pct_below_support >= 1.5:
         breakdown_score += 1
         breakdown_details.append(f"{pct_below_support:.1f}% poniżej supportu (momentum)")
-    if vol_ratio >= 1.5 and current_price < support:
+    if vol_ratio >= 1.5 and current_price < ref_support:
         breakdown_score += 1
         breakdown_details.append(f"volume {vol_ratio:.1f}x średniej na wybiciu")
-    if lower_lows >= 3:
+    if lower_lows >= 4:
         breakdown_score += 1
-        breakdown_details.append(f"{lower_lows}/5 coraz niższych dołków H1")
+        breakdown_details.append(f"{lower_lows}/7 coraz niższych dołków H1")
+    if range_shift_down >= 30:
+        breakdown_score += 1
+        breakdown_details.append(f"zakres przesunął się {range_shift_down:.0f}% w dół")
 
     # ── Decyzja: BREAKOUT UP ─────────────────────────────────────────────────
     breakup_score = 0
     breakup_details = []
 
-    if current_price > resistance:
+    if current_price > ref_resistance:
         breakup_score += 1
-        breakup_details.append(f"cena ${current_price:.2f} powyżej resistance ${resistance:.2f}")
+        breakup_details.append(f"cena ${current_price:.2f} powyżej ref. resistance ${ref_resistance:.2f}")
     if closes_above >= 2:
         breakup_score += 1
-        breakup_details.append(f"{closes_above}/3 zamknięć M15 powyżej resistance")
+        breakup_details.append(f"{closes_above}/3 zamknięć M15 powyżej ref. resistance")
     if pct_above_resistance >= 1.5:
         breakup_score += 1
         breakup_details.append(f"{pct_above_resistance:.1f}% powyżej resistance (momentum)")
-    if vol_ratio >= 1.5 and current_price > resistance:
+    if vol_ratio >= 1.5 and current_price > ref_resistance:
         breakup_score += 1
         breakup_details.append(f"volume {vol_ratio:.1f}x średniej na wybiciu")
-    if higher_highs >= 3:
+    if higher_highs >= 4:
         breakup_score += 1
-        breakup_details.append(f"{higher_highs}/5 coraz wyższych szczytów H1")
+        breakup_details.append(f"{higher_highs}/7 coraz wyższych szczytów H1")
+    if range_shift_up >= 30:
+        breakup_score += 1
+        breakup_details.append(f"zakres przesunął się {range_shift_up:.0f}% w górę")
 
     # ── Wynik ─────────────────────────────────────────────────────────────────
-    # Potrzeba min. 2 punktów żeby ogłosić breakout
     if breakdown_score >= 2 and breakdown_score > breakup_score:
         return {
             "regime": "BREAKOUT_DOWN",
-            "support": support, "resistance": resistance, "range_size": rng_size,
+            "support": ref_support, "resistance": ref_resistance, "range_size": round(rng_size, 2),
             "score": breakdown_score, "vol_ratio": round(vol_ratio, 1),
             "pct_outside": round(pct_below_support, 1),
             "details": "; ".join(breakdown_details),
@@ -1182,15 +1200,16 @@ def detect_market_regime(
     elif breakup_score >= 2 and breakup_score > breakdown_score:
         return {
             "regime": "BREAKOUT_UP",
-            "support": support, "resistance": resistance, "range_size": rng_size,
+            "support": ref_support, "resistance": ref_resistance, "range_size": round(rng_size, 2),
             "score": breakup_score, "vol_ratio": round(vol_ratio, 1),
             "pct_outside": round(pct_above_resistance, 1),
             "details": "; ".join(breakup_details),
         }
+
     else:
         return {
             "regime": "CONSOLIDATION",
-            "support": support, "resistance": resistance, "range_size": rng_size,
+            "support": ref_support, "resistance": ref_resistance, "range_size": round(rng_size, 2),
             "score": 0, "vol_ratio": round(vol_ratio, 1),
             "pct_outside": 0,
             "details": "brak sygnałów wybicia",
