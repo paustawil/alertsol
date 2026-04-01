@@ -1311,6 +1311,32 @@ _GROK_CREDIT_KEYWORDS = ("credit", "quota", "billing", "payment", "insufficient"
 _GROK_TIMEOUT_S = 120  # 2 minuty
 
 
+def _fetch_sentiment_line() -> str:
+    """Pobiera BTC/ETH z Bitget + F&G z alternative.me. Zwraca gotową linię sentymentu."""
+    parts = []
+    for sym, label in [("BTCUSDT", "BTC"), ("ETHUSDT", "ETH")]:
+        try:
+            r = requests.get(
+                "https://api.bitget.com/api/v2/mix/market/ticker",
+                params={"symbol": sym, "productType": "USDT-FUTURES"},
+                timeout=5,
+            )
+            r.raise_for_status()
+            data = r.json().get("data") or []
+            if data:
+                parts.append(f"{label} ${float(data[0]['lastPr']):,.0f}")
+        except Exception:
+            pass
+    try:
+        r = requests.get("https://api.alternative.me/fng/?limit=1&format=json", timeout=5)
+        r.raise_for_status()
+        entry = r.json()["data"][0]
+        parts.append(f"Fear & Greed: {entry['value']}/100 ({entry['value_classification']})")
+    except Exception:
+        pass
+    return " | ".join(parts) if parts else "brak danych sentymentu"
+
+
 def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
     if not XAI_KEY:
         print("[grok] Brak klucza API.")
@@ -1324,8 +1350,30 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
         f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
         for c in candles_h1[-24:]
     )
+
+    # Sentyment z Bitget + F&G
+    sentiment_line = _fetch_sentiment_line()
+
+    # Pozycja w zakresie H1
+    rng = detect_range(candles_h1)
+    rng_size = rng["range_size"]
+    if rng_size > 0:
+        range_pos = max(0.0, min(100.0, (current_price - rng["support"]) / rng_size * 100))
+    else:
+        range_pos = 50.0
+    if range_pos > 80:
+        range_label = "blisko resistance"
+    elif range_pos < 20:
+        range_label = "blisko supportu"
+    else:
+        range_label = "środek zakresu"
+
     user_msg = (
-        f"Aktualna cena SOL z moich danych: ${current_price:.2f}\n\n"
+        f"Aktualne dane z Bitget: {sentiment_line}\n"
+        f"Aktualna cena SOL: ${current_price:.2f}\n\n"
+        f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
+        f"(range ${rng_size:.2f})\n"
+        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
@@ -1333,10 +1381,9 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
     def _call() -> str:
         from xai_sdk import Client as XaiClient
         from xai_sdk.chat import system as xai_system, user as xai_user
-        from xai_sdk.tools import web_search
         client = XaiClient(api_key=XAI_KEY)
-        chat   = client.chat.create(model="grok-4", tools=[web_search()])
-        chat.append(xai_system(GROK_PROMPT))
+        chat   = client.chat.create(model="grok-4")
+        chat.append(xai_system(GROK2_PROMPT))
         chat.append(xai_user(user_msg))
         return chat.sample().content.strip()
 
@@ -2229,8 +2276,8 @@ def main():
     else:
         print("[gpt] Pominięty (ENABLE_GPT=False).")
 
-    # ── 4. Grok (live search — sam pobiera BTC/ETH/F&G) ───────────────────────
-    print("[grok] Wysylam dane do analizy (live search wlaczony)...")
+    # ── 4. Grok (Grok2 prompt — sentyment z Bitget + kontekst strukturalny) ──
+    print("[grok] Wysylam dane do analizy (Grok2 prompt)...")
     grok_result = call_grok(candles_m15, candles_h1, current)
 
     if grok_result:
