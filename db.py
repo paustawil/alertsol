@@ -449,7 +449,9 @@ def get_summary_stats() -> dict:
             cur.execute(
                 """
                 SELECT model,
-                       COUNT(*) FILTER (WHERE resolved = TRUE)              AS total,
+                       COUNT(*)                                              AS all_setups,
+                       COUNT(*) FILTER (WHERE resolved = TRUE
+                           AND result IN ('TP1','TP2','TP1+BE','SL'))        AS entered,
                        ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
                                                                              AS pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE
@@ -482,3 +484,68 @@ def get_recent_resolved(limit: int = 20) -> list[dict]:
                 (limit,),
             )
             return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def get_resolved_filtered(
+    results: list[str] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Zwraca zamknięte setupy z filtrami + total count."""
+    where = ["resolved = TRUE"]
+    params: dict = {}
+
+    if results:
+        where.append("result = ANY(%(results)s)")
+        params["results"] = results
+
+    if date_from:
+        where.append("resolved_at >= %(date_from)s::date")
+        params["date_from"] = date_from
+
+    if date_to:
+        where.append("resolved_at < (%(date_to)s::date + interval '1 day')")
+        params["date_to"] = date_to
+
+    where_sql = " AND ".join(where)
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT COUNT(*) AS cnt FROM setups WHERE {where_sql}", params)
+            total = cur.fetchone()["cnt"]
+
+            cur.execute(
+                f"""
+                SELECT setup_id, alert_time, model, direction, score,
+                       result, avg_entry, avg_exit, pnl_usd, pnl_pct,
+                       exit_time, entries, tps, sl, sl_after_tp1,
+                       exchange_qty_full, exchange_qty_half,
+                       hypo_result, hypo_pnl_usd
+                FROM setups
+                WHERE {where_sql}
+                ORDER BY resolved_at DESC
+                LIMIT %(limit)s OFFSET %(offset)s
+                """,
+                {**params, "limit": limit, "offset": offset},
+            )
+            rows = [_row_to_dict(r) for r in cur.fetchall()]
+
+    return {"total": total, "rows": rows}
+
+
+def save_hypo_result(setup_id: int, hypo_result: str, hypo_pnl_usd: float | None) -> None:
+    """Zapisuje hipotetyczny wynik dla setupu który nie weszął."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE setups
+                SET hypo_result  = %(hypo_result)s,
+                    hypo_pnl_usd = %(hypo_pnl_usd)s
+                WHERE setup_id = %(setup_id)s
+                """,
+                {"setup_id": setup_id, "hypo_result": hypo_result,
+                 "hypo_pnl_usd": hypo_pnl_usd},
+            )
