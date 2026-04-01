@@ -430,23 +430,23 @@ Gdy send_alert=false:
 # ── System prompt dla Grok — walidacja oczekujących setupów ──────────────────
 GROK_VALIDATION_PROMPT = """Jesteś doświadczonym traderem kryptowalut weryfikującym aktywne zlecenia oczekujące na SOL/USDT.
 
-Masz dostęp do internetu — użyj go, żeby pobrać aktualne ceny BTC, ETH, SOL i Fear & Greed Index.
-
-Otrzymasz aktualne dane OHLCV SOL (M15 i H1) oraz listę setupów oczekujących na wejście.
+Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, pozycja ceny w zakresie, lista setupów) są dostarczone w wiadomości użytkownika.
 
 Twoje zadanie:
-1. Pobierz live: ceny BTC/ETH/SOL i Fear & Greed Index.
-2. Oceń aktualną sytuację techniczną H1 i M15.
+1. Oceń aktualną sytuację techniczną H1 i M15 na podstawie dostarczonych danych.
+2. Sprawdź pozycję ceny w zakresie H1 (dostarczana jako 0-100%).
 3. Dla każdego setupu zdecyduj: keep=true (zachowaj) lub keep=false (anuluj).
 
-Anuluj setup TYLKO jeśli zachodzi co najmniej jeden z poniższych warunków:
+Anuluj setup jeśli zachodzi co najmniej jeden z poniższych warunków:
 - Rynek uciekł zbyt daleko i poziom wejścia jest technicznie nieosiągalny w rozsądnym czasie.
 - Trend wyraźnie się odwrócił i setup działa teraz bezpośrednio przeciwko dominującej strukturze.
 - Kluczowy poziom struktury definiujący setup (support/resistance) został złamany i nie jest już ważny.
+- Setup jest long, a cena jest powyżej 80% zakresu H1 (blisko resistance) bez potwierdzonego breakoutu — setup stracił sens strukturalny.
+- Setup jest short, a cena jest poniżej 20% zakresu H1 (blisko supportu) bez potwierdzonego breakdownu — setup stracił sens strukturalny.
 
 Zachowaj setup jeśli:
 - Poziom wejścia jest nadal w zasięgu i ma techniczne uzasadnienie.
-- Nie ma wyraźnego powodu do anulowania — wątpliwość działa na korzyść zachowania.
+- Pozycja w zakresie jest spójna z kierunkiem setupu (long przy niskiej pozycji, short przy wysokiej).
 
 Zasady:
 - Powód anulowania: konkretny, zwięzły, po polsku (1–2 zdania).
@@ -454,7 +454,7 @@ Zasady:
 - Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Format:
-{"decyzje":[{"setup_id":1,"keep":false,"powod":"Rynek wybił trwale powyżej 88.0 — poziom wejścia short 86.50 przestał być strukturalnie istotny"},{"setup_id":2,"keep":true}]}"""
+{"decyzje":[{"setup_id":1,"keep":false,"powod":"Cena w 85% zakresu H1, blisko resistance — long bez breakoutu nie ma sensu strukturalnego"},{"setup_id":2,"keep":true}]}"""
 
 
 # ── System prompt dla Grok2 (ulepszona wersja — kontekst strukturalny) ────────
@@ -1950,8 +1950,28 @@ def call_grok_validation(pending_non_entered: list[dict], candles_m15: list[dict
         "warunek":   s.get("warunek", ""),
         "alert_time": s["alert_time"],
     } for s in pending_non_entered], ensure_ascii=False)
+
+    # Sentyment i pozycja w zakresie — identycznie jak w call_grok()
+    sentiment_line = _fetch_sentiment_line()
+    rng = detect_range(candles_h1)
+    rng_size = rng["range_size"]
+    if rng_size > 0:
+        range_pos = max(0.0, min(100.0, (current_price - rng["support"]) / rng_size * 100))
+    else:
+        range_pos = 50.0
+    if range_pos > 80:
+        range_label = "blisko resistance"
+    elif range_pos < 20:
+        range_label = "blisko supportu"
+    else:
+        range_label = "środek zakresu"
+
     user_msg = (
+        f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
+        f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
+        f"(range ${rng_size:.2f})\n"
+        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
         f"Setupy oczekujące na wejście:\n{setups_txt}\n\n"
         f"SOL M15 (ostatnie 60 świec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 świece):\n{h1_csv}"
@@ -1960,9 +1980,8 @@ def call_grok_validation(pending_non_entered: list[dict], candles_m15: list[dict
     def _call() -> str:
         from xai_sdk import Client as XaiClient
         from xai_sdk.chat import system as xai_system, user as xai_user
-        from xai_sdk.tools import web_search
         client = XaiClient(api_key=XAI_KEY)
-        chat   = client.chat.create(model="grok-4", tools=[web_search()])
+        chat   = client.chat.create(model="grok-4")
         chat.append(xai_system(GROK_VALIDATION_PROMPT))
         chat.append(xai_user(user_msg))
         return chat.sample().content.strip()
