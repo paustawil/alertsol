@@ -323,7 +323,7 @@ def dashboard():
       <div class="sub" id="ps-entry-detail"></div>
     </div>
     <div class="ind-card">
-      <div class="label">Win rate (TP1 / TP1+SL)</div>
+      <div class="label">Win rate (wygrane / uruchomione)</div>
       <div class="value" id="ps-win-rate">—</div>
       <div class="sub" id="ps-win-detail"></div>
     </div>
@@ -953,7 +953,7 @@ async function loadPeriodStats() {{
 
     // Win rate
     document.getElementById('ps-win-rate').textContent = d.win_rate.toFixed(1) + '%';
-    document.getElementById('ps-win-detail').textContent = d.tp1_count + ' TP1 / ' + (d.tp1_count + d.sl_count) + ' (TP1+SL)';
+    document.getElementById('ps-win-detail').textContent = d.wins + ' wygranych / ' + d.entered + ' uruchomionych';
 
     loading.textContent = '';
   }} catch(e) {{
