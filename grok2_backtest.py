@@ -759,18 +759,6 @@ def run_backtest() -> None:
                     print(f"  [grok2] BLOKADA: SHORT podczas BREAKOUT_UP → send_alert=false")
                     grok2_result["send_alert"] = False
 
-            # Trend guard: blokuj setupy przeciwko trendowi 48h (>3%)
-            if grok2_result and grok2_result.get("send_alert") and len(ctx_h1) >= 48:
-                bias = grok2_result.get("bias", "neutral")
-                price_48h = ctx_h1[-48]["close"]
-                trend_pct = (current_price - price_48h) / price_48h * 100
-                if trend_pct <= -3.0 and bias == "long":
-                    print(f"  [grok2] TREND GUARD: LONG przy 48h trend {trend_pct:+.1f}% → send_alert=false")
-                    grok2_result["send_alert"] = False
-                elif trend_pct >= 3.0 and bias == "short":
-                    print(f"  [grok2] TREND GUARD: SHORT przy 48h trend {trend_pct:+.1f}% → send_alert=false")
-                    grok2_result["send_alert"] = False
-
             outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2)
             if outcome2:
                 if outcome2["wynik"] != "no entry":
