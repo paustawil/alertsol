@@ -38,7 +38,11 @@ SHEET_HEADER = [
 
 
 # ── Prompty (importowane z sol_alert.py) ─────────────────────────────────────
-from sol_alert import GROK_PROMPT, GROK2_PROMPT
+from sol_alert import (
+    GROK_PROMPT, GROK2_PROMPT,
+    detect_market_regime, countertrend_bias_threshold, _build_regime_line,
+    MIN_GROK_BIAS_PROC,
+)
 
 
 # ── Pobieranie danych sentymentu ─────────────────────────────────────────────
@@ -292,8 +296,9 @@ def build_user_msg_grok2(
     current_price: float,
     sentiment_line: str,
     range_info: dict,
+    regime: dict | None = None,
 ) -> str:
-    """User message dla Grok2 (z sentymentem, pozycją w zakresie, bez web search)."""
+    """User message dla Grok2 (z sentymentem, pozycją w zakresie, reżimem, bez web search)."""
     m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
         f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
         for c in candles_m15[-60:]
@@ -318,12 +323,18 @@ def build_user_msg_grok2(
     else:
         range_label = "środek zakresu"
 
+    # Reżim rynkowy
+    if regime is None:
+        regime = detect_market_regime(candles_m15, candles_h1, current_price)
+    regime_line = _build_regime_line(regime)
+
     return (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
         f"Zakres H1 (ostatnie 32 świece): support ${range_info['support']:.2f} — resistance ${range_info['resistance']:.2f} "
         f"(range ${rng_size:.2f})\n"
-        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
+        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n"
+        f"{regime_line}\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
@@ -519,6 +530,7 @@ def process_and_write(
     future_m15: list[dict],
     signal_ts: int,
     sheet: gspread.Worksheet,
+    regime: dict | None = None,
 ) -> dict | None:
     """Przetwarza wynik Groka, ewaluuje outcome i zapisuje do arkusza. Zwraca outcome."""
     if grok_result is None:
@@ -529,6 +541,14 @@ def process_and_write(
     send_alert = grok_result.get("send_alert", False)
     bias       = grok_result.get("bias", "neutral")
     bias_proc  = grok_result.get("bias_proc", 0)
+
+    # Graduated counter-trend filter (only for Grok2 with regime data)
+    if send_alert and regime is not None and bias != "neutral":
+        min_bias = countertrend_bias_threshold(regime, bias)
+        if bias_proc < min_bias:
+            ct_label = " (kontr-trend)" if min_bias > MIN_GROK_BIAS_PROC else ""
+            print(f"  [{model_label}] Odrzucono: bias_proc={bias_proc}% < próg {min_bias}%{ct_label}")
+            send_alert = False
 
     print(f"  [{model_label}] send_alert={send_alert} | bias={bias} ({bias_proc}%)")
 
@@ -706,8 +726,9 @@ def run_backtest() -> None:
             current_price = ctx_m15[-1]["close"]
             future_m15 = [c for c in all_m15 if c["time"] > signal_ts]
 
-            # Range info dla Grok2
+            # Range info + regime dla Grok2
             range_info = detect_range(ctx_h1)
+            regime = detect_market_regime(ctx_m15, ctx_h1, current_price)
 
             # ── Grok (stary) ─────────────────────────────────────────────────
             grok1_result = None
@@ -728,11 +749,11 @@ def run_backtest() -> None:
 
             # ── Grok2 (nowy) ─────────────────────────────────────────────────
             sentiment_line = build_sentiment_line_historical(btc_h1, eth_h1, fg_history, signal_ts)
-            user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info)
+            user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info, regime=regime)
             grok2_result = call_grok_raw(GROK2_PROMPT, user_msg_v2, use_web_search=False, label="grok2")
             time.sleep(1)
 
-            outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2)
+            outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2, regime=regime)
             if outcome2:
                 if outcome2["wynik"] != "no entry":
                     stats["grok2"]["alerts"] += 1

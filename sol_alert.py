@@ -493,13 +493,25 @@ Zasady:
   c) Widzisz wyraźny, konkretny setup z jasnym entry, SL i TP.
   d) Setup NIE jest kontynuacją M15 prosto w resistance (long) lub support (short) na H1.
 - Przy bocznym rynku, choppingu, sprzecznych sygnałach H1/M15 lub niskim przekonaniu — send_alert=false.
+- REŻIM RYNKOWY — w danych wejściowych podany jest aktualny reżim (KONSOLIDACJA / BREAKOUT DOWN / BREAKOUT UP z siłą 0-10):
+  - KONSOLIDACJA: normalne zasady, szukaj setupów od S/R w obu kierunkach.
+  - BREAKOUT DOWN: rynek w aktywnym trendzie spadkowym. Priorytet: setupy SHORT (z trendem) — szukaj pullbacków do wybitego supportu, retestów, kontynuacji. Setupy LONG (kontr-trend) dopuszczalne TYLKO gdy widzisz KONKRETNE sygnały odwrócenia:
+    * Volume spike na świecy odrzucenia z długim knotem dolnym
+    * Dywergencja bycza RSI/MACD na M15 i H1
+    * Silna strefa popytu z wyraźną reakcją cenową (nie sam "pullback do poziomu")
+    * Przy kontr-trendzie: bias_proc musi uczciwie odzwierciedlać niepewność — nie zawyżaj.
+  - BREAKOUT UP: analogicznie — priorytet LONG (z trendem). Setupy SHORT (kontr-trend) dopuszczalne TYLKO z konkretnymi sygnałami odwrócenia:
+    * Volume spike na świecy odrzucenia z długim knotem górnym
+    * Dywergencja niedźwiedzia RSI/MACD na M15 i H1
+    * Silna strefa podaży z wyraźną reakcją cenową
+    * Przy kontr-trendzie: bias_proc musi uczciwie odzwierciedlać niepewność — nie zawyżaj.
 - tf_aligned: Oceń czy H1 i M15 pokazują ten sam kierunek. true = zgodne, false = sprzeczne lub jeden neutralny.
 - sl_after_tp1: Po osiągnięciu TP1 SL należy przesunąć. Znajdź ostatni strukturalny support (long) lub resistance (short) między W1 a TP1. Jeśli taki poziom istnieje i jest w strefie zysku (powyżej W1 dla long, poniżej W1 dla short) — użyj go jako sl_after_tp1. Jeśli nie — użyj W1 (break-even). Zawsze podaj tę wartość gdy send_alert=true.
 
 Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Gdy send_alert=true:
-{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem pozycji w zakresie","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem pozycji w zakresie i reżimu rynkowego","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
 
 Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
@@ -1233,6 +1245,31 @@ def detect_market_regime(
         }
 
 
+def countertrend_bias_threshold(regime: dict, bias: str) -> int:
+    """Minimalny bias_proc dla setupu w danym reżimie.
+
+    Z trendem → normalny próg (MIN_GROK_BIAS_PROC = 65).
+    Kontr-trend → graduated wyższy próg zależnie od siły breakoutu.
+    """
+    regime_name = regime.get("regime", "CONSOLIDATION")
+    score = regime.get("score", 0)
+
+    is_countertrend = (
+        (regime_name == "BREAKOUT_DOWN" and bias == "long")
+        or (regime_name == "BREAKOUT_UP" and bias == "short")
+    )
+
+    if not is_countertrend:
+        return MIN_GROK_BIAS_PROC  # 65
+
+    if score >= 6:
+        return 85
+    elif score >= 4:
+        return 80
+    else:
+        return 75  # score 2-3
+
+
 # ── Punktacja algorytmu ───────────────────────────────────────────────────────
 def score_range_size(size: float) -> int:
     if 1.2 <= size <= 2.0: return 3
@@ -1499,7 +1536,28 @@ def _fetch_sentiment_line() -> str:
     return " | ".join(parts) if parts else "brak danych sentymentu"
 
 
-def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+def _build_regime_line(regime: dict) -> str:
+    """Buduje linię opisu reżimu rynkowego do user message dla Groka."""
+    regime_name = regime["regime"]
+    score = regime.get("score", 0)
+    if regime_name == "CONSOLIDATION":
+        return "Reżim rynkowy: KONSOLIDACJA — cena wewnątrz zakresu referencyjnego."
+    elif regime_name == "BREAKOUT_DOWN":
+        return (
+            f"Reżim rynkowy: BREAKOUT DOWN (siła: {score}/10) — "
+            f"cena {regime.get('pct_outside', 0):.1f}% poniżej ref. supportu ${regime['support']:.2f}. "
+            f"Sygnały: {regime.get('details', '')}."
+        )
+    else:  # BREAKOUT_UP
+        return (
+            f"Reżim rynkowy: BREAKOUT UP (siła: {score}/10) — "
+            f"cena {regime.get('pct_outside', 0):.1f}% powyżej ref. resistance ${regime['resistance']:.2f}. "
+            f"Sygnały: {regime.get('details', '')}."
+        )
+
+
+def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float,
+              regime: dict | None = None) -> dict | None:
     if not XAI_KEY:
         print("[grok] Brak klucza API.")
         return None
@@ -1530,12 +1588,18 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
     else:
         range_label = "środek zakresu"
 
+    # Reżim rynkowy
+    if regime is None:
+        regime = detect_market_regime(candles_m15, candles_h1, current_price)
+    regime_line = _build_regime_line(regime)
+
     user_msg = (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
         f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
         f"(range ${rng_size:.2f})\n"
-        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
+        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n"
+        f"{regime_line}\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
@@ -2482,7 +2546,7 @@ def breakout_scan():
     # ZAWSZE triggeruj Groka przy breakoucie — save_pending odrzuci duplikaty
     print(f"[breakout-scan] {regime['regime']} wykryty — wywołuję Groka...")
     candles_m15_full = fetch_klines(SYMBOL, "15m", limit=100)
-    grok_result = call_grok(candles_m15_full, candles_h1, current)
+    grok_result = call_grok(candles_m15_full, candles_h1, current, regime=regime)
 
     if grok_result:
         bias = grok_result.get("bias", "neutral")
@@ -2490,7 +2554,14 @@ def breakout_scan():
         bias_proc = grok_result.get("bias_proc", 0)
         print(f"[breakout-scan] Grok: {bias} ({bias_proc}%) send_alert={send_alert}")
 
-        if send_alert and bias_proc >= MIN_GROK_BIAS_PROC and bias != "neutral":
+        # Graduated counter-trend filter
+        min_bias = countertrend_bias_threshold(regime, bias)
+        if send_alert and bias_proc < min_bias:
+            ct_label = " (kontr-trend)" if min_bias > MIN_GROK_BIAS_PROC else ""
+            print(f"[breakout-scan] Odrzucono: bias_proc={bias_proc}% < próg {min_bias}%{ct_label}")
+            send_alert = False
+
+        if send_alert and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])
             entries = [w["poziom"] for w in wejscia if "poziom" in w]
             if entries:
@@ -2654,7 +2725,7 @@ def main():
 
     # ── 4. Grok (Grok2 prompt — sentyment z Bitget + kontekst strukturalny) ──
     print("[grok] Wysylam dane do analizy (Grok2 prompt)...")
-    grok_result = call_grok(candles_m15, candles_h1, current)
+    grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
 
     if grok_result:
         bias       = grok_result.get("bias", "neutral")
@@ -2663,9 +2734,11 @@ def main():
         tf_aligned = grok_result.get("tf_aligned", True)
         print(f"[grok] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
 
-        # Filtr zawahania: odrzuć setup jeśli przekonanie za niskie
-        if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
-            print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnał.")
+        # Graduated counter-trend filter: wyższy próg dla kontr-trendu w breakoucie
+        min_bias = countertrend_bias_threshold(regime, bias)
+        if send_alert and bias_proc < min_bias:
+            ct_label = " (kontr-trend)" if min_bias > MIN_GROK_BIAS_PROC else ""
+            print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {min_bias}%{ct_label} — zbyt niepewny sygnał.")
             send_alert = False
 
         if send_alert and bias != "neutral":
