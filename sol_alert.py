@@ -1142,6 +1142,12 @@ def detect_market_regime(
     range_shift_down = (ref_support - recent_low) / rng_size * 100 if recent_low < ref_support else 0
     range_shift_up = (recent_high - ref_resistance) / rng_size * 100 if recent_high > ref_resistance else 0
 
+    # ── Sygnał 5: Trend 24h/48h — łapie utrzymujący się trend ────────────────
+    price_24h_ago = candles_h1[-24]["close"] if len(candles_h1) >= 24 else candles_h1[0]["close"]
+    price_48h_ago = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
+    change_24h = (current_price - price_24h_ago) / price_24h_ago * 100
+    change_48h = (current_price - price_48h_ago) / price_48h_ago * 100
+
     # ── Decyzja: BREAKOUT DOWN ────────────────────────────────────────────────
     breakdown_score = 0
     breakdown_details = []
@@ -1164,6 +1170,18 @@ def detect_market_regime(
     if range_shift_down >= 30:
         breakdown_score += 1
         breakdown_details.append(f"zakres przesunął się {range_shift_down:.0f}% w dół")
+    if change_24h <= -3.0:
+        breakdown_score += 2
+        breakdown_details.append(f"trend 24h: {change_24h:+.1f}% (silny spadek)")
+    elif change_24h <= -1.5:
+        breakdown_score += 1
+        breakdown_details.append(f"trend 24h: {change_24h:+.1f}%")
+    if change_48h <= -5.0:
+        breakdown_score += 2
+        breakdown_details.append(f"trend 48h: {change_48h:+.1f}% (utrzymujący się spadek)")
+    elif change_48h <= -3.0:
+        breakdown_score += 1
+        breakdown_details.append(f"trend 48h: {change_48h:+.1f}%")
 
     # ── Decyzja: BREAKOUT UP ─────────────────────────────────────────────────
     breakup_score = 0
@@ -1187,6 +1205,18 @@ def detect_market_regime(
     if range_shift_up >= 30:
         breakup_score += 1
         breakup_details.append(f"zakres przesunął się {range_shift_up:.0f}% w górę")
+    if change_24h >= 3.0:
+        breakup_score += 2
+        breakup_details.append(f"trend 24h: {change_24h:+.1f}% (silny wzrost)")
+    elif change_24h >= 1.5:
+        breakup_score += 1
+        breakup_details.append(f"trend 24h: {change_24h:+.1f}%")
+    if change_48h >= 5.0:
+        breakup_score += 2
+        breakup_details.append(f"trend 48h: {change_48h:+.1f}% (utrzymujący się wzrost)")
+    elif change_48h >= 3.0:
+        breakup_score += 1
+        breakup_details.append(f"trend 48h: {change_48h:+.1f}%")
 
     # ── Wynik ─────────────────────────────────────────────────────────────────
     if breakdown_score >= 2 and breakdown_score > breakup_score:
