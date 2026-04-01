@@ -2336,14 +2336,14 @@ def _migrate_setup_ids():
 
 # ── Breakout scanner (szybki, co 2-3 min) ────────────────────────────────────
 
-# Cooldown: nie wysyłaj powiadomienia o tym samym breakoucie częściej niż co 30 min
-_last_breakout_alert_ts: float = 0.0
-_last_breakout_regime: str = ""
+# Cooldown na powiadomienie Telegram (nie spamuj tym samym reżimem częściej niż co 30 min)
+_last_breakout_tg_ts: float = 0.0
+_last_breakout_tg_regime: str = ""
 
 def breakout_scan():
     """Szybki skan breakoutowy — sprawdza cenę i volume, bez wywołania Groka.
-    Jeśli wykryje breakout → wysyła Telegram i triggeruje pełne wywołanie Groka."""
-    global _last_breakout_alert_ts, _last_breakout_regime
+    Jeśli wykryje breakout → powiadomienie Telegram (z cooldownem) + ZAWSZE triggeruje Groka."""
+    global _last_breakout_tg_ts, _last_breakout_tg_regime
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=20)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
@@ -2353,35 +2353,32 @@ def breakout_scan():
     if regime["regime"] == "CONSOLIDATION":
         return  # Nic nie rób
 
-    # Cooldown: ten sam reżim w ciągu 30 min → pomiń
+    # Telegram notification — cooldown 30 min na ten sam reżim (żeby nie spamować)
     now = time.time()
-    if (regime["regime"] == _last_breakout_regime
-            and now - _last_breakout_alert_ts < 1800):
-        return
+    if not (regime["regime"] == _last_breakout_tg_regime
+            and now - _last_breakout_tg_ts < 1800):
+        _last_breakout_tg_ts = now
+        _last_breakout_tg_regime = regime["regime"]
 
-    _last_breakout_alert_ts = now
-    _last_breakout_regime = regime["regime"]
+        if regime["regime"] == "BREAKOUT_DOWN":
+            icon = "🔻"
+            dir_label = "DOWN"
+            level_label = f"Support ${regime['support']:.2f} przebity"
+        else:
+            icon = "🔺"
+            dir_label = "UP"
+            level_label = f"Resistance ${regime['resistance']:.2f} przebity"
 
-    # Wyślij powiadomienie na Telegram
-    if regime["regime"] == "BREAKOUT_DOWN":
-        icon = "🔻"
-        dir_label = "DOWN"
-        level_label = f"Support ${regime['support']:.2f} przebity"
-    else:
-        icon = "🔺"
-        dir_label = "UP"
-        level_label = f"Resistance ${regime['resistance']:.2f} przebity"
+        msg = (
+            f"{icon} <b>BREAKOUT {dir_label} — SOL/USDT</b>\n\n"
+            f"{level_label} (cena ${current:.2f}, {regime['pct_outside']:.1f}% poza zakresem)\n"
+            f"Volume: {regime['vol_ratio']}x średniej\n"
+            f"Sygnały: {regime['details']}\n\n"
+            f"⏳ Triggeruję analizę Grok2..."
+        )
+        send_telegram(msg)
 
-    msg = (
-        f"{icon} <b>BREAKOUT {dir_label} — SOL/USDT</b>\n\n"
-        f"{level_label} (cena ${current:.2f}, {regime['pct_outside']:.1f}% poza zakresem)\n"
-        f"Volume: {regime['vol_ratio']}x średniej\n"
-        f"Sygnały: {regime['details']}\n\n"
-        f"⏳ Triggeruję analizę Grok2..."
-    )
-    send_telegram(msg)
-
-    # Triggeruj pełne wywołanie Groka
+    # ZAWSZE triggeruj Groka przy breakoucie — save_pending odrzuci duplikaty
     print(f"[breakout-scan] {regime['regime']} wykryty — wywołuję Groka...")
     candles_m15_full = fetch_klines(SYMBOL, "15m", limit=100)
     grok_result = call_grok(candles_m15_full, candles_h1, current)
