@@ -8,6 +8,7 @@ Wymaga zmiennej środowiskowej DATABASE_URL (Railway dostarcza automatycznie).
 import json
 import logging
 import os
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -22,7 +23,9 @@ log = logging.getLogger(__name__)
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 # Snapshot dla change-detection w save_pending_list()
-_baseline: dict[int, dict] = {}
+# Thread-local: każdy wątek (exchange_sync / sol_alert) ma własny baseline,
+# żeby równoczesne wywołania sync() nie nadpisywały sobie nawzajem snapshotu.
+_thread_local = threading.local()
 
 # Pola exchange_* monitorowane przez exchange_trader.py
 _EXCHANGE_FIELDS = [
@@ -141,9 +144,12 @@ def insert_setup(row: dict) -> int | None:
 
     with _conn() as conn:
         with conn.cursor() as cur:
-            # Atomiczny INSERT z dedup na poziomie DB — chroni przed race condition
-            # gdy Railway i GitHub Actions wywołują main() jednocześnie.
-            # Blokuje duplikaty: ten sam kierunek + poziom wejścia ±0.5 USD wśród aktywnych setupów.
+            # Advisory lock serializuje równoczesne INSERTy dla tego samego kierunku.
+            # Bez tego READ COMMITTED pozwala dwóm transakcjom (Railway + GitHub Actions)
+            # przejść WHERE NOT EXISTS jednocześnie i wstawić duplikat.
+            lock_key = f"insert_setup_{params.get('direction', '')}"
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+
             cur.execute(
                 """
                 INSERT INTO setups (
@@ -337,10 +343,10 @@ def load_pending() -> list[dict]:
     """
     Zwraca aktywne setupy i zapamiętuje snapshot do change-detection.
     Odpowiednik _load_pending() z exchange_trader.py.
+    Baseline jest thread-local — bezpieczny przy równoczesnych sync().
     """
-    global _baseline
     rows = get_active_setups()
-    _baseline = {r["setup_id"]: {f: r.get(f) for f in _EXCHANGE_FIELDS} for r in rows}
+    _thread_local.baseline = {r["setup_id"]: {f: r.get(f) for f in _EXCHANGE_FIELDS} for r in rows}
     return rows
 
 
@@ -349,11 +355,12 @@ def save_pending_list(pending: list[dict]) -> None:
     Zapisuje tylko te pola exchange_*, które zmieniły się względem snapshotu.
     Odpowiednik _save_pending() z exchange_trader.py.
     """
+    baseline_map = getattr(_thread_local, "baseline", {})
     for s in pending:
         sid = s.get("setup_id")
         if sid is None:
             continue
-        baseline = _baseline.get(sid, {})
+        baseline = baseline_map.get(sid, {})
         changed = {
             f: s[f]
             for f in _EXCHANGE_FIELDS
