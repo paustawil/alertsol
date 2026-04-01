@@ -512,45 +512,82 @@ def process_and_write(
 
 # ── Główna logika backtestu ──────────────────────────────────────────────────
 
+def _parse_dt(s: str) -> int:
+    """Parsuje datę 'YYYY-MM-DD HH:MM' (UTC) na unix timestamp."""
+    return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp())
+
+
 def run_backtest() -> None:
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--grok2-only", action="store_true",
                         help="Pomiń stary Grok — testuj tylko Grok2 (oszczędność kredytów)")
-    parser.add_argument("--hours", type=int, default=48,
-                        help="Ile godzin wstecz testować (domyślnie 48)")
-    parser.add_argument("--end-offset", type=int, default=0,
-                        help="Offset końca w godzinach od teraz (np. 48 = zacznij od miejsca gdzie skończył się poprzedni test)")
+    parser.add_argument("--from", dest="dt_from", type=str, default=None,
+                        help="Początek okresu UTC, np. '2026-03-25 00:00'")
+    parser.add_argument("--to", dest="dt_to", type=str, default=None,
+                        help="Koniec okresu UTC, np. '2026-03-28 00:00'")
+    parser.add_argument("--hours", type=int, default=None,
+                        help="Ile godzin wstecz od --to (lub od teraz). Ignorowane gdy podano --from.")
     parser.add_argument("--sheet-suffix", type=str, default="",
                         help="Sufiks nazwy arkusza (np. 'v2' → 'Grok2 test v2')")
     args = parser.parse_args()
 
     run_grok1 = not args.grok2_only
-    num_hours = args.hours
-    end_offset_h = args.end_offset
+    now_ts = int(time.time())
+
+    # ── Wyznacz zakres from/to ───────────────────────────────────────────────
+    if args.dt_from and args.dt_to:
+        from_ts = _parse_dt(args.dt_from)
+        to_ts   = _parse_dt(args.dt_to)
+    elif args.dt_from:
+        from_ts = _parse_dt(args.dt_from)
+        to_ts   = (now_ts // 3600) * 3600
+    elif args.dt_to:
+        to_ts   = _parse_dt(args.dt_to)
+        hours   = args.hours or 48
+        from_ts = to_ts - hours * 3600
+    else:
+        to_ts   = (now_ts // 3600) * 3600
+        hours   = args.hours or 48
+        from_ts = to_ts - hours * 3600
+
+    # Zaokrąglij do pełnych godzin
+    from_ts = ((from_ts + 3599) // 3600) * 3600  # ceil
+    to_ts   = (to_ts // 3600) * 3600              # floor
+
+    num_hours = (to_ts - from_ts) // 3600
+    if num_hours <= 0:
+        print(f"[BŁĄD] Nieprawidłowy zakres: {_ts_fmt(from_ts)} – {_ts_fmt(to_ts)}")
+        return
 
     print("=== Grok2 Backtest — start ===")
     if run_grok1:
         print("Tryb: Grok (stary) vs Grok2 (nowy)")
     else:
         print("Tryb: tylko Grok2 (--grok2-only)")
-    print(f"Okres: {num_hours}h wstecz, end-offset: {end_offset_h}h")
+    print(f"Okres: {_ts_fmt(from_ts)} – {_ts_fmt(to_ts)} ({num_hours}h, {num_hours} punktów)")
 
     # ── 1. Pobierz dane historyczne ──────────────────────────────────────────
-    now_ts = int(time.time())
-    end_ts = now_ts - end_offset_h * 3600
+    # Kontekst PRZED from_ts: 60 M15 (~15h) + 50 H1 (~2d)
+    # Outcome PO to_ts: 24h (ENTRY_WINDOW + OUTCOME_WINDOW)
+    outcome_margin_s = ENTRY_WINDOW_S + OUTCOME_WINDOW_S  # 48h
+    data_end_ts = to_ts + outcome_margin_s
 
-    # Potrzebujemy: 60 M15 kontekstu + num_hours*4 testowe + 24*4 outcome
-    m15_total = 60 + num_hours * 4 + 96 + 50  # zapas
-    # H1: 50 kontekstu + num_hours testowe + 24 outcome
-    h1_total = 50 + num_hours + 24 + 10  # zapas
+    # Nie możemy pobrać świec z przyszłości
+    if data_end_ts > now_ts:
+        data_end_ts = now_ts
+        margin_h = (data_end_ts - to_ts) / 3600
+        print(f"  ⚠ Outcome data ograniczona do {margin_h:.0f}h po ostatnim punkcie (brak przyszłych danych)")
+
+    m15_total = 60 + num_hours * 4 + (data_end_ts - to_ts) // 900 + 50
+    h1_total  = 50 + num_hours + (data_end_ts - to_ts) // 3600 + 10
 
     print(f"Pobieranie świec M15 ({m15_total} szt)...")
-    all_m15 = fetch_klines_paginated(SYMBOL, "15m", total=m15_total, end_ts_s=end_ts)
+    all_m15 = fetch_klines_paginated(SYMBOL, "15m", total=m15_total, end_ts_s=data_end_ts)
     print(f"  Pobrano {len(all_m15)} świec M15 ({_ts_fmt(all_m15[0]['time'])} – {_ts_fmt(all_m15[-1]['time'])})")
 
     print(f"Pobieranie świec H1 ({h1_total} szt)...")
-    all_h1 = fetch_klines_paginated(SYMBOL, "1h", total=h1_total, end_ts_s=end_ts)
+    all_h1 = fetch_klines_paginated(SYMBOL, "1h", total=h1_total, end_ts_s=data_end_ts)
     print(f"  Pobrano {len(all_h1)} świec H1 ({_ts_fmt(all_h1[0]['time'])} – {_ts_fmt(all_h1[-1]['time'])})")
 
     # ── 2. Pobierz sentyment (jeden raz) ─────────────────────────────────────
@@ -559,8 +596,7 @@ def run_backtest() -> None:
     print(f"  Sentyment: {sentiment_line}")
 
     # ── 3. Wyznacz punkty testowe ────────────────────────────────────────────
-    latest_full_hour = (end_ts // 3600) * 3600
-    test_hours = [latest_full_hour - i * 3600 for i in range(num_hours, 0, -1)]
+    test_hours = [from_ts + i * 3600 for i in range(num_hours)]
 
     # ── 4. Przygotuj arkusze ─────────────────────────────────────────────────
     sfx = f" {args.sheet_suffix}" if args.sheet_suffix else ""
