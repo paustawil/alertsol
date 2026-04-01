@@ -199,32 +199,6 @@ def _set_leverage(client: BitgetClient):
             log.warning(f"[exchange] set_leverage {hold_side}: {e}")
 
 
-# ── Dedup: sprawdź istniejące plan ordery na Bitget ──────────────────────────
-
-def _has_pending_plan_order(client: BitgetClient, side: str) -> bool:
-    """
-    Sprawdza czy na Bitget istnieje już aktywny plan order (normal_plan)
-    dla danego side ('buy'/'sell').  Zapobiega podwójnym zleceniom gdy
-    dwa procesy (Railway + GitHub Actions) złożą order dla dwóch setupów
-    powstałych z tego samego sygnału.
-    """
-    try:
-        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
-            "symbol":      SYMBOL,
-            "productType": PRODUCT_TYPE,
-            "planType":    "normal_plan",
-        })
-        if resp.get("code") == "00000":
-            for o in (resp["data"].get("entrustedList") or []):
-                if o.get("side") == side and o.get("tradeSide") == "open":
-                    log.warning(f"[exchange] Bitget ma już pending plan order {o['orderId']} "
-                                f"side={side} — pomijam duplikat")
-                    return True
-    except Exception as e:
-        log.warning(f"[exchange] _has_pending_plan_order({side}): {e}")
-    return False
-
-
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
 def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> str | None:
@@ -532,16 +506,6 @@ def sync():
                 print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
                 continue
             w1       = entries[0]
-            side     = "buy" if direction == "long" else "sell"
-            # Dedup na poziomie Bitget: jeśli istnieje już pending plan order
-            # na ten sam side, nie składaj kolejnego (chroni przed duplikatami
-            # powstałymi z race condition przy INSERT setupu).
-            if _has_pending_plan_order(client, side):
-                print(f"[exchange] {label}: duplikat na Bitget — zwalniam claim")
-                db.release_plan_order_claim(s["setup_id"])
-                s["exchange_done"] = True
-                modified = True
-                continue
             full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
             oid      = _place_entry_plan_order(client, s, full_qty)
             if oid:
