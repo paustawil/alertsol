@@ -254,6 +254,39 @@ def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> s
     return None
 
 
+def _place_market_entry(client: BitgetClient, s: dict, full_qty: float) -> str | None:
+    """
+    Składa market order gdy entry został już wykryty przez świece,
+    ale plan order nie został wcześniej złożony na Bitget (race condition).
+    Zwraca orderId lub None.
+    """
+    direction = s["direction"]
+    side      = "buy" if direction == "long" else "sell"
+
+    params = {
+        "symbol":      SYMBOL,
+        "productType": PRODUCT_TYPE,
+        "marginMode":  MARGIN_MODE,
+        "marginCoin":  MARGIN_COIN,
+        "size":        _fmt_qty(full_qty),
+        "side":        side,
+        "tradeSide":   "open",
+        "posSide":     direction,
+        "orderType":   "market",
+    }
+
+    try:
+        resp = client.post("/api/v2/mix/order/place-order", params)
+        if resp.get("code") == "00000":
+            oid = resp["data"]["orderId"]
+            print(f"[exchange] Market entry: {oid} | {side} {_fmt_qty(full_qty)} SOL (entry already hit)")
+            return oid
+        log.error(f"[exchange] place_market_entry: code={resp.get('code')} msg={resp.get('msg')}")
+    except Exception as e:
+        log.error(f"[exchange] place_market_entry: {e}")
+    return None
+
+
 def _place_tpsl_orders(
     client: BitgetClient,
     s: dict,
@@ -575,6 +608,32 @@ def _sync_inner():
                 print(f"[exchange] {label}: plan order złożony ({_fmt_qty(full_qty)} SOL @ W1={w1})")
             else:
                 # API call nie udał się — zwolnij rezerwację żeby następny sync() mógł spróbować
+                db.release_plan_order_claim(s["setup_id"])
+            continue
+
+        # ── Entry wykryty przez świece, ale brak zlecenia na Bitget — market order ─
+        if not shadow and not cancelled and not plan_oid and not pos_open and s.get("entry_hit_at") is not None:
+            if exchange_slot_taken:
+                print(f"[exchange] {label}: pominięty (market) — slot zajęty")
+                continue
+            if not db.claim_plan_order(s["setup_id"]):
+                print(f"[exchange] {label}: market order już zarezerwowany przez inny proces — pomijam")
+                continue
+            w1       = entries[0]
+            full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+            oid      = _place_market_entry(client, s, full_qty)
+            if oid:
+                s["exchange_plan_oid"]        = oid
+                s["exchange_qty_full"]        = _fmt_qty(full_qty)
+                s["exchange_qty_half"]        = _fmt_qty(_round_qty(full_qty / 2))
+                s["exchange_position_opened"] = True
+                modified = True
+                print(f"[exchange] {label}: market order wykonany ({_fmt_qty(full_qty)} SOL) — entry już trafiony")
+                # Od razu złóż TPSL
+                tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, full_qty)
+                s["exchange_tp1_oid"] = tp1_id
+                s["exchange_sl_oid"]  = sl_id
+            else:
                 db.release_plan_order_claim(s["setup_id"])
             continue
 
