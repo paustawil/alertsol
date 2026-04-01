@@ -249,12 +249,89 @@ def dashboard():
   .av-edit {{ display: none; }}
   tr.editing-tp .av-edit {{ display: inline; }}
   tr.editing-tp .av-view {{ display: none; }}
+
+  /* ── Indicators panel ──────────────────────────────────────────────── */
+  .indicators-panel {{ background: #222; border: 1px solid #444; border-radius: 8px; padding: 16px 20px; margin-bottom: 18px; }}
+  .indicators-panel h3 {{ margin: 0 0 10px 0; font-size: 1em; color: #80deea; }}
+  .ind-row {{ display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; }}
+  .ind-card {{ background: #2a2a2a; border: 1px solid #444; border-radius: 6px; padding: 8px 14px; min-width: 140px; }}
+  .ind-card .label {{ font-size: 0.75em; color: #888; margin-bottom: 2px; }}
+  .ind-card .value {{ font-size: 1.15em; font-weight: bold; color: #e0e0e0; }}
+  .ind-card .sub {{ font-size: 0.8em; color: #aaa; }}
+  .settings-input {{ background: #1a1a1a; color: #e0e0e0; border: 1px solid #555; padding: 3px 6px; font-family: monospace; font-size: 0.95em; width: 70px; border-radius: 3px; }}
+  .period-btn {{ background: #333; color: #aaa; border: 1px solid #555; padding: 3px 10px; cursor: pointer; font-family: monospace; font-size: 0.85em; border-radius: 3px; }}
+  .period-btn.active {{ background: #1a5276; color: #e0e0e0; border-color: #5dade2; }}
+  .period-btn:hover {{ background: #444; }}
+  .settings-save {{ background: #1a5276; color: #e0e0e0; border: 1px solid #5dade2; padding: 3px 12px; cursor: pointer; font-family: monospace; font-size: 0.85em; border-radius: 3px; }}
+  .settings-save:hover {{ background: #2471a3; }}
 </style></head><body>
 <h2>🤖 AlertSol Dashboard</h2>
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
 
+<!-- ── Ustawienia ──────────────────────────────────────────────────────── -->
+<div class="indicators-panel">
+  <h3>⚙️ Ustawienia</h3>
+  <div class="ind-row">
+    <div class="ind-card">
+      <div class="label">Kwota zlecenia (USDT)</div>
+      <div class="value"><input type="number" step="1" min="1" id="set-trade-usdt" class="settings-input" value="—"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Częstotliwość alertów (min)</div>
+      <div class="value"><input type="number" step="1" min="1" max="60" id="set-alert-interval" class="settings-input" value="—"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Maks. otwartych zleceń</div>
+      <div class="value"><input type="number" step="1" min="1" max="20" id="set-max-positions" class="settings-input" value="—"></div>
+    </div>
+    <div style="display:flex;align-items:flex-end">
+      <button class="settings-save" id="settings-save-btn" onclick="saveSettings()">Zapisz ustawienia</button>
+      <span id="settings-status" style="margin-left:8px;font-size:0.8em;color:#888"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Wyniki za okres ────────────────────────────────────────────────── -->
+<div class="indicators-panel">
+  <h3>📈 Wyniki
+    <span style="margin-left:14px">
+      <button class="period-btn active" data-period="24h" onclick="setPeriod('24h',this)">24h</button>
+      <button class="period-btn" data-period="1d" onclick="setPeriod('1d',this)">Dziś</button>
+      <button class="period-btn" data-period="7d" onclick="setPeriod('7d',this)">7 dni</button>
+      <button class="period-btn" data-period="30d" onclick="setPeriod('30d',this)">30 dni</button>
+    </span>
+    <span id="period-loading" style="margin-left:8px;font-size:0.7em;color:#888"></span>
+  </h3>
+  <div class="ind-row" id="period-stats-row">
+    <div class="ind-card">
+      <div class="label">Maks. zaangażowana kwota</div>
+      <div class="value" id="ps-max-capital">—</div>
+      <div class="sub" id="ps-max-capital-mult"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Średni dzienny zwrot</div>
+      <div class="value" id="ps-avg-daily">—</div>
+      <div class="sub" id="ps-avg-daily-mult"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Łączny dochód</div>
+      <div class="value" id="ps-total-income">—</div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Entry rate</div>
+      <div class="value" id="ps-entry-rate">—</div>
+      <div class="sub" id="ps-entry-detail"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">Win rate (TP1 / TP1+SL)</div>
+      <div class="value" id="ps-win-rate">—</div>
+      <div class="sub" id="ps-win-detail"></div>
+    </div>
+  </div>
+</div>
+
 <div>
-  <span class="stat">📊 Win rate: <b>{win_rate}</b></span>
+  <span class="stat">📊 Win rate (all-time): <b>{win_rate}</b></span>
   <span class="stat">💰 Łączny PnL: <b>{total_pnl}</b></span>
   <span class="stat">🎯 Aktywne: <b>{len(active)}</b></span>
   <span class="stat">✅ Zamknięte: <b>{stats.get('total_resolved', 0)}</b></span>
@@ -791,6 +868,101 @@ function exportCsv() {{
 
 loadHistory(true);
 // ── koniec historii ──────────────────────────────────────────────────────────
+
+// ── Ustawienia ──────────────────────────────────────────────────────────────
+async function loadSettings() {{
+  try {{
+    var resp = await fetch('/api/settings');
+    var data = await resp.json();
+    document.getElementById('set-trade-usdt').value = data.trade_usdt;
+    document.getElementById('set-alert-interval').value = data.alert_interval;
+    document.getElementById('set-max-positions').value = data.max_positions;
+  }} catch(e) {{
+    console.error('loadSettings:', e);
+  }}
+}}
+
+async function saveSettings() {{
+  var btn = document.getElementById('settings-save-btn');
+  var st  = document.getElementById('settings-status');
+  btn.disabled = true; btn.textContent = '...';
+  try {{
+    var body = {{
+      trade_usdt:     parseFloat(document.getElementById('set-trade-usdt').value) || null,
+      alert_interval: parseInt(document.getElementById('set-alert-interval').value) || null,
+      max_positions:  parseInt(document.getElementById('set-max-positions').value) || null,
+    }};
+    var resp = await fetch('/api/settings', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(body)
+    }});
+    var data = await resp.json();
+    if (data.ok) {{
+      st.textContent = '✓ Zapisano'; st.style.color = 'lightgreen';
+    }} else {{
+      st.textContent = '✗ Błąd'; st.style.color = 'salmon';
+    }}
+  }} catch(e) {{
+    st.textContent = '✗ ' + e.message; st.style.color = 'salmon';
+  }}
+  btn.disabled = false; btn.textContent = 'Zapisz ustawienia';
+  setTimeout(function() {{ st.textContent = ''; }}, 4000);
+}}
+
+loadSettings();
+
+// ── Wyniki za okres ─────────────────────────────────────────────────────────
+var currentPeriod = '24h';
+
+function setPeriod(p, btn) {{
+  currentPeriod = p;
+  document.querySelectorAll('.period-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  loadPeriodStats();
+}}
+
+async function loadPeriodStats() {{
+  var loading = document.getElementById('period-loading');
+  loading.textContent = 'ładowanie...';
+  try {{
+    var resp = await fetch('/api/period-stats?period=' + currentPeriod);
+    var d = await resp.json();
+
+    var fmt  = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2); }};
+    var clr  = function(v) {{ return v == null ? '#e0e0e0' : (v >= 0 ? 'lightgreen' : 'salmon'); }};
+    var tu   = d.trade_usdt || 100;
+
+    // Max capital
+    document.getElementById('ps-max-capital').textContent = '$' + d.max_capital.toFixed(0);
+    document.getElementById('ps-max-capital').style.color = '#e0e0e0';
+    document.getElementById('ps-max-capital-mult').textContent = d.max_capital_mult.toFixed(1) + 'x × $' + tu.toFixed(0) + ' (' + d.max_open_positions + ' poz.)';
+
+    // Avg daily
+    document.getElementById('ps-avg-daily').textContent = fmt(d.avg_daily_pnl) + ' $';
+    document.getElementById('ps-avg-daily').style.color = clr(d.avg_daily_pnl);
+    document.getElementById('ps-avg-daily-mult').textContent = (d.avg_daily_mult >= 0 ? '+' : '') + (d.avg_daily_mult * 100).toFixed(1) + '% kwoty';
+
+    // Total income
+    document.getElementById('ps-total-income').textContent = fmt(d.total_income) + ' $';
+    document.getElementById('ps-total-income').style.color = clr(d.total_income);
+
+    // Entry rate
+    document.getElementById('ps-entry-rate').textContent = d.entry_rate.toFixed(1) + '%';
+    document.getElementById('ps-entry-detail').textContent = d.entered + ' / ' + d.total_setups + ' zleceń';
+
+    // Win rate
+    document.getElementById('ps-win-rate').textContent = d.win_rate.toFixed(1) + '%';
+    document.getElementById('ps-win-detail').textContent = d.tp1_count + ' TP1 / ' + (d.tp1_count + d.sl_count) + ' (TP1+SL)';
+
+    loading.textContent = '';
+  }} catch(e) {{
+    loading.textContent = '⚠️ ' + e.message;
+  }}
+}}
+
+loadPeriodStats();
+// ── koniec wskaźników ───────────────────────────────────────────────────────
 </script>
 </html>"""
     return HTMLResponse(html)
@@ -1346,6 +1518,12 @@ class TpsUpdate(BaseModel):
     sl:  float | None = None
 
 
+class SettingsUpdate(BaseModel):
+    trade_usdt: float | None = None
+    alert_interval: int | None = None
+    max_positions: int | None = None
+
+
 @app.post("/api/update-tps/{setup_id}")
 def api_update_tps(setup_id: int, body: TpsUpdate):
     """Modyfikuje TP1 i/lub TP2 aktywnego setupu — aktualizuje DB i zlecenia na Bitget."""
@@ -1668,6 +1846,75 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         "avg_exit":  avg_exit,
         "pnl_usd":  round(pnl_usd, 2) if pnl_usd is not None else None,
     }
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    """Zwraca aktualne ustawienia systemu."""
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    max_positions = int(os.getenv("BITGET_MAX_POSITIONS", "5"))
+    # Alert interval: extract from scheduler job
+    alert_minutes = 15
+    try:
+        job = scheduler.get_job("sol_alert")
+        if job and hasattr(job.trigger, "fields"):
+            for f in job.trigger.fields:
+                if f.name == "minute":
+                    expr = str(f)
+                    parts = expr.split(",")
+                    if len(parts) >= 2:
+                        alert_minutes = int(parts[1]) - int(parts[0])
+    except Exception:
+        pass
+    return {
+        "trade_usdt": trade_usdt,
+        "alert_interval": alert_minutes,
+        "max_positions": max_positions,
+    }
+
+
+@app.post("/api/settings")
+def api_update_settings(body: SettingsUpdate):
+    """Aktualizuje ustawienia systemu w runtime (env vars + scheduler)."""
+    updated = []
+
+    if body.trade_usdt is not None and body.trade_usdt > 0:
+        os.environ["BITGET_TRADE_USDT"] = str(body.trade_usdt)
+        updated.append(f"trade_usdt={body.trade_usdt}")
+
+    if body.max_positions is not None and body.max_positions > 0:
+        os.environ["BITGET_MAX_POSITIONS"] = str(body.max_positions)
+        # Update exchange_trader module-level var if already imported
+        try:
+            import exchange_trader
+            exchange_trader.MAX_POSITIONS = body.max_positions
+        except Exception:
+            pass
+        updated.append(f"max_positions={body.max_positions}")
+
+    if body.alert_interval is not None and body.alert_interval > 0:
+        minutes = body.alert_interval
+        # Build cron minute expression: 0, N, 2N, ... < 60
+        cron_parts = [str(m) for m in range(0, 60, minutes)]
+        cron_expr = ",".join(cron_parts)
+        try:
+            scheduler.reschedule_job(
+                "sol_alert",
+                trigger=CronTrigger(minute=cron_expr),
+            )
+            updated.append(f"alert_interval={minutes}min (cron: {cron_expr})")
+        except Exception as e:
+            updated.append(f"alert_interval=BŁĄD: {e}")
+
+    return {"ok": True, "updated": updated}
+
+
+@app.get("/api/period-stats")
+def api_period_stats(period: str = "24h"):
+    """Statystyki za okres: 1d, 24h, 7d, 30d."""
+    if period not in ("1d", "24h", "7d", "30d"):
+        raise HTTPException(status_code=400, detail="Dozwolone okresy: 1d, 24h, 7d, 30d")
+    return db.get_period_stats(period)
 
 
 @app.post("/admin/run-gpt5-backtest")
