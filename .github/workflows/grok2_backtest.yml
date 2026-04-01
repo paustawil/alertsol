@@ -1,22 +1,26 @@
-name: Grok2 Backtest (Grok vs Grok2)
+name: Grok2 Backtest
 
 on:
   workflow_dispatch:
     inputs:
       grok2_only:
-        description: 'Pomiń stary Grok — testuj tylko Grok2 (oszczędność kredytów)'
+        description: 'Pomiń stary Grok — testuj tylko Grok2'
         type: boolean
         default: true
+      dt_from:
+        description: 'Od kiedy UTC (np. "2026-03-25 00:00")'
+        type: string
+        default: ''
+      dt_to:
+        description: 'Do kiedy UTC (np. "2026-03-28 00:00"). Puste = teraz'
+        type: string
+        default: ''
       hours:
-        description: 'Ile godzin wstecz testować'
+        description: 'Ile godzin wstecz (tylko gdy brak --from)'
         type: number
         default: 48
-      end_offset:
-        description: 'Offset końca w godzinach od teraz (np. 48 = pomiń ostatnie 48h)'
-        type: number
-        default: 0
       sheet_suffix:
-        description: 'Sufiks nazwy arkusza (np. "v2" → "Grok2 test v2")'
+        description: 'Sufiks nazwy arkusza (np. "pre" → "Grok2 test pre")'
         type: string
         default: ''
 
@@ -44,7 +48,10 @@ jobs:
           XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          ARGS="--hours ${{ inputs.hours }} --end-offset ${{ inputs.end_offset }}"
+          ARGS=""
           [ "${{ inputs.grok2_only }}" = "true" ] && ARGS="$ARGS --grok2-only"
+          [ -n "${{ inputs.dt_from }}" ] && ARGS="$ARGS --from '${{ inputs.dt_from }}'"
+          [ -n "${{ inputs.dt_to }}" ] && ARGS="$ARGS --to '${{ inputs.dt_to }}'"
+          [ -n "${{ inputs.hours }}" ] && [ -z "${{ inputs.dt_from }}" ] && ARGS="$ARGS --hours ${{ inputs.hours }}"
           [ -n "${{ inputs.sheet_suffix }}" ] && ARGS="$ARGS --sheet-suffix '${{ inputs.sheet_suffix }}'"
-          python grok2_backtest.py $ARGS
+          eval python grok2_backtest.py $ARGS
