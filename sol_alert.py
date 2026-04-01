@@ -2546,6 +2546,17 @@ def breakout_scan():
                 print(f"[breakout-scan] ODRZUCONO: SHORT podczas BREAKOUT_UP")
                 send_alert = False
 
+        # Trend guard: blokuj setupy przeciwko trendowi 48h (>3%)
+        if send_alert and bias != "neutral" and len(candles_h1) >= 48:
+            price_48h = candles_h1[-48]["close"]
+            trend_48h_pct = (current - price_48h) / price_48h * 100
+            if trend_48h_pct <= -3.0 and bias == "long":
+                print(f"[breakout-scan] ODRZUCONO: LONG przy trendzie 48h {trend_48h_pct:+.1f}%")
+                send_alert = False
+            elif trend_48h_pct >= 3.0 and bias == "short":
+                print(f"[breakout-scan] ODRZUCONO: SHORT przy trendzie 48h {trend_48h_pct:+.1f}%")
+                send_alert = False
+
         if send_alert and bias_proc >= MIN_GROK_BIAS_PROC and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])
             entries = [w["poziom"] for w in wejscia if "poziom" in w]
@@ -2731,6 +2742,17 @@ def main():
                 send_alert = False
             elif regime["regime"] == "BREAKOUT_UP" and bias == "short":
                 print(f"[grok] ODRZUCONO: SHORT podczas BREAKOUT_UP — blokada reżimowa.")
+                send_alert = False
+
+        # Trend guard: blokuj setupy przeciwko trendowi 48h (>3% ruch)
+        if send_alert and bias != "neutral" and len(candles_h1) >= 48:
+            price_48h = candles_h1[-48]["close"]
+            trend_48h_pct = (current - price_48h) / price_48h * 100
+            if trend_48h_pct <= -3.0 and bias == "long":
+                print(f"[grok] ODRZUCONO: LONG przy trendzie 48h {trend_48h_pct:+.1f}% — trend guard.")
+                send_alert = False
+            elif trend_48h_pct >= 3.0 and bias == "short":
+                print(f"[grok] ODRZUCONO: SHORT przy trendzie 48h {trend_48h_pct:+.1f}% — trend guard.")
                 send_alert = False
 
         if send_alert and bias != "neutral":
