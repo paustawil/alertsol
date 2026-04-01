@@ -38,7 +38,7 @@ SHEET_HEADER = [
 
 
 # ── Prompty (importowane z sol_alert.py) ─────────────────────────────────────
-from sol_alert import GROK_PROMPT, GROK2_PROMPT
+from sol_alert import GROK_PROMPT, GROK2_PROMPT, detect_market_regime
 
 
 # ── Pobieranie danych sentymentu ─────────────────────────────────────────────
@@ -293,7 +293,7 @@ def build_user_msg_grok2(
     sentiment_line: str,
     range_info: dict,
 ) -> str:
-    """User message dla Grok2 (z sentymentem, pozycją w zakresie, bez web search)."""
+    """User message dla Grok2 (z sentymentem, reżimem rynkowym, bez web search)."""
     m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
         f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
         for c in candles_m15[-60:]
@@ -303,27 +303,43 @@ def build_user_msg_grok2(
         for c in candles_h1[-24:]
     )
 
-    # Pozycja w zakresie
-    rng_size = range_info["range_size"]
-    if rng_size > 0:
-        range_pos = (current_price - range_info["support"]) / rng_size * 100
-        range_pos = max(0.0, min(100.0, range_pos))
-    else:
-        range_pos = 50.0
+    # Reżim rynkowy (używa detect_market_regime z sol_alert.py)
+    regime = detect_market_regime(candles_m15, candles_h1, current_price)
+    support = regime["support"]
+    resistance = regime["resistance"]
+    rng_size = regime["range_size"]
 
-    if range_pos > 80:
-        range_label = "blisko resistance"
-    elif range_pos < 20:
-        range_label = "blisko supportu"
+    if regime["regime"] == "CONSOLIDATION":
+        if rng_size > 0:
+            range_pos = max(0.0, min(100.0, (current_price - support) / rng_size * 100))
+        else:
+            range_pos = 50.0
+        if range_pos > 80:
+            range_label = "blisko resistance"
+        elif range_pos < 20:
+            range_label = "blisko supportu"
+        else:
+            range_label = "środek zakresu"
+        regime_block = (
+            f"REŻIM RYNKOWY: KONSOLIDACJA (CONSOLIDATION)\n"
+            f"Zakres H1: support ${support:.2f} — resistance ${resistance:.2f} (range ${rng_size:.2f})\n"
+            f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n"
+            f"Brak sygnałów wybicia — handluj w zakresie."
+        )
     else:
-        range_label = "środek zakresu"
+        direction_label = "W DÓŁ (poniżej supportu)" if regime["regime"] == "BREAKOUT_DOWN" else "W GÓRĘ (powyżej resistance)"
+        regime_block = (
+            f"REŻIM RYNKOWY: BREAKOUT {direction_label}\n"
+            f"Przebity zakres H1: support ${support:.2f} — resistance ${resistance:.2f}\n"
+            f"Sygnały: {regime['details']}\n"
+            f"Volume: {regime['vol_ratio']}x średniej\n"
+            f"ZASADA: Handluj w kierunku wybicia. NIE otwieraj pozycji przeciwko breakoutowi."
+        )
 
     return (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
-        f"Zakres H1 (ostatnie 32 świece): support ${range_info['support']:.2f} — resistance ${range_info['resistance']:.2f} "
-        f"(range ${rng_size:.2f})\n"
-        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
+        f"{regime_block}\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
