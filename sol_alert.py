@@ -8,6 +8,7 @@ import math
 import os
 import json
 import re
+import time
 import requests
 import anthropic
 import openai
@@ -431,23 +432,24 @@ Gdy send_alert=false:
 # ── System prompt dla Grok — walidacja oczekujących setupów ──────────────────
 GROK_VALIDATION_PROMPT = """Jesteś doświadczonym traderem kryptowalut weryfikującym aktywne zlecenia oczekujące na SOL/USDT.
 
-Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, pozycja ceny w zakresie, lista setupów) są dostarczone w wiadomości użytkownika.
+Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, reżim rynkowy, lista setupów) są dostarczone w wiadomości użytkownika.
 
 Twoje zadanie:
 1. Oceń aktualną sytuację techniczną H1 i M15 na podstawie dostarczonych danych.
-2. Sprawdź pozycję ceny w zakresie H1 (dostarczana jako 0-100%).
+2. Przeczytaj REŻIM RYNKOWY (CONSOLIDATION / BREAKOUT_UP / BREAKOUT_DOWN).
 3. Dla każdego setupu zdecyduj: keep=true (zachowaj) lub keep=false (anuluj).
 
 Anuluj setup jeśli zachodzi co najmniej jeden z poniższych warunków:
 - Rynek uciekł zbyt daleko i poziom wejścia jest technicznie nieosiągalny w rozsądnym czasie.
 - Trend wyraźnie się odwrócił i setup działa teraz bezpośrednio przeciwko dominującej strukturze.
 - Kluczowy poziom struktury definiujący setup (support/resistance) został złamany i nie jest już ważny.
-- Setup jest long, a cena jest powyżej 80% zakresu H1 (blisko resistance) bez potwierdzonego breakoutu — setup stracił sens strukturalny.
-- Setup jest short, a cena jest poniżej 20% zakresu H1 (blisko supportu) bez potwierdzonego breakdownu — setup stracił sens strukturalny.
+- W KONSOLIDACJI: Setup jest long przy pozycji >80% zakresu lub short przy <20% — stracił sens strukturalny.
+- W BREAKOUT: Setup jest PRZECIWKO kierunkowi wybicia (np. long przy BREAKOUT_DOWN lub short przy BREAKOUT_UP) — natychmiast anuluj.
 
 Zachowaj setup jeśli:
 - Poziom wejścia jest nadal w zasięgu i ma techniczne uzasadnienie.
-- Pozycja w zakresie jest spójna z kierunkiem setupu (long przy niskiej pozycji, short przy wysokiej).
+- W KONSOLIDACJI: kierunek jest spójny z pozycją w zakresie.
+- W BREAKOUT: kierunek jest zgodny z wybiciem.
 
 Zasady:
 - Powód anulowania: konkretny, zwięzły, po polsku (1–2 zdania).
@@ -455,31 +457,42 @@ Zasady:
 - Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Format:
-{"decyzje":[{"setup_id":1,"keep":false,"powod":"Cena w 85% zakresu H1, blisko resistance — long bez breakoutu nie ma sensu strukturalnego"},{"setup_id":2,"keep":true}]}"""
+{"decyzje":[{"setup_id":1,"keep":false,"powod":"BREAKOUT_DOWN aktywny — long przeciwko wybicia, anuluj"},{"setup_id":2,"keep":true}]}"""
 
 
 # ── System prompt dla Grok2 (ulepszona wersja — kontekst strukturalny) ────────
 GROK2_PROMPT = """Jesteś doświadczonym traderem kryptowalut, specjalizującym się w SOL/USDT na interwałach M15 i H1.
 
-Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, pozycja ceny w zakresie) są dostarczone w wiadomości użytkownika.
+Otrzymasz kompletne dane wejściowe — NIE szukaj niczego w internecie. Wszystkie potrzebne informacje (OHLCV, ceny BTC/ETH/SOL, Fear & Greed Index, reżim rynkowy, pozycja ceny w zakresie) są dostarczone w wiadomości użytkownika.
 
 Twoje zadanie:
 1. Krótko oceń sentyment na podstawie dostarczonych danych: BTC/ETH/SOL, Fear & Greed.
-2. KONTEKST STRUKTURALNY (OBOWIĄZKOWY) — zanim cokolwiek zaproponujesz:
-   - Sprawdź dostarczoną "pozycję w zakresie H1" (0% = support, 100% = resistance).
-   - Jeśli pozycja > 80% (blisko resistance): NIE proponuj nowego longa chyba że widzisz potwierdzony breakout (zamknięcie H1 powyżej resistance + retest). Szukaj raczej shorta od oporu lub czekaj.
-   - Jeśli pozycja < 20% (blisko supportu): NIE proponuj nowego shorta chyba że widzisz potwierdzony breakdown (zamknięcie H1 poniżej supportu + retest). Szukaj raczej longa od wsparcia lub czekaj.
-   - Jeśli pozycja 20-80%: kontynuacja trendu jest dopuszczalna, ale TP musi respektować najbliższy poziom strukturalny.
-   - ZASADA NADRZĘDNA: Momentum krótkoterminowe (M15) NIE może nadpisać struktury H1. Trzy zielone świece M15 pod resistance to nie jest setup na longa — to potencjalny short.
+2. PRZECZYTAJ REŻIM RYNKOWY z user message (CONSOLIDATION / BREAKOUT_UP / BREAKOUT_DOWN) i zastosuj odpowiednią strategię:
+
+=== STRATEGIA: KONSOLIDACJA (CONSOLIDATION) ===
+- Handluj OD granic zakresu: long od supportu, short od resistance.
+- Sprawdź pozycję w zakresie H1 (0% = support, 100% = resistance):
+  - Pozycja > 80%: NIE proponuj longa. Szukaj shorta od oporu lub czekaj.
+  - Pozycja < 20%: NIE proponuj shorta. Szukaj longa od wsparcia lub czekaj.
+  - Pozycja 20-80%: kontynuacja trendu dopuszczalna, ale TP musi respektować najbliższy S/R.
+- TP celuj do przeciwnej granicy zakresu — nie dalej.
+- ZASADA NADRZĘDNA: Momentum M15 NIE nadpisuje struktury H1. Trzy zielone świece M15 pod resistance to potencjalny short, nie long.
+
+=== STRATEGIA: BREAKOUT (BREAKOUT_UP / BREAKOUT_DOWN) ===
+- Handluj W KIERUNKU wybicia. Przy BREAKOUT_DOWN: szukaj SHORT. Przy BREAKOUT_UP: szukaj LONG.
+- NIE łap dna (long przy BREAKOUT_DOWN) ani szczytu (short przy BREAKOUT_UP) — to najbardziej kosztowny błąd.
+- Wejścia — zaproponuj do 2 poziomów:
+  - Agresywny: kontynuacja po krótkim pullbacku (np. retest na M15).
+  - Konserwatywny: retest przebitego poziomu S/R (stary support → nowy resistance lub odwrotnie).
+- TP: breakouty generują impuls — celuj dalej niż w konsolidacji. Szukaj kolejnych stref S/R z wyższych TF.
+- SL: nad/pod przebity poziom (jeśli cena tam wraca, breakout był fałszywy).
+- Volume potwierdza breakout: wysoki volume = silny sygnał. Niski volume przy wybiciu = ostrożnie, może fałszywy.
+
 3. Przeanalizuj strukturę techniczną H1 i M15: kluczowe supporty i resistancey, trend, formacje, RSI, MACD. Bez lania wody.
-4. Volume — interpretuj w kontekście struktury:
-   - Rosnący volume przy podejściu do S/R = potwierdzenie siły ruchu
-   - Malejący volume przy podejściu do S/R = ruch słabnie, prawdopodobne odrzucenie
-   - Volume spike na świecy odrzucenia (długi knot) = silny sygnał odwrócenia
-   - Brak volume przy breakoucie = fałszywy breakout, nie wchodź
+4. Volume — interpretuj w kontekście reżimu (patrz punkt 2).
 5. Podaj bias (long / short / neutral) z prawdopodobieństwem w %.
 6. Jeśli bias nie jest neutral — zaproponuj 1–2 konkretne poziomy wejścia z warunkiem aktywacji.
-7. Podaj TP1 (bezpieczny, bliższy) i TP2 (ambitny, ale realistyczny). TP MUSI respektować najbliższy poziom strukturalny — nie celuj przez resistance (long) ani przez support (short).
+7. Podaj TP1 (bezpieczny, bliższy) i TP2 (ambitny, ale realistyczny).
 8. Podaj ciasny SL i przybliżone R:R (minimum 1:2).
 9. Na końcu: co teraz robisz (np. "Czekam na pullback do X i wchodzę long").
 
@@ -490,7 +503,8 @@ Zasady:
   a) H1 i M15 wskazują ten sam kierunek (tf_aligned=true) — jeśli timeframy są sprzeczne, send_alert=false.
   b) bias_proc >= 65 — jeśli przekonanie jest niższe, oznacza to zawahanie rynku, ustaw send_alert=false.
   c) Widzisz wyraźny, konkretny setup z jasnym entry, SL i TP.
-  d) Setup NIE jest kontynuacją M15 prosto w resistance (long) lub support (short) na H1.
+  d) W KONSOLIDACJI: setup NIE jest kontynuacją M15 prosto w resistance (long) lub support (short).
+  e) W BREAKOUT: bias MUSI być zgodny z kierunkiem wybicia. BREAKOUT_DOWN → tylko short. BREAKOUT_UP → tylko long.
 - Przy bocznym rynku, choppingu, sprzecznych sygnałach H1/M15 lub niskim przekonaniu — send_alert=false.
 - tf_aligned: Oceń czy H1 i M15 pokazują ten sam kierunek. true = zgodne, false = sprzeczne lub jeden neutralny.
 - sl_after_tp1: Po osiągnięciu TP1 SL należy przesunąć. Znajdź ostatni strukturalny support (long) lub resistance (short) między W1 a TP1. Jeśli taki poziom istnieje i jest w strefie zysku (powyżej W1 dla long, poniżej W1 dla short) — użyj go jako sl_after_tp1. Jeśli nie — użyj W1 (break-even). Zawsze podaj tę wartość gdy send_alert=true.
@@ -498,7 +512,7 @@ Zasady:
 Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Gdy send_alert=true:
-{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem pozycji w zakresie","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem reżimu","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
 
 Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
@@ -1072,6 +1086,117 @@ def detect_range(candles: list[dict], n: int = 32) -> dict:
     }
 
 
+# ── Detekcja reżimu rynkowego ────────────────────────────────────────────────
+
+def detect_market_regime(
+    candles_m15: list[dict],
+    candles_h1: list[dict],
+    current_price: float,
+) -> dict:
+    """
+    Rozpoznaje reżim rynkowy: CONSOLIDATION / BREAKOUT_UP / BREAKOUT_DOWN.
+
+    Używa M15 (szybka detekcja) + H1 (zakres referencyjny).
+    Zwraca dict z: regime, support, resistance, details.
+    """
+    rng = detect_range(candles_h1, n=32)
+    support = rng["support"]
+    resistance = rng["resistance"]
+    rng_size = rng["range_size"]
+
+    if rng_size <= 0:
+        return {"regime": "CONSOLIDATION", **rng, "details": "brak zakresu"}
+
+    # ── Volume: średnia z ostatnich 10 M15 vs bieżąca ────────────────────────
+    recent_m15 = candles_m15[-12:]
+    avg_vol = sum(c["volume"] for c in recent_m15[:-2]) / max(len(recent_m15[:-2]), 1)
+    last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2  # avg z ostatnich 2 świec
+    vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
+
+    # ── Sygnał 1: Cena zamknięcia M15 poza zakresem ──────────────────────────
+    last_3_closes = [c["close"] for c in candles_m15[-3:]]
+    closes_below = sum(1 for c in last_3_closes if c < support)
+    closes_above = sum(1 for c in last_3_closes if c > resistance)
+
+    # ── Sygnał 2: Momentum — dystans od granicy zakresu ──────────────────────
+    pct_below_support = (support - current_price) / support * 100 if current_price < support else 0
+    pct_above_resistance = (current_price - resistance) / resistance * 100 if current_price > resistance else 0
+
+    # ── Sygnał 3: Struktura H1 — lower lows / higher highs ──────────────────
+    h1_recent = candles_h1[-6:]
+    h1_lows = [c["low"] for c in h1_recent]
+    h1_highs = [c["high"] for c in h1_recent]
+    lower_lows = sum(1 for i in range(1, len(h1_lows)) if h1_lows[i] < h1_lows[i - 1])
+    higher_highs = sum(1 for i in range(1, len(h1_highs)) if h1_highs[i] > h1_highs[i - 1])
+
+    # ── Decyzja: BREAKOUT DOWN ────────────────────────────────────────────────
+    breakdown_score = 0
+    breakdown_details = []
+
+    if current_price < support:
+        breakdown_score += 1
+        breakdown_details.append(f"cena ${current_price:.2f} poniżej supportu ${support:.2f}")
+    if closes_below >= 2:
+        breakdown_score += 1
+        breakdown_details.append(f"{closes_below}/3 zamknięć M15 poniżej supportu")
+    if pct_below_support >= 1.5:
+        breakdown_score += 1
+        breakdown_details.append(f"{pct_below_support:.1f}% poniżej supportu (momentum)")
+    if vol_ratio >= 1.5 and current_price < support:
+        breakdown_score += 1
+        breakdown_details.append(f"volume {vol_ratio:.1f}x średniej na wybiciu")
+    if lower_lows >= 3:
+        breakdown_score += 1
+        breakdown_details.append(f"{lower_lows}/5 coraz niższych dołków H1")
+
+    # ── Decyzja: BREAKOUT UP ─────────────────────────────────────────────────
+    breakup_score = 0
+    breakup_details = []
+
+    if current_price > resistance:
+        breakup_score += 1
+        breakup_details.append(f"cena ${current_price:.2f} powyżej resistance ${resistance:.2f}")
+    if closes_above >= 2:
+        breakup_score += 1
+        breakup_details.append(f"{closes_above}/3 zamknięć M15 powyżej resistance")
+    if pct_above_resistance >= 1.5:
+        breakup_score += 1
+        breakup_details.append(f"{pct_above_resistance:.1f}% powyżej resistance (momentum)")
+    if vol_ratio >= 1.5 and current_price > resistance:
+        breakup_score += 1
+        breakup_details.append(f"volume {vol_ratio:.1f}x średniej na wybiciu")
+    if higher_highs >= 3:
+        breakup_score += 1
+        breakup_details.append(f"{higher_highs}/5 coraz wyższych szczytów H1")
+
+    # ── Wynik ─────────────────────────────────────────────────────────────────
+    # Potrzeba min. 2 punktów żeby ogłosić breakout
+    if breakdown_score >= 2 and breakdown_score > breakup_score:
+        return {
+            "regime": "BREAKOUT_DOWN",
+            "support": support, "resistance": resistance, "range_size": rng_size,
+            "score": breakdown_score, "vol_ratio": round(vol_ratio, 1),
+            "pct_outside": round(pct_below_support, 1),
+            "details": "; ".join(breakdown_details),
+        }
+    elif breakup_score >= 2 and breakup_score > breakdown_score:
+        return {
+            "regime": "BREAKOUT_UP",
+            "support": support, "resistance": resistance, "range_size": rng_size,
+            "score": breakup_score, "vol_ratio": round(vol_ratio, 1),
+            "pct_outside": round(pct_above_resistance, 1),
+            "details": "; ".join(breakup_details),
+        }
+    else:
+        return {
+            "regime": "CONSOLIDATION",
+            "support": support, "resistance": resistance, "range_size": rng_size,
+            "score": 0, "vol_ratio": round(vol_ratio, 1),
+            "pct_outside": 0,
+            "details": "brak sygnałów wybicia",
+        }
+
+
 # ── Punktacja algorytmu ───────────────────────────────────────────────────────
 def score_range_size(size: float) -> int:
     if 1.2 <= size <= 2.0: return 3
@@ -1355,26 +1480,45 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
     # Sentyment z Bitget + F&G
     sentiment_line = _fetch_sentiment_line()
 
-    # Pozycja w zakresie H1
-    rng = detect_range(candles_h1)
-    rng_size = rng["range_size"]
+    # Reżim rynkowy + zakres
+    regime = detect_market_regime(candles_m15, candles_h1, current_price)
+    rng_size = regime["range_size"]
+    support = regime["support"]
+    resistance = regime["resistance"]
+
     if rng_size > 0:
-        range_pos = max(0.0, min(100.0, (current_price - rng["support"]) / rng_size * 100))
+        range_pos = max(0.0, min(100.0, (current_price - support) / rng_size * 100))
     else:
         range_pos = 50.0
-    if range_pos > 80:
-        range_label = "blisko resistance"
-    elif range_pos < 20:
-        range_label = "blisko supportu"
+
+    # Buduj blok reżimu
+    if regime["regime"] == "CONSOLIDATION":
+        if range_pos > 80:
+            range_label = "blisko resistance"
+        elif range_pos < 20:
+            range_label = "blisko supportu"
+        else:
+            range_label = "środek zakresu"
+        regime_block = (
+            f"REŻIM RYNKOWY: KONSOLIDACJA (CONSOLIDATION)\n"
+            f"Zakres H1: support ${support:.2f} — resistance ${resistance:.2f} (range ${rng_size:.2f})\n"
+            f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n"
+            f"Brak sygnałów wybicia — handluj w zakresie."
+        )
     else:
-        range_label = "środek zakresu"
+        direction_label = "W DÓŁ (poniżej supportu)" if regime["regime"] == "BREAKOUT_DOWN" else "W GÓRĘ (powyżej resistance)"
+        regime_block = (
+            f"REŻIM RYNKOWY: BREAKOUT {direction_label}\n"
+            f"Przebity zakres H1: support ${support:.2f} — resistance ${resistance:.2f}\n"
+            f"Sygnały: {regime['details']}\n"
+            f"Volume: {regime['vol_ratio']}x średniej\n"
+            f"ZASADA: Handluj w kierunku wybicia. NIE otwieraj pozycji przeciwko breakoutowi."
+        )
 
     user_msg = (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
-        f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
-        f"(range ${rng_size:.2f})\n"
-        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
+        f"{regime_block}\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
@@ -2050,27 +2194,42 @@ def call_grok_validation(pending_non_entered: list[dict], candles_m15: list[dict
         "alert_time": s["alert_time"],
     } for s in pending_non_entered], ensure_ascii=False)
 
-    # Sentyment i pozycja w zakresie — identycznie jak w call_grok()
+    # Sentyment i reżim rynkowy — identycznie jak w call_grok()
     sentiment_line = _fetch_sentiment_line()
-    rng = detect_range(candles_h1)
-    rng_size = rng["range_size"]
-    if rng_size > 0:
-        range_pos = max(0.0, min(100.0, (current_price - rng["support"]) / rng_size * 100))
+    regime = detect_market_regime(candles_m15, candles_h1, current_price)
+    support = regime["support"]
+    resistance = regime["resistance"]
+    rng_size = regime["range_size"]
+
+    if regime["regime"] == "CONSOLIDATION":
+        if rng_size > 0:
+            range_pos = max(0.0, min(100.0, (current_price - support) / rng_size * 100))
+        else:
+            range_pos = 50.0
+        if range_pos > 80:
+            range_label = "blisko resistance"
+        elif range_pos < 20:
+            range_label = "blisko supportu"
+        else:
+            range_label = "środek zakresu"
+        regime_block = (
+            f"REŻIM RYNKOWY: KONSOLIDACJA (CONSOLIDATION)\n"
+            f"Zakres H1: support ${support:.2f} — resistance ${resistance:.2f} (range ${rng_size:.2f})\n"
+            f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})"
+        )
     else:
-        range_pos = 50.0
-    if range_pos > 80:
-        range_label = "blisko resistance"
-    elif range_pos < 20:
-        range_label = "blisko supportu"
-    else:
-        range_label = "środek zakresu"
+        direction_label = "W DÓŁ (poniżej supportu)" if regime["regime"] == "BREAKOUT_DOWN" else "W GÓRĘ (powyżej resistance)"
+        regime_block = (
+            f"REŻIM RYNKOWY: BREAKOUT {direction_label}\n"
+            f"Przebity zakres H1: support ${support:.2f} — resistance ${resistance:.2f}\n"
+            f"Sygnały: {regime['details']}\n"
+            f"ZASADA: Anuluj setupy PRZECIWKO kierunkowi wybicia."
+        )
 
     user_msg = (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
-        f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
-        f"(range ${rng_size:.2f})\n"
-        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
+        f"{regime_block}\n\n"
         f"Setupy oczekujące na wejście:\n{setups_txt}\n\n"
         f"SOL M15 (ostatnie 60 świec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 świece):\n{h1_csv}"
@@ -2274,6 +2433,102 @@ def _migrate_setup_ids():
     pass
 
 
+# ── Breakout scanner (szybki, co 2-3 min) ────────────────────────────────────
+
+# Cooldown na powiadomienie Telegram (nie spamuj tym samym reżimem częściej niż co 30 min)
+_last_breakout_tg_ts: float = 0.0
+_last_breakout_tg_regime: str = ""
+
+def breakout_scan():
+    """Szybki skan breakoutowy — sprawdza cenę i volume, bez wywołania Groka.
+    Jeśli wykryje breakout → powiadomienie Telegram (z cooldownem) + ZAWSZE triggeruje Groka."""
+    global _last_breakout_tg_ts, _last_breakout_tg_regime
+
+    candles_m15 = fetch_klines(SYMBOL, "15m", limit=20)
+    candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
+    current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
+    regime      = detect_market_regime(candles_m15, candles_h1, current)
+
+    if regime["regime"] == "CONSOLIDATION":
+        return  # Nic nie rób
+
+    # Telegram notification — cooldown 30 min na ten sam reżim (żeby nie spamować)
+    now = time.time()
+    if not (regime["regime"] == _last_breakout_tg_regime
+            and now - _last_breakout_tg_ts < 1800):
+        _last_breakout_tg_ts = now
+        _last_breakout_tg_regime = regime["regime"]
+
+        if regime["regime"] == "BREAKOUT_DOWN":
+            icon = "🔻"
+            dir_label = "DOWN"
+            level_label = f"Support ${regime['support']:.2f} przebity"
+        else:
+            icon = "🔺"
+            dir_label = "UP"
+            level_label = f"Resistance ${regime['resistance']:.2f} przebity"
+
+        msg = (
+            f"{icon} <b>BREAKOUT {dir_label} — SOL/USDT</b>\n\n"
+            f"{level_label} (cena ${current:.2f}, {regime['pct_outside']:.1f}% poza zakresem)\n"
+            f"Volume: {regime['vol_ratio']}x średniej\n"
+            f"Sygnały: {regime['details']}\n\n"
+            f"⏳ Triggeruję analizę Grok2..."
+        )
+        send_telegram(msg)
+
+    # ZAWSZE triggeruj Groka przy breakoucie — save_pending odrzuci duplikaty
+    print(f"[breakout-scan] {regime['regime']} wykryty — wywołuję Groka...")
+    candles_m15_full = fetch_klines(SYMBOL, "15m", limit=100)
+    grok_result = call_grok(candles_m15_full, candles_h1, current)
+
+    if grok_result:
+        bias = grok_result.get("bias", "neutral")
+        send_alert = grok_result.get("send_alert", False)
+        bias_proc = grok_result.get("bias_proc", 0)
+        print(f"[breakout-scan] Grok: {bias} ({bias_proc}%) send_alert={send_alert}")
+
+        if send_alert and bias_proc >= MIN_GROK_BIAS_PROC and bias != "neutral":
+            wejscia = grok_result.get("wejscia", [])
+            entries = [w["poziom"] for w in wejscia if "poziom" in w]
+            if entries:
+                akcja_lower = grok_result.get("akcja", "").lower()
+                if "pullback" in akcja_lower:
+                    warunek = "pullback"
+                elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
+                    warunek = "przebicie"
+                else:
+                    w1_lvl = entries[0]
+                    if bias == "short":
+                        warunek = "przebicie" if w1_lvl < current else "pullback"
+                    else:
+                        warunek = "przebicie" if w1_lvl > current else "pullback"
+
+                grok_setup = {
+                    "type":         "breakout",
+                    "direction":    bias,
+                    "score":        bias_proc,
+                    "kurs":         round(current, 2),
+                    "entries":      entries,
+                    "warunek":      warunek,
+                    "sl":           grok_result.get("sl"),
+                    "sl_after_tp1": grok_result.get("sl_after_tp1"),
+                    "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
+                    "rr":           grok_result.get("rr", 0),
+                    "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
+                }
+                save_pending(grok_setup, "Grok2", "", current)
+                if grok_setup.get("setup_id"):
+                    log_to_alerty("Grok2", "", grok_setup)
+                    send_telegram(format_grok_alert(grok_result, current, grok_setup["setup_id"], model_name="Grok2"))
+                else:
+                    print("[breakout-scan] Duplikat — setup już istnieje.")
+        else:
+            print(f"[breakout-scan] Grok nie dał setupu po breakoucie.")
+    else:
+        print("[breakout-scan] Brak odpowiedzi od Groka.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
@@ -2285,8 +2540,9 @@ def main():
     current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     rng         = detect_range(candles_m15)
     trend       = h1_trend(candles_h1)
+    regime      = detect_market_regime(candles_m15, candles_h1, current)
 
-    print(f"SOL: ${current:.2f} | Zakres: ${rng['support']}-${rng['resistance']} (${rng['range_size']:.2f}) | H1: {trend}")
+    print(f"SOL: ${current:.2f} | Zakres: ${rng['support']}-${rng['resistance']} (${rng['range_size']:.2f}) | H1: {trend} | Reżim: {regime['regime']}")
 
     # Sprawdz oczekujace setupy
     check_pending(candles_m15)

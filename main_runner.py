@@ -56,6 +56,15 @@ def run_sol_alert():
     log.info("=== sol_alert.main() END ===")
 
 
+def run_breakout_scan():
+    """Szybki skan breakoutowy — co 3 min, bez Groka chyba że wykryje breakout."""
+    try:
+        import sol_alert
+        sol_alert.breakout_scan()
+    except Exception:
+        log.exception("breakout_scan() BŁĄD")
+
+
 def run_sheets_export():
     """Eksportuje nowo zamknięte setupy do Google Sheets."""
     try:
@@ -115,6 +124,16 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
         misfire_grace_time=60,
+    )
+
+    # Breakout scanner — co 3 minuty (szybki, bez Groka chyba że wykryje breakout)
+    scheduler.add_job(
+        run_breakout_scan,
+        "interval",
+        minutes=3,
+        id="breakout_scan",
+        max_instances=1,
+        coalesce=True,
     )
 
     # Sheets export — co 5 minut
