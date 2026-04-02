@@ -435,7 +435,8 @@ def get_summary_stats() -> dict:
                 SELECT
                     COUNT(*) FILTER (WHERE resolved = FALSE)             AS active_count,
                     COUNT(*) FILTER (WHERE resolved = TRUE)              AS total_resolved,
-                    ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
+                    ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','SL'))::numeric, 2)
                                                                          AS total_pnl_usd,
                     COUNT(*) FILTER (WHERE resolved = TRUE
                         AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))   AS wins,
@@ -459,7 +460,8 @@ def get_summary_stats() -> dict:
                        COUNT(*)                                              AS all_setups,
                        COUNT(*) FILTER (WHERE resolved = TRUE
                            AND result IN ('TP1','TP2','TP1+BE','TP1+SL','SL'))  AS entered,
-                       ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
+                       ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE
+                           AND result IN ('TP1','TP2','TP1+BE','TP1+SL','SL'))::numeric, 2)
                                                                              AS pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE
                            AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))    AS wins
