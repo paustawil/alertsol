@@ -1082,7 +1082,7 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
     granularity = _BITGET_GRANULARITY.get(interval, "15min")
     end_time_ms = str(int(time.time() * 1000))
     r = requests.get(
-        "https://api.bitget.com/api/v2/mix/market/candles",
+        "https://api.bitget.com/api/v2/mix/market/history-candles",
         params={
             "symbol":      bg_symbol,
             "productType": "USDT-FUTURES",
