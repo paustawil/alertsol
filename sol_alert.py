@@ -1449,6 +1449,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     if atr <= 0:
         return setups
 
+    # Max dystans entry od aktualnej ceny — odrzuć setupy z nierealistycznym pullbackiem
+    max_entry_dist = current_price * 0.03  # 3%
+
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
@@ -1460,7 +1463,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = consol["high"] + atr * 1.0
             tp1 = consol["low"] - consol["range"]
             tp2 = consol["low"] - consol["range"] * 1.5
-            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+            if (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                    and abs(w - current_price) <= max_entry_dist):
                 setups.append({
                     "type": "trend_consolidation_short", "direction": "short",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
@@ -1468,7 +1472,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((w - tp1) / (sl - w), 1),
                     "score": strength,
-                    "reasoning": f"{regime_name}({strength})",
+                    "reasoning": f"{regime_name}({strength}); consol {consol['candles']}h ${consol['low']:.0f}-${consol['high']:.0f}",
                 })
 
         # trend_pullback_short — 38-50% korekty
@@ -1481,13 +1485,15 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = round(fib618 + atr * 0.3, 2)
             tp1 = round(swing_low, 2)
             tp2 = round(swing_low - swing_range * 0.3, 2)
-            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5 and w > current_price * 1.003:
+            if (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                    and w > current_price * 1.003
+                    and w - current_price <= max_entry_dist):
                 setups.append({
                     "type": "trend_pullback_short", "direction": "short",
                     "entries": [w], "sl": sl, "sl_after_tp1": w,
                     "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
                     "score": strength,
-                    "reasoning": f"{regime_name}({strength})",
+                    "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f}",
                 })
 
         # impulse_continuation_short — mini-pullback w impulsie
@@ -1500,13 +1506,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 sl = round(pullback_high + atr * 0.8, 2)
                 tp1 = round(swing_low, 2)
                 tp2 = round(swing_low - atr, 2)
-                if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                if (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                        and abs(w - current_price) <= max_entry_dist):
                     setups.append({
                         "type": "impulse_continuation_short", "direction": "short",
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
                         "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
                         "score": strength,
-                        "reasoning": f"{regime_name}({strength})",
+                        "reasoning": f"{regime_name}({strength}); pullback M15",
                     })
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
@@ -1525,13 +1532,15 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = round(fib618 - atr * 0.3, 2)
             tp1 = round(swing_high, 2)
             tp2 = round(swing_high + swing_range * 0.3, 2)
-            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5 and w < current_price * 0.997:
+            if (sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                    and w < current_price * 0.997
+                    and current_price - w <= max_entry_dist):
                 setups.append({
                     "type": "trend_pullback_long", "direction": "long",
                     "entries": [w], "sl": sl, "sl_after_tp1": w,
                     "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
                     "score": strength,
-                    "reasoning": f"{regime_name}({strength})",
+                    "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f}",
                 })
 
     # ── RANGE ─────────────────────────────────────────────────────────────
@@ -1545,7 +1554,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = res + atr * 1.0
             tp1 = sup + rng_size * 0.5
             tp2 = sup + rng_size * 0.1
-            if (w - tp1) / (sl - w) >= 1.5:
+            if (w - tp1) / (sl - w) >= 1.5 and abs(w - current_price) <= max_entry_dist:
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
@@ -1553,14 +1562,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((w - tp1) / (sl - w), 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S={sup:.2f} R={res:.2f}",
+                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f}",
                 })
             # range_support_long
             w = sup + rng_size * 0.1
             sl = sup - atr * 1.0
             tp1 = sup + rng_size * 0.5
             tp2 = res - rng_size * 0.1
-            if (tp1 - w) / (w - sl) >= 1.5:
+            if (tp1 - w) / (w - sl) >= 1.5 and abs(w - current_price) <= max_entry_dist:
                 setups.append({
                     "type": "range_support_long", "direction": "long",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
@@ -1568,7 +1577,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((tp1 - w) / (w - sl), 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S={sup:.2f} R={res:.2f}",
+                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f}",
                 })
 
     return setups
