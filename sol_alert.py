@@ -42,6 +42,7 @@ ENABLE_CLAUDE        = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT           = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT3
 ENABLE_GPT3          = False  # aktywować po weryfikacji backtestem
+ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
 
 
 # ── System prompt dla Claude ──────────────────────────────────────────────────
@@ -1414,6 +1415,165 @@ def algo_detect(candles_m15, candles_h1, rng) -> list[dict]:
     return setups
 
 
+# ── Algo2: algorytmiczne setupy (IMPULSE/TREND/RANGE) ───────────────────────
+
+def find_swing_points(candles_h1: list[dict], n: int = 12):
+    """Znajduje swing high i swing low z ostatnich n świec H1."""
+    recent = candles_h1[-n:]
+    return max(c["high"] for c in recent), min(c["low"] for c in recent)
+
+
+def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles: int = 10):
+    """Szuka konsolidacji — wąski zakres w ostatnich świecach H1."""
+    for n in range(min_candles, min(max_candles + 1, len(candles_h1))):
+        recent = candles_h1[-n:]
+        hi = max(c["high"] for c in recent)
+        lo = min(c["low"] for c in recent)
+        rng = hi - lo
+        atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
+        if atr > 0 and rng < atr * 2.5:
+            return {"high": hi, "low": lo, "range": rng, "candles": n}
+    return None
+
+
+def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[dict],
+                       current_price: float) -> list[dict]:
+    """Algorytmicznie wykrywa setupy trend/impulse/range. Zwraca listę setupów
+    w formacie kompatybilnym z save_pending (entries, sl, tps, rr, ...)."""
+    regime_name = regime["regime"]
+    direction = regime.get("direction", "none")
+    atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
+    strength = regime.get("score", 0)
+    setups = []
+
+    if atr <= 0:
+        return setups
+
+    # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
+    if direction == "down":
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+
+        # trend_consolidation_short — konsolidacja przy dnie
+        consol = find_consolidation(candles_h1)
+        if consol:
+            w = consol["high"] - consol["range"] * 0.2
+            sl = consol["high"] + atr * 1.0
+            tp1 = consol["low"] - consol["range"]
+            tp2 = consol["low"] - consol["range"] * 1.5
+            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                setups.append({
+                    "type": "trend_consolidation_short", "direction": "short",
+                    "entries": [round(w, 2)], "sl": round(sl, 2),
+                    "sl_after_tp1": round(w, 2),
+                    "tps": [round(tp1, 2), round(tp2, 2)],
+                    "rr": round((w - tp1) / (sl - w), 1),
+                    "score": strength,
+                    "reasoning": f"{regime_name}({strength})",
+                })
+
+        # trend_pullback_short — 38-50% korekty
+        if swing_high > swing_low:
+            swing_range = swing_high - swing_low
+            fib38 = swing_low + swing_range * 0.38
+            fib50 = swing_low + swing_range * 0.50
+            fib618 = swing_low + swing_range * 0.618
+            w = round((fib38 + fib50) / 2, 2)
+            sl = round(fib618 + atr * 0.3, 2)
+            tp1 = round(swing_low, 2)
+            tp2 = round(swing_low - swing_range * 0.3, 2)
+            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5 and w > current_price * 1.003:
+                setups.append({
+                    "type": "trend_pullback_short", "direction": "short",
+                    "entries": [w], "sl": sl, "sl_after_tp1": w,
+                    "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
+                    "score": strength,
+                    "reasoning": f"{regime_name}({strength})",
+                })
+
+        # impulse_continuation_short — mini-pullback w impulsie
+        if regime_name.startswith("IMPULSE_"):
+            last6 = candles_m15[-6:]
+            greens = [c for c in last6 if c["close"] > c["open"]]
+            if len(greens) >= 1 and len(greens) <= 2:
+                pullback_high = max(c["high"] for c in last6[-2:])
+                w = round(pullback_high, 2)
+                sl = round(pullback_high + atr * 0.8, 2)
+                tp1 = round(swing_low, 2)
+                tp2 = round(swing_low - atr, 2)
+                if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                    setups.append({
+                        "type": "impulse_continuation_short", "direction": "short",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
+                        "score": strength,
+                        "reasoning": f"{regime_name}({strength})",
+                    })
+
+    # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
+    elif direction == "up":
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+
+        # trend_consolidation_long — WYŁĄCZONY (31% WR, stratny w obu Q3'25 i Q1'26)
+
+        # trend_pullback_long — 38-50% korekty (wymaga strength >= 5)
+        if swing_high > swing_low and strength >= 5:
+            swing_range = swing_high - swing_low
+            fib38 = swing_high - swing_range * 0.38
+            fib50 = swing_high - swing_range * 0.50
+            fib618 = swing_high - swing_range * 0.618
+            w = round((fib38 + fib50) / 2, 2)
+            sl = round(fib618 - atr * 0.3, 2)
+            tp1 = round(swing_high, 2)
+            tp2 = round(swing_high + swing_range * 0.3, 2)
+            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5 and w < current_price * 0.997:
+                setups.append({
+                    "type": "trend_pullback_long", "direction": "long",
+                    "entries": [w], "sl": sl, "sl_after_tp1": w,
+                    "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
+                    "score": strength,
+                    "reasoning": f"{regime_name}({strength})",
+                })
+
+    # ── RANGE ─────────────────────────────────────────────────────────────
+    elif regime_name == "RANGE":
+        rng = detect_range(candles_h1)
+        sup, res = rng["support"], rng["resistance"]
+        rng_size = res - sup
+        if rng_size > atr * 1.5:
+            # range_resistance_short
+            w = res - rng_size * 0.1
+            sl = res + atr * 1.0
+            tp1 = sup + rng_size * 0.5
+            tp2 = sup + rng_size * 0.1
+            if (w - tp1) / (sl - w) >= 1.5:
+                setups.append({
+                    "type": "range_resistance_short", "direction": "short",
+                    "entries": [round(w, 2)], "sl": round(sl, 2),
+                    "sl_after_tp1": round(w, 2),
+                    "tps": [round(tp1, 2), round(tp2, 2)],
+                    "rr": round((w - tp1) / (sl - w), 1),
+                    "score": 0,
+                    "reasoning": f"RANGE; S={sup:.2f} R={res:.2f}",
+                })
+            # range_support_long
+            w = sup + rng_size * 0.1
+            sl = sup - atr * 1.0
+            tp1 = sup + rng_size * 0.5
+            tp2 = res - rng_size * 0.1
+            if (tp1 - w) / (w - sl) >= 1.5:
+                setups.append({
+                    "type": "range_support_long", "direction": "long",
+                    "entries": [round(w, 2)], "sl": round(sl, 2),
+                    "sl_after_tp1": round(w, 2),
+                    "tps": [round(tp1, 2), round(tp2, 2)],
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                    "score": 0,
+                    "reasoning": f"RANGE; S={sup:.2f} R={res:.2f}",
+                })
+
+    return setups
+
+
 # ── Claude API ────────────────────────────────────────────────────────────────
 def call_claude(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
     if not ANTHROPIC_KEY:
@@ -2566,11 +2726,11 @@ _last_breakout_tg_ts: float = 0.0
 _last_breakout_tg_regime: str = ""
 
 def breakout_scan():
-    """Szybki skan breakoutowy — sprawdza cenę i volume, bez wywołania Groka.
-    Jeśli wykryje breakout → powiadomienie Telegram (z cooldownem) + ZAWSZE triggeruje Groka."""
+    """Szybki skan breakoutowy — sprawdza cenę i volume.
+    Przy IMPULSE/TREND: powiadomienie Telegram (z cooldownem) + Algo2 setup."""
     global _last_breakout_tg_ts, _last_breakout_tg_regime
 
-    candles_m15 = fetch_klines(SYMBOL, "15m", limit=20)
+    candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
     current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     regime      = detect_market_regime(candles_m15, candles_h1, current)
@@ -2578,7 +2738,7 @@ def breakout_scan():
     if regime["regime"] == "RANGE":
         return  # Nic nie rób w RANGE
 
-    # Telegram notification — cooldown 30 min na ten sam reżim (żeby nie spamować)
+    # Telegram notification — cooldown 30 min na ten sam reżim
     now = time.time()
     if not (regime["regime"] == _last_breakout_tg_regime
             and now - _last_breakout_tg_ts < 1800):
@@ -2600,65 +2760,32 @@ def breakout_scan():
             f"Cena ${current:.2f} | 24h: {c24:+.1f}% | 48h: {c48:+.1f}%\n"
             f"Siła: {regime.get('score', 0)}/10 | Volume: {regime['vol_ratio']}x\n"
             f"Sygnały: {regime['details']}\n\n"
-            f"⏳ Triggeruję analizę Grok2..."
+            f"⏳ Szukam setupu Algo2..."
         )
         send_telegram(msg)
 
-    # Triggeruj Groka przy IMPULSE/TREND — save_pending odrzuci duplikaty
-    print(f"[breakout-scan] {regime['regime']} wykryty — wywołuję Groka...")
-    candles_m15_full = fetch_klines(SYMBOL, "15m", limit=100)
-    grok_result = call_grok(candles_m15_full, candles_h1, current, regime=regime)
+    # Algo2 przy IMPULSE/TREND — save_pending odrzuci duplikaty
+    print(f"[breakout-scan] {regime['regime']} wykryty — szukam setupu Algo2...")
+    algo2_setups = algo_detect_setups(regime, candles_m15, candles_h1, current)
 
-    if grok_result:
-        bias = grok_result.get("bias", "neutral")
-        send_alert = grok_result.get("send_alert", False)
-        bias_proc = grok_result.get("bias_proc", 0)
-        print(f"[breakout-scan] Grok: {bias} ({bias_proc}%) send_alert={send_alert}")
+    if algo2_setups:
+        best = max(algo2_setups, key=lambda s: s["rr"])
+        level = best["entries"][0]
+        d = best["direction"]
+        print(f"[breakout-scan] Algo2: {best['type']} {d} W={level:.2f} RR={best['rr']}")
 
-        # Filtr: odrzuć setup jeśli przekonanie za niskie
-        if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
-            print(f"[breakout-scan] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}%")
-            send_alert = False
-
-        if send_alert and bias != "neutral":
-            wejscia = grok_result.get("wejscia", [])
-            entries = [w["poziom"] for w in wejscia if "poziom" in w]
-            if entries:
-                akcja_lower = grok_result.get("akcja", "").lower()
-                if "pullback" in akcja_lower:
-                    warunek = "pullback"
-                elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
-                    warunek = "przebicie"
-                else:
-                    w1_lvl = entries[0]
-                    if bias == "short":
-                        warunek = "przebicie" if w1_lvl < current else "pullback"
-                    else:
-                        warunek = "przebicie" if w1_lvl > current else "pullback"
-
-                grok_setup = {
-                    "type":         "breakout",
-                    "direction":    bias,
-                    "score":        bias_proc,
-                    "kurs":         round(current, 2),
-                    "entries":      entries,
-                    "warunek":      warunek,
-                    "sl":           grok_result.get("sl"),
-                    "sl_after_tp1": grok_result.get("sl_after_tp1"),
-                    "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
-                    "rr":           grok_result.get("rr", 0),
-                    "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
-                }
-                save_pending(grok_setup, "Grok2", "", current)
-                if grok_setup.get("setup_id"):
-                    log_to_alerty("Grok2", "", grok_setup)
-                    send_telegram(format_grok_alert(grok_result, current, grok_setup["setup_id"], model_name="Grok2"))
-                else:
-                    print("[breakout-scan] Duplikat — setup już istnieje.")
+        rejection = validate_setup(best, "Algo2-breakout")
+        if not rejection:
+            save_pending(best, "Algo2", "", current)
+            if best.get("setup_id"):
+                log_to_alerty("Algo2", "", best)
+                send_telegram(format_alert("Algo2", best, current, True))
+            else:
+                print("[breakout-scan] Duplikat — setup już istnieje.")
         else:
-            print(f"[breakout-scan] Grok nie dał setupu po breakoucie.")
+            print(f"[breakout-scan] Algo2 odrzucony: {rejection}")
     else:
-        print("[breakout-scan] Brak odpowiedzi od Groka.")
+        print(f"[breakout-scan] Algo2 nie znalazł setupu.")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -2682,9 +2809,9 @@ def main():
     # Exchange sync wyłączony — Bitget testowany osobnym workflow
     # exchange_trader.sync()
 
-    # O :45 każdej godziny — Grok weryfikuje nieotwarte setupy
-    if datetime.now(TZ).minute == 45:
-        check_pending_with_grok(candles_m15, candles_h1, current)
+    # O :45 każdej godziny — Grok weryfikował nieotwarte setupy (wyłączony)
+    # if datetime.now(TZ).minute == 45:
+    #     check_pending_with_grok(candles_m15, candles_h1, current)
 
     # ── 1. Algorytm ───────────────────────────────────────────────────────────
     algo_setups  = algo_detect(candles_m15, candles_h1, rng)
@@ -2782,64 +2909,88 @@ def main():
     else:
         print("[gpt] Pominięty (ENABLE_GPT=False).")
 
-    # ── 4. Grok (Grok2 prompt — sentyment z Bitget + kontekst strukturalny) ──
-    print("[grok] Wysylam dane do analizy (Grok2 prompt)...")
-    grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
+    # ── 4. Grok (wyłączony — zastąpiony przez Algo2) ────────────────────────
+    if ENABLE_GROK:
+        print("[grok] Wysylam dane do analizy (Grok2 prompt)...")
+        grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
 
-    if grok_result:
-        bias       = grok_result.get("bias", "neutral")
-        bias_proc  = grok_result.get("bias_proc", 0)
-        send_alert = grok_result.get("send_alert", False)
-        tf_aligned = grok_result.get("tf_aligned", True)
-        print(f"[grok] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
+        if grok_result:
+            bias       = grok_result.get("bias", "neutral")
+            bias_proc  = grok_result.get("bias_proc", 0)
+            send_alert = grok_result.get("send_alert", False)
+            tf_aligned = grok_result.get("tf_aligned", True)
+            print(f"[grok] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
 
-        # Filtr: odrzuć setup jeśli przekonanie za niskie
-        if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
-            print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnał.")
-            send_alert = False
+            if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
+                print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}%")
+                send_alert = False
 
-        if send_alert and bias != "neutral":
-            wejscia = grok_result.get("wejscia", [])
-            entries = [w["poziom"] for w in wejscia if "poziom" in w]
-            if entries:
-                # Ustal warunek wejścia na podstawie tekstu akcji
-                akcja_lower = grok_result.get("akcja", "").lower()
-                if "pullback" in akcja_lower:
-                    warunek = "pullback"
-                elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
-                    warunek = "przebicie"
-                else:
-                    w1_lvl = entries[0]
-                    if bias == "short":
-                        warunek = "przebicie" if w1_lvl < current else "pullback"
+            if send_alert and bias != "neutral":
+                wejscia = grok_result.get("wejscia", [])
+                entries = [w["poziom"] for w in wejscia if "poziom" in w]
+                if entries:
+                    akcja_lower = grok_result.get("akcja", "").lower()
+                    if "pullback" in akcja_lower:
+                        warunek = "pullback"
+                    elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
+                        warunek = "przebicie"
                     else:
-                        warunek = "przebicie" if w1_lvl > current else "pullback"
+                        w1_lvl = entries[0]
+                        if bias == "short":
+                            warunek = "przebicie" if w1_lvl < current else "pullback"
+                        else:
+                            warunek = "przebicie" if w1_lvl > current else "pullback"
 
-                grok_setup = {
-                    "type":         "",
-                    "direction":    bias,
-                    "score":        bias_proc,
-                    "kurs":         round(current, 2),
-                    "entries":      entries,
-                    "warunek":      warunek,
-                    "sl":           grok_result.get("sl"),
-                    "sl_after_tp1": grok_result.get("sl_after_tp1"),
-                    "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
-                    "rr":           grok_result.get("rr", 0),
-                    "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
-                }
-                save_pending(grok_setup, "Grok2", "", current)  # ustawia grok_setup["setup_id"]
-                if grok_setup.get("setup_id"):
-                    log_to_alerty("Grok2", "", grok_setup)
-                    send_telegram(format_grok_alert(grok_result, current, grok_setup["setup_id"], model_name="Grok2"))
+                    grok_setup = {
+                        "type":         "",
+                        "direction":    bias,
+                        "score":        bias_proc,
+                        "kurs":         round(current, 2),
+                        "entries":      entries,
+                        "warunek":      warunek,
+                        "sl":           grok_result.get("sl"),
+                        "sl_after_tp1": grok_result.get("sl_after_tp1"),
+                        "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
+                        "rr":           grok_result.get("rr", 0),
+                        "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
+                    }
+                    save_pending(grok_setup, "Grok2", "", current)
+                    if grok_setup.get("setup_id"):
+                        log_to_alerty("Grok2", "", grok_setup)
+                        send_telegram(format_grok_alert(grok_result, current, grok_setup["setup_id"], model_name="Grok2"))
+                    else:
+                        print("[grok] Duplikat pominięty.")
                 else:
-                    print("[grok] Duplikat pominięty — setup już istnieje, pomijam alert.")
+                    send_telegram(format_grok_alert(grok_result, current, None, model_name="Grok2"))
             else:
-                send_telegram(format_grok_alert(grok_result, current, None, model_name="Grok2"))
+                print(f"[grok] Brak konkretnego setupu.")
         else:
-            print(f"[grok] Brak konkretnego setupu — pomijam Telegram i arkusz.")
+            print("[grok] Brak odpowiedzi.")
     else:
-        print("[grok] Brak odpowiedzi.")
+        print("[grok] Pominięty (ENABLE_GROK=False).")
+
+    # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
+    algo2_setups = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    if algo2_setups:
+        best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
+        level = best_algo2["entries"][0]
+        d = best_algo2["direction"]
+        print(f"[algo2] Setup: {best_algo2['type']} {d} W={level:.2f} RR={best_algo2['rr']}")
+        rejection = validate_setup(best_algo2, "Algo2")
+        if rejection:
+            pass
+        elif not was_alerted("Algo2", level, d):
+            save_pending(best_algo2, "Algo2", "", current)
+            if best_algo2.get("setup_id"):
+                log_to_alerty("Algo2", "", best_algo2)
+                save_alerted("Algo2", level, d)
+                send_telegram(format_alert("Algo2", best_algo2, current, True))
+            else:
+                print("[algo2] Duplikat pominięty — setup już istnieje.")
+        else:
+            print(f"[algo2] Duplikat w cooldown, pomijam.")
+    else:
+        print("[algo2] Brak setupu.")
 
     # ── 5. GPT Relaxed (live search — sam pobiera BTC/ETH/F&G) ──────────────
     if ENABLE_GPT_RELAXED:

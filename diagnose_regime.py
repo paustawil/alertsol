@@ -517,9 +517,11 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "rr": round((tp1 - w) / (w - sl), 1),
                 })
 
-        # 2. trend_consolidation_long — włączony ponownie (test symetrii)
+        # 2. trend_consolidation_long — WYŁĄCZONY (31% WR, stratny w obu Q3'25 i Q1'26)
+        #    Konsolidacja ma inherentny short bias w krypto — breakdown bardziej
+        #    prawdopodobny niż breakout. Żaden filtr (48h, pozycja, str7) nie pomaga.
         consol = find_consolidation(candles_h1)
-        if consol and strength >= 5:
+        if False and consol and strength >= 5:
             w = consol["low"] + consol["range"] * 0.2
             sl = consol["low"] - atr * 1.0
             tp1 = consol["high"] + consol["range"]
@@ -774,7 +776,8 @@ def main():
     print(f"\nPer setup type:")
     for t, s in sorted(by_type.items()):
         wr = s["wins"] / (s["wins"] + s["losses"]) * 100 if s["wins"] + s["losses"] > 0 else 0
-        print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}")
+        avg = s["pnl"] / s["count"] if s["count"] > 0 else 0
+        print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}  avg=${avg:+.2f}")
 
     # Daily stats
     if daily_pnl:
