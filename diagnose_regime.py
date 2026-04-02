@@ -382,21 +382,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     if atr <= 0:
         return setups
 
-    # Pobierz zmiany cenowe z reżimu
-    c24 = regime.get("change_24h", 0)
-    c48 = regime.get("change_48h", 0)
-
-    # ── Filtr zgodności: 24h i 48h muszą zgadzać się z kierunkiem ─────────
-    # Nie graj longów gdy 24h jest ujemna (trend słabnie)
-    # Nie graj shortów gdy 24h jest dodatnia (trend słabnie)
-    trend_confirmed = True
-    if direction == "up" and c24 < 0.5:
-        trend_confirmed = False  # 24h nie potwierdza wzrostu
-    elif direction == "down" and c24 > -0.5:
-        trend_confirmed = False  # 24h nie potwierdza spadku
-
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
-    if direction == "down" and trend_confirmed:
+    if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
 
         # 1. trend_retest_short — retest wybitego supportu
@@ -464,7 +451,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     })
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
-    elif direction == "up" and trend_confirmed:
+    elif direction == "up":
         strength = regime.get("strength", 0)
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
 
@@ -615,8 +602,8 @@ def evaluate_setup(setup: dict, future_m15: list[dict], entry_window_h: int = 24
 
 def main():
     parser = argparse.ArgumentParser(description="Diagnostyka reżimu + algorytmiczne setupy")
-    parser.add_argument("--from", dest="dt_from", default="2026-03-25 00:00")
-    parser.add_argument("--to", dest="dt_to", default="2026-03-31 00:00")
+    parser.add_argument("--from", dest="dt_from", default="2026-01-01 00:00")
+    parser.add_argument("--to", dest="dt_to", default="2026-04-01 00:00")
     args = parser.parse_args()
 
     from_ts = _parse_dt(args.dt_from)
@@ -645,6 +632,7 @@ def main():
     results = {"TP1+TP2": 0, "TP1+BE": 0, "SL": 0, "no_entry": 0, "open": 0}
     pnl_sum = 0.0
     by_type = {}
+    daily_pnl = {}  # {date_str: pnl}
     last_setup_type = None  # deduplikacja — nie powtarzaj tego samego setupu
 
     print()
@@ -685,6 +673,10 @@ def main():
         results[outcome["wynik"]] += 1
         pnl = outcome["pnl_tp1"]
         pnl_sum += pnl
+
+        # Daily PnL tracking
+        day_str = _ts_fmt(signal_ts)[:10]
+        daily_pnl[day_str] = daily_pnl.get(day_str, 0.0) + pnl
 
         # Stats per type
         t = best["type"]
@@ -727,6 +719,32 @@ def main():
     for t, s in sorted(by_type.items()):
         wr = s["wins"] / (s["wins"] + s["losses"]) * 100 if s["wins"] + s["losses"] > 0 else 0
         print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}")
+
+    # Daily stats
+    if daily_pnl:
+        days_with_trades = {d: p for d, p in daily_pnl.items() if p != 0}
+        total_days = (to_ts - from_ts) / 86400
+        trading_days = len(days_with_trades)
+        daily_values = list(days_with_trades.values()) if days_with_trades else [0]
+
+        print(f"\nDaily stats:")
+        print(f"  Okres:             {total_days:.0f} dni")
+        print(f"  Dni z trade'ami:   {trading_days}")
+        print(f"  Avg PnL/dzień:     ${pnl_sum / total_days:+.2f} (cały okres)")
+        if trading_days > 0:
+            print(f"  Avg PnL/trading d: ${pnl_sum / trading_days:+.2f} (tylko dni z trade'ami)")
+        print(f"  Best day:          ${max(daily_values):+.2f}")
+        print(f"  Worst day:         ${min(daily_values):+.2f}")
+
+        # Top 5 best / worst days
+        sorted_days = sorted(days_with_trades.items(), key=lambda x: x[1])
+        if len(sorted_days) >= 3:
+            print(f"\n  Najgorsze dni:")
+            for d, p in sorted_days[:3]:
+                print(f"    {d}: ${p:+.2f}")
+            print(f"  Najlepsze dni:")
+            for d, p in sorted_days[-3:]:
+                print(f"    {d}: ${p:+.2f}")
 
 
 if __name__ == "__main__":
