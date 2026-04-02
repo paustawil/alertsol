@@ -1436,34 +1436,10 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
     return None
 
 
-def _write_algo2_log(lines: list[str]):
-    """Dopisuje linie do algo2_log.txt (max 500 KB, rotacja)."""
-    path = "algo2_log.txt"
-    try:
-        text = "\n".join(lines) + "\n"
-        # Rotacja — jeśli plik > 500 KB, zostaw ostatnie 250 KB
-        try:
-            size = os.path.getsize(path)
-            if size > 500_000:
-                with open(path, "r") as f:
-                    f.seek(size - 250_000)
-                    f.readline()  # skip partial line
-                    tail = f.read()
-                with open(path, "w") as f:
-                    f.write(tail)
-        except FileNotFoundError:
-            pass
-        with open(path, "a") as f:
-            f.write(text)
-    except Exception as e:
-        print(f"[algo2-log] Błąd zapisu: {e}")
-
-
 def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[dict],
-                       current_price: float) -> list[dict]:
-    """Algorytmicznie wykrywa setupy trend/impulse/range. Zwraca listę setupów
-    w formacie kompatybilnym z save_pending (entries, sl, tps, rr, ...).
-    Loguje pełną analizę do algo2_log.txt."""
+                       current_price: float) -> tuple[list[dict], str]:
+    """Algorytmicznie wykrywa setupy trend/impulse/range.
+    Zwraca (setupy, log_text) — log_text trafia do reasoning/arkusza."""
     regime_name = regime["regime"]
     direction = regime.get("direction", "none")
     atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
@@ -1484,8 +1460,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
 
     if atr <= 0:
         log_lines.append(f"  SKIP: ATR <= 0")
-        _write_algo2_log(log_lines)
-        return setups
+        return setups, "\n".join(log_lines)
 
     # Max dystans entry od aktualnej ceny — odrzuć setupy z nierealistycznym pullbackiem
     max_entry_dist = current_price * 0.03  # 3%
@@ -1659,8 +1634,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         log_lines.append(f"  Brak setupów dla direction={direction}")
 
     log_lines.append(f"  WYNIK: {len(setups)} setupów")
-    _write_algo2_log(log_lines)
-    return setups
+    return setups, "\n".join(log_lines)
 
 
 # ── Claude API ────────────────────────────────────────────────────────────────
@@ -2735,14 +2709,23 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
 
     sid_txt = f" #{setup.get('setup_id')}" if setup.get("setup_id") else ""
 
-    # Typ setupu + reżim (dla Algo2)
+    # Typ setupu + skrócona diagnostyka (dla Algo2)
     type_line = f"<b>Typ:</b> {setup_type}\n" if setup_type else ""
+
+    # Wyciągnij kluczowe linie z loga (swing, consol, reżim) do Telegrama
+    diag_lines = []
+    if reasoning:
+        for line in reasoning.split("\n"):
+            line = line.strip()
+            if any(k in line for k in ["Cena:", "Swing", "Consolidation:", "WYNIK:"]):
+                diag_lines.append(line)
+    diag_txt = "\n".join(diag_lines) if diag_lines else ""
 
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
         f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n\n"
         + type_line
-        + (f"<b>Reżim:</b> {reasoning}\n" if reasoning else "")
+        + (f"<pre>{diag_txt}</pre>\n" if diag_txt else "")
         + f"\nCena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejścia)\n\n"
         f"<b>Ustaw zlecenia:</b>\n{entries_txt}\n\n"
         f"<b>SL:</b>  ${sl:.2f}\n"
@@ -2859,10 +2842,11 @@ def breakout_scan():
 
     # Algo2 przy IMPULSE/TREND — save_pending odrzuci duplikaty
     print(f"[breakout-scan] {regime['regime']} wykryty — szukam setupu Algo2...")
-    algo2_setups = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
 
     if algo2_setups:
         best = max(algo2_setups, key=lambda s: s["rr"])
+        best["reasoning"] = algo2_log
         level = best["entries"][0]
         d = best["direction"]
         print(f"[breakout-scan] Algo2: {best['type']} {d} W={level:.2f} RR={best['rr']}")
@@ -2876,8 +2860,13 @@ def breakout_scan():
             else:
                 print("[breakout-scan] Duplikat — setup już istnieje.")
         else:
+            log_to_alerty("Algo2", rejection, best)
             print(f"[breakout-scan] Algo2 odrzucony: {rejection}")
     else:
+        log_to_alerty("Algo2", "brak_setupu", {
+            "type": "", "direction": "", "reasoning": algo2_log,
+            "kurs": round(current, 2),
+        })
         print(f"[breakout-scan] Algo2 nie znalazł setupu.")
 
 
@@ -3045,12 +3034,12 @@ def main():
         print("[grok] Pominięty (ENABLE_GROK=False).")
 
     # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
-    regime_label = f"{regime['regime']}({regime.get('score', 0)})"
-    algo2_setups = algo_detect_setups(regime, candles_m15, candles_h1, current)
-    print(f"[algo2] Reżim: {regime_label} | Setupów: {len(algo2_setups)}")
+    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
 
     if algo2_setups:
         best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
+        best_algo2["reasoning"] = algo2_log
         level = best_algo2["entries"][0]
         d = best_algo2["direction"]
         dist = abs(current - level)
@@ -3069,9 +3058,8 @@ def main():
         else:
             print(f"[algo2] Duplikat w cooldown, pomijam.")
     else:
-        # Loguj brak setupu do arkusza (żeby widzieć co algo widzi)
         log_to_alerty("Algo2", "brak_setupu", {
-            "type": "", "direction": "", "reasoning": regime_label,
+            "type": "", "direction": "", "reasoning": algo2_log,
             "kurs": round(current, 2),
         })
 
