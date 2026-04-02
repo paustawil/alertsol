@@ -310,10 +310,298 @@ def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_p
     }
 
 
+# ── Algorytmiczne setupy per reżim ──────────────────────────────────────────
+
+def find_swing_points(candles_h1: list[dict], n: int = 12):
+    """Znajduje swing high i swing low z ostatnich n świec H1."""
+    recent = candles_h1[-n:]
+    swing_high = max(c["high"] for c in recent)
+    swing_low = min(c["low"] for c in recent)
+    return swing_high, swing_low
+
+
+def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles: int = 10):
+    """Szuka konsolidacji przy dnie/szczycie — wąski zakres w ostatnich świecach."""
+    for n in range(min_candles, min(max_candles + 1, len(candles_h1))):
+        recent = candles_h1[-n:]
+        hi = max(c["high"] for c in recent)
+        lo = min(c["low"] for c in recent)
+        rng = hi - lo
+        # ATR z szerszego kontekstu
+        atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
+        if atr > 0 and rng < atr * 2.5:  # zakres < 2.5 ATR = konsolidacja
+            return {"high": hi, "low": lo, "range": rng, "candles": n}
+    return None
+
+
+def find_broken_support(candles_h1: list[dict], current_price: float):
+    """Szuka wybitego supportu powyżej aktualnej ceny (teraz resistance)."""
+    # Szukaj w starszych świecach (8-30h temu) dołków które były wielokrotnie dotykane
+    older = candles_h1[-30:-6] if len(candles_h1) >= 30 else candles_h1[:-6]
+    if len(older) < 5:
+        return None
+
+    # Znajdź lokalne dołki w starszych świecach
+    lows = [c["low"] for c in older]
+    support_levels = []
+    for i in range(1, len(lows) - 1):
+        if lows[i] <= lows[i-1] and lows[i] <= lows[i+1]:
+            support_levels.append(lows[i])
+
+    # Szukaj poziomu który jest POWYŻEJ aktualnej ceny (został wybity)
+    for level in sorted(support_levels, reverse=True):
+        if level > current_price * 1.005 and level < current_price * 1.06:
+            # Poziom 0.5-6% powyżej ceny = dobry retest target
+            return level
+    return None
+
+
+def find_broken_resistance(candles_h1: list[dict], current_price: float):
+    """Szuka wybitej resistance poniżej aktualnej ceny (teraz support)."""
+    older = candles_h1[-30:-6] if len(candles_h1) >= 30 else candles_h1[:-6]
+    if len(older) < 5:
+        return None
+    highs = [c["high"] for c in older]
+    resistance_levels = []
+    for i in range(1, len(highs) - 1):
+        if highs[i] >= highs[i-1] and highs[i] >= highs[i+1]:
+            resistance_levels.append(highs[i])
+    for level in sorted(resistance_levels):
+        if level < current_price * 0.995 and level > current_price * 0.94:
+            return level
+    return None
+
+
+def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[dict],
+                       current_price: float) -> list[dict]:
+    """Algorytmicznie wykrywa setupy na podstawie reżimu. Zwraca listę setupów."""
+    regime_name = regime["regime"]
+    direction = regime.get("direction", "none")
+    atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
+    setups = []
+
+    if atr <= 0:
+        return setups
+
+    # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
+    if direction == "down":
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+
+        # 1. trend_retest_short — retest wybitego supportu
+        broken_sup = find_broken_support(candles_h1, current_price)
+        if broken_sup:
+            w = broken_sup - atr * 0.2  # lekko poniżej poziomu (strefa)
+            sl = broken_sup + atr * 1.0  # 1 ATR powyżej
+            tp1 = swing_low
+            tp2 = swing_low - (broken_sup - swing_low) * 0.5
+            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                setups.append({
+                    "type": "trend_retest_short", "direction": "short",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((w - tp1) / (sl - w), 1),
+                })
+
+        # 2. trend_consolidation_short — konsolidacja przy dnie
+        consol = find_consolidation(candles_h1)
+        if consol:
+            w = consol["high"] - consol["range"] * 0.2  # górna 1/3
+            sl = consol["high"] + atr * 1.0  # 1 ATR powyżej szczytu
+            tp1 = consol["low"] - consol["range"]  # zakres poniżej dna
+            tp2 = consol["low"] - consol["range"] * 1.5
+            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                setups.append({
+                    "type": "trend_consolidation_short", "direction": "short",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((w - tp1) / (sl - w), 1),
+                })
+
+        # 3. trend_pullback_short — 38-50% korekty
+        if swing_high > swing_low:
+            swing_range = swing_high - swing_low
+            fib38 = swing_low + swing_range * 0.38
+            fib50 = swing_low + swing_range * 0.50
+            fib618 = swing_low + swing_range * 0.618
+            w = round((fib38 + fib50) / 2, 2)  # środek strefy 38-50%
+            sl = round(fib618 + atr * 0.3, 2)  # powyżej 61.8% + bufor
+            tp1 = round(swing_low, 2)
+            tp2 = round(swing_low - swing_range * 0.3, 2)
+            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5 and w > current_price * 1.003:
+                setups.append({
+                    "type": "trend_pullback_short", "direction": "short",
+                    "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                    "rr": round((w - tp1) / (sl - w), 1),
+                })
+
+        # 4. impulse_continuation_short — mini-pullback w impulsie (tylko IMPULSE)
+        if regime_name.startswith("IMPULSE_"):
+            last6 = candles_m15[-6:]
+            greens = [c for c in last6 if c["close"] > c["open"]]
+            if len(greens) >= 1 and len(greens) <= 2:
+                pullback_high = max(c["high"] for c in last6[-2:])
+                w = round(pullback_high, 2)
+                sl = round(pullback_high + atr * 0.8, 2)
+                tp1 = round(swing_low, 2)
+                tp2 = round(swing_low - atr, 2)
+                if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                    setups.append({
+                        "type": "impulse_continuation_short", "direction": "short",
+                        "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                        "rr": round((w - tp1) / (sl - w), 1),
+                    })
+
+    # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
+    elif direction == "up":
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+
+        # 1. trend_retest_long
+        broken_res = find_broken_resistance(candles_h1, current_price)
+        if broken_res:
+            w = broken_res + atr * 0.2
+            sl = broken_res - atr * 1.0
+            tp1 = swing_high
+            tp2 = swing_high + (swing_high - broken_res) * 0.5
+            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5:
+                setups.append({
+                    "type": "trend_retest_long", "direction": "long",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                })
+
+        # 2. trend_consolidation_long
+        consol = find_consolidation(candles_h1)
+        if consol:
+            w = consol["low"] + consol["range"] * 0.2
+            sl = consol["low"] - atr * 1.0
+            tp1 = consol["high"] + consol["range"]
+            tp2 = consol["high"] + consol["range"] * 1.5
+            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5:
+                setups.append({
+                    "type": "trend_consolidation_long", "direction": "long",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                })
+
+        # 3. trend_pullback_long
+        if swing_high > swing_low:
+            swing_range = swing_high - swing_low
+            fib38 = swing_high - swing_range * 0.38
+            fib50 = swing_high - swing_range * 0.50
+            fib618 = swing_high - swing_range * 0.618
+            w = round((fib38 + fib50) / 2, 2)
+            sl = round(fib618 - atr * 0.3, 2)
+            tp1 = round(swing_high, 2)
+            tp2 = round(swing_high + swing_range * 0.3, 2)
+            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5 and w < current_price * 0.997:
+                setups.append({
+                    "type": "trend_pullback_long", "direction": "long",
+                    "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                })
+
+    # ── RANGE ─────────────────────────────────────────────────────────────
+    elif regime_name == "RANGE":
+        rng = detect_range(candles_h1)
+        sup, res = rng["support"], rng["resistance"]
+        rng_size = res - sup
+        if rng_size > atr * 1.5:
+            # range_resistance_short
+            w = res - rng_size * 0.1
+            sl = res + atr * 1.0
+            tp1 = sup + rng_size * 0.5  # środek range
+            tp2 = sup + rng_size * 0.1  # blisko supportu
+            if (w - tp1) / (sl - w) >= 1.5:
+                setups.append({
+                    "type": "range_resistance_short", "direction": "short",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((w - tp1) / (sl - w), 1),
+                })
+            # range_support_long
+            w = sup + rng_size * 0.1
+            sl = sup - atr * 1.0
+            tp1 = sup + rng_size * 0.5
+            tp2 = res - rng_size * 0.1
+            if (tp1 - w) / (w - sl) >= 1.5:
+                setups.append({
+                    "type": "range_support_long", "direction": "long",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                })
+
+    return setups
+
+
+def evaluate_setup(setup: dict, future_m15: list[dict], entry_window_h: int = 24) -> dict:
+    """Ewaluuje setup na przyszłych danych M15. Sprawdza czy entry, TP1, TP2, SL zostały trafione."""
+    w = setup["w"]
+    sl = setup["sl"]
+    tp1 = setup["tp1"]
+    tp2 = setup["tp2"]
+    direction = setup["direction"]
+    entry_window_s = entry_window_h * 3600
+
+    # Szukaj entry
+    entry_ts = None
+    for c in future_m15:
+        if entry_ts is None and c["time"] <= future_m15[0]["time"] + entry_window_s:
+            if direction == "short" and c["high"] >= w:
+                entry_ts = c["time"]
+            elif direction == "long" and c["low"] <= w:
+                entry_ts = c["time"]
+
+    if entry_ts is None:
+        return {"wynik": "no_entry", "pnl_tp1": 0, "pnl_tp2": 0}
+
+    # Po entry — sprawdź co trafione pierwsze
+    tp1_hit = False
+    tp2_hit = False
+    sl_hit = False
+
+    for c in future_m15:
+        if c["time"] < entry_ts:
+            continue
+
+        if direction == "short":
+            if c["low"] <= tp1:
+                tp1_hit = True
+            if c["low"] <= tp2:
+                tp2_hit = True
+            if c["high"] >= sl:
+                sl_hit = True
+        else:  # long
+            if c["high"] >= tp1:
+                tp1_hit = True
+            if c["high"] >= tp2:
+                tp2_hit = True
+            if c["low"] <= sl:
+                sl_hit = True
+
+        # Sprawdź kolejność — kto pierwszy
+        if tp1_hit and not sl_hit:
+            if tp2_hit:
+                pnl = abs(w - tp2) if direction == "short" else abs(tp2 - w)
+                return {"wynik": "TP1+TP2", "pnl_tp1": abs(w - tp1), "pnl_tp2": pnl}
+            # Czekaj dalej na tp2 lub sl
+        if sl_hit and not tp1_hit:
+            pnl = -abs(sl - w)
+            return {"wynik": "SL", "pnl_tp1": pnl, "pnl_tp2": pnl}
+        if sl_hit and tp1_hit:
+            # TP1 trafione, potem SL — TP1+BE (break even na drugiej połowie)
+            return {"wynik": "TP1+BE", "pnl_tp1": abs(w - tp1), "pnl_tp2": 0}
+
+    # Nic nie trafione w dostępnych danych
+    return {"wynik": "open", "pnl_tp1": 0, "pnl_tp2": 0}
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Diagnostyka reżimu rynkowego")
+    parser = argparse.ArgumentParser(description="Diagnostyka reżimu + algorytmiczne setupy")
     parser.add_argument("--from", dest="dt_from", default="2026-03-25 00:00")
     parser.add_argument("--to", dest="dt_to", default="2026-03-31 00:00")
     args = parser.parse_args()
@@ -324,55 +612,108 @@ def main():
 
     print(f"Okres: {_ts_fmt(from_ts)} – {_ts_fmt(to_ts)} ({num_hours}h)")
 
-    # Pobierz dane — potrzebujemy kontekst 50 H1 + 100 M15 przed from_ts
+    # Potrzebujemy dane outcome 24h po to_ts
+    outcome_end = to_ts + 24 * 3600
+
     print("Pobieranie M15...")
-    m15_total = 100 + num_hours * 4 + 50
-    all_m15 = fetch_klines_paginated("SOLUSDT", "15m", total=m15_total, end_ts_s=to_ts)
+    m15_total = 100 + (outcome_end - from_ts) // 900 + 50
+    all_m15 = fetch_klines_paginated("SOLUSDT", "15m", total=m15_total, end_ts_s=outcome_end)
     print(f"  Pobrano {len(all_m15)} świec M15")
 
     print("Pobieranie H1...")
-    h1_total = 50 + num_hours + 10
-    all_h1 = fetch_klines_paginated("SOLUSDT", "1h", total=h1_total, end_ts_s=to_ts)
+    h1_total = 50 + num_hours + 30
+    all_h1 = fetch_klines_paginated("SOLUSDT", "1h", total=h1_total, end_ts_s=outcome_end)
     print(f"  Pobrano {len(all_h1)} świec H1")
 
-    # Nagłówek tabeli
-    print()
-    hdr = (f"{'Czas':<18} {'Cena':>8} {'STARY reżim':<22} {'NOWY reżim':<18} "
-           f"{'24h%':>7} {'48h%':>7} {'Imp':>3} {'Vol':>5} {'Detale nowy'}")
-    print(hdr)
-    print("-" * 140)
-
     test_hours = [from_ts + i * 3600 for i in range(num_hours)]
+
+    # Statystyki
+    total_setups = 0
+    results = {"TP1+TP2": 0, "TP1+BE": 0, "SL": 0, "no_entry": 0, "open": 0}
+    pnl_sum = 0.0
+    by_type = {}
+    last_setup_type = None  # deduplikacja — nie powtarzaj tego samego setupu
+
+    print()
+    print(f"{'Czas':<18} {'Cena':>8} {'Reżim':<18} {'Setup':<28} {'W':>8} {'SL':>8} {'TP1':>8} {'TP2':>8} {'RR':>5} {'Wynik':<10} {'PnL':>7}")
+    print("-" * 160)
 
     for signal_ts in test_hours:
         ctx_m15 = [c for c in all_m15 if c["time"] <= signal_ts - 900][-100:]
         ctx_h1 = [c for c in all_h1 if c["time"] <= signal_ts - 3600][-50:]
 
         if len(ctx_m15) < 30 or len(ctx_h1) < 10:
-            print(f"{_ts_fmt(signal_ts):<18} {'---':>8} {'brak danych':<22}")
             continue
 
         price = ctx_m15[-1]["close"]
+        regime = detect_regime_new(ctx_m15, ctx_h1, price)
+        regime_label = f"{regime['regime']}({regime['strength']})"
 
-        # Stary algorytm
-        old = detect_market_regime(ctx_m15, ctx_h1, price)
-        old_label = f"{old['regime']}({old.get('score', 0)})"
+        setups = algo_detect_setups(regime, ctx_m15, ctx_h1, price)
 
-        # Nowy algorytm
-        new = detect_regime_new(ctx_m15, ctx_h1, price)
-        new_label = f"{new['regime']}({new['strength']})"
+        if not setups:
+            print(f"{_ts_fmt(signal_ts):<18} ${price:>7.2f} {regime_label:<18} {'— brak setupu —':<28}")
+            continue
+
+        # Wybierz najlepszy setup (najwyższy RR)
+        best = max(setups, key=lambda s: s["rr"])
+
+        # Deduplikacja: nie powtarzaj tego samego setupu z tymi samymi poziomami
+        setup_key = f"{best['type']}_{best['w']:.0f}_{best['sl']:.0f}"
+        if setup_key == last_setup_type:
+            continue
+        last_setup_type = setup_key
+
+        # Ewaluacja
+        future = [c for c in all_m15 if c["time"] > signal_ts]
+        outcome = evaluate_setup(best, future)
+
+        total_setups += 1
+        results[outcome["wynik"]] += 1
+        pnl = outcome["pnl_tp1"]
+        pnl_sum += pnl
+
+        # Stats per type
+        t = best["type"]
+        if t not in by_type:
+            by_type[t] = {"count": 0, "wins": 0, "losses": 0, "pnl": 0.0}
+        by_type[t]["count"] += 1
+        if outcome["wynik"] in ("TP1+TP2", "TP1+BE"):
+            by_type[t]["wins"] += 1
+        elif outcome["wynik"] == "SL":
+            by_type[t]["losses"] += 1
+        by_type[t]["pnl"] += pnl
 
         print(
             f"{_ts_fmt(signal_ts):<18} "
             f"${price:>7.2f} "
-            f"{old_label:<22} "
-            f"{new_label:<18} "
-            f"{new['change_24h']:>+6.1f}% "
-            f"{new['change_48h']:>+6.1f}% "
-            f"{new['impulse']:>3} "
-            f"{new['vol_ratio']:>4.1f}x "
-            f"{new['details']}"
+            f"{regime_label:<18} "
+            f"{best['type']:<28} "
+            f"${best['w']:>7.2f} "
+            f"${best['sl']:>7.2f} "
+            f"${best['tp1']:>7.2f} "
+            f"${best['tp2']:>7.2f} "
+            f"{best['rr']:>4.1f} "
+            f"{outcome['wynik']:<10} "
+            f"${pnl:>+6.2f}"
         )
+
+    # Podsumowanie
+    print("\n" + "=" * 80)
+    print("PODSUMOWANIE ALGO")
+    print("=" * 80)
+    print(f"Setupy: {total_setups}")
+    wins = results["TP1+TP2"] + results["TP1+BE"]
+    losses = results["SL"]
+    print(f"Wyniki: {results}")
+    if wins + losses > 0:
+        print(f"Win rate: {wins}/{wins+losses} = {wins/(wins+losses)*100:.0f}%")
+    print(f"PnL suma: ${pnl_sum:+.2f}")
+
+    print(f"\nPer setup type:")
+    for t, s in sorted(by_type.items()):
+        wr = s["wins"] / (s["wins"] + s["losses"]) * 100 if s["wins"] + s["losses"] > 0 else 0
+        print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}")
 
 
 if __name__ == "__main__":
