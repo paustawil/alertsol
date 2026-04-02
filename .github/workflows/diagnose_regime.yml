@@ -19,6 +19,10 @@ on:
           - binance
           - bitget
         default: 'auto'
+      test_filters:
+        description: 'Testuj warianty filtrów trend_consolidation'
+        type: boolean
+        default: false
 
 jobs:
   diagnose:
@@ -41,4 +45,8 @@ jobs:
 
       - name: Uruchom diagnostyke
         run: |
-          python diagnose_regime.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}' --source '${{ inputs.source }}'
+          FLAGS=""
+          if [ "${{ inputs.test_filters }}" = "true" ]; then
+            FLAGS="--test-filters"
+          fi
+          python diagnose_regime.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}' --source '${{ inputs.source }}' $FLAGS
