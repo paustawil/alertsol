@@ -449,9 +449,6 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 })
 
         # 2. trend_consolidation_short — konsolidacja przy dnie
-        strength = regime.get("strength", 0)
-        change_48h = regime.get("change_48h", 0)
-        price_48h_ago = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
         consol = find_consolidation(candles_h1)
         if consol:
             w = consol["high"] - consol["range"] * 0.2  # górna 1/3
@@ -459,26 +456,12 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             tp1 = consol["low"] - consol["range"]  # zakres poniżej dna
             tp2 = consol["low"] - consol["range"] * 1.5
             if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
-                base_setup = {
-                    "direction": "short",
+                setups.append({
+                    "type": "trend_consolidation_short", "direction": "short",
                     "w": round(w, 2), "sl": round(sl, 2),
                     "tp1": round(tp1, 2), "tp2": round(tp2, 2),
                     "rr": round((w - tp1) / (sl - w), 1),
-                }
-                # Normalny setup (zawsze)
-                setups.append({**base_setup, "type": "trend_consolidation_short"})
-                # Warianty filtrów (symetryczne do LONG, do porównania)
-                filters = {
-                    "tcs_base":      True,  # brak filtra strength (obecne zachowanie)
-                    "tcs_48h":       change_48h < 0,
-                    "tcs_pos":       consol["high"] < price_48h_ago,
-                    "tcs_str7":      strength >= 7,
-                    "tcs_48h+pos":   change_48h < 0 and consol["high"] < price_48h_ago,
-                    "tcs_48h+str7":  strength >= 7 and change_48h < 0,
-                }
-                for variant_name, passes in filters.items():
-                    if passes:
-                        setups.append({**base_setup, "type": variant_name})
+                })
 
         # 3. trend_pullback_short — 38-50% korekty
         if swing_high > swing_low:
@@ -534,38 +517,22 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "rr": round((tp1 - w) / (w - sl), 1),
                 })
 
-        # 2. trend_consolidation_long — z wariantami filtrów do testowania
+        # 2. trend_consolidation_long — WYŁĄCZONY (31% WR, stratny w obu Q3'25 i Q1'26)
+        #    Konsolidacja ma inherentny short bias w krypto — breakdown bardziej
+        #    prawdopodobny niż breakout. Żaden filtr (48h, pozycja, str7) nie pomaga.
         consol = find_consolidation(candles_h1)
-        change_48h = regime.get("change_48h", 0)
-        price_48h_ago = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
-
-        if consol:
+        if False and consol and strength >= 5:
             w = consol["low"] + consol["range"] * 0.2
             sl = consol["low"] - atr * 1.0
             tp1 = consol["high"] + consol["range"]
             tp2 = consol["high"] + consol["range"] * 1.5
-            rr_ok = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
-            if rr_ok:
-                base_setup = {
-                    "direction": "long",
+            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5:
+                setups.append({
+                    "type": "trend_consolidation_long", "direction": "long",
                     "w": round(w, 2), "sl": round(sl, 2),
                     "tp1": round(tp1, 2), "tp2": round(tp2, 2),
                     "rr": round((tp1 - w) / (w - sl), 1),
-                }
-
-                # Filtry do testowania (każdy wariant emitowany osobno)
-                filters = {
-                    "tcl_base":      strength >= 5,
-                    "tcl_48h":       strength >= 5 and change_48h > 0,
-                    "tcl_pos":       strength >= 5 and consol["low"] > price_48h_ago,
-                    "tcl_str7":      strength >= 7,
-                    "tcl_48h+pos":   strength >= 5 and change_48h > 0 and consol["low"] > price_48h_ago,
-                    "tcl_48h+str7":  strength >= 7 and change_48h > 0,
-                }
-
-                for variant_name, passes in filters.items():
-                    if passes:
-                        setups.append({**base_setup, "type": variant_name})
+                })
 
         # 3. trend_pullback_long — wymaga silniejszego trendu (>= 5)
         if swing_high > swing_low and strength >= 5:
@@ -688,8 +655,6 @@ def main():
     parser.add_argument("--to", dest="dt_to", default="2026-04-01 00:00")
     parser.add_argument("--source", choices=["auto", "binance", "bitget"], default="auto",
                         help="Źródło danych: auto (Bitget z fallback Binance), binance, bitget")
-    parser.add_argument("--test-filters", action="store_true",
-                        help="Testuj warianty filtrów trend_consolidation_long (ewaluuje każdy setup osobno)")
     args = parser.parse_args()
 
     # Override fetch function based on source
@@ -727,7 +692,6 @@ def main():
     by_type = {}
     daily_pnl = {}  # {date_str: pnl}
     last_setup_type = None  # deduplikacja — nie powtarzaj tego samego setupu
-    last_setup_per_type = {}  # deduplikacja per typ (tryb test-filters)
 
     print()
     print(f"{'Czas':<18} {'Cena':>8} {'Reżim':<18} {'Setup':<28} {'W':>8} {'SL':>8} {'TP1':>8} {'TP2':>8} {'RR':>5} {'Wynik':<10} {'PnL':>7}")
@@ -747,33 +711,10 @@ def main():
         setups = algo_detect_setups(regime, ctx_m15, ctx_h1, price)
 
         if not setups:
-            if not args.test_filters:
-                print(f"{_ts_fmt(signal_ts):<18} ${price:>7.2f} {regime_label:<18} {'— brak setupu —':<28}")
+            print(f"{_ts_fmt(signal_ts):<18} ${price:>7.2f} {regime_label:<18} {'— brak setupu —':<28}")
             continue
 
-        # W trybie test-filters: ewaluuj KAŻDY setup osobno
-        if args.test_filters:
-            future = [c for c in all_m15 if c["time"] > signal_ts]
-            for s in setups:
-                setup_key = f"{s['type']}_{s['w']:.0f}_{s['sl']:.0f}"
-                if setup_key in last_setup_per_type:
-                    continue
-                last_setup_per_type[setup_key] = True
-
-                outcome = evaluate_setup(s, future)
-                t = s["type"]
-                if t not in by_type:
-                    by_type[t] = {"count": 0, "wins": 0, "losses": 0, "pnl": 0.0}
-                by_type[t]["count"] += 1
-                pnl = outcome["pnl_tp1"]
-                by_type[t]["pnl"] += pnl
-                if outcome["wynik"] in ("TP1+TP2", "TP1+BE"):
-                    by_type[t]["wins"] += 1
-                elif outcome["wynik"] == "SL":
-                    by_type[t]["losses"] += 1
-            continue
-
-        # Normalny tryb: najlepszy setup
+        # Wybierz najlepszy setup (najwyższy RR)
         best = max(setups, key=lambda s: s["rr"])
 
         # Deduplikacja: nie powtarzaj tego samego setupu z tymi samymi poziomami
@@ -822,74 +763,47 @@ def main():
 
     # Podsumowanie
     print("\n" + "=" * 80)
-    if args.test_filters:
-        print("PORÓWNANIE FILTRÓW trend_consolidation")
-        print("=" * 80)
-        print(f"\n{'Wariant':<20} {'Cnt':>4} {'Win':>4} {'Loss':>5} {'WR':>5} {'PnL':>8} {'Avg/tr':>8}")
-        print("-" * 60)
-        # Najpierw LONG warianty (tcl_*), potem SHORT warianty (tcs_*)
-        for prefix, label in [("tcl_", "── LONG (trend_consolidation_long) ──"),
-                              ("tcs_", "── SHORT (trend_consolidation_short) ──")]:
-            variants = {t: s for t, s in by_type.items() if t.startswith(prefix)}
-            if variants:
-                print(f"\n{label}")
-                for t in sorted(variants):
-                    s = variants[t]
-                    total = s["wins"] + s["losses"]
-                    wr = s["wins"] / total * 100 if total > 0 else 0
-                    avg = s["pnl"] / s["count"] if s["count"] > 0 else 0
-                    print(f"  {t:<18} {s['count']:>4} {s['wins']:>4} {s['losses']:>5} {wr:>4.0f}% ${s['pnl']:>+7.2f} ${avg:>+7.2f}")
-        # Reszta setupów (nie-filtrowe)
-        other = {t: s for t, s in by_type.items() if not t.startswith("tcl_") and not t.startswith("tcs_")}
-        if other:
-            print(f"\n── Inne setupy ──")
-            for t, s in sorted(other.items()):
-                total = s["wins"] + s["losses"]
-                wr = s["wins"] / total * 100 if total > 0 else 0
-                avg = s["pnl"] / s["count"] if s["count"] > 0 else 0
-                print(f"  {t:<18} {s['count']:>4} {s['wins']:>4} {s['losses']:>5} {wr:>4.0f}% ${s['pnl']:>+7.2f} ${avg:>+7.2f}")
-    else:
-        print("PODSUMOWANIE ALGO")
-        print("=" * 80)
-        print(f"Setupy: {total_setups}")
-        wins = results["TP1+TP2"] + results["TP1+BE"]
-        losses = results["SL"]
-        print(f"Wyniki: {results}")
-        if wins + losses > 0:
-            print(f"Win rate: {wins}/{wins+losses} = {wins/(wins+losses)*100:.0f}%")
-        print(f"PnL suma: ${pnl_sum:+.2f}")
+    print("PODSUMOWANIE ALGO")
+    print("=" * 80)
+    print(f"Setupy: {total_setups}")
+    wins = results["TP1+TP2"] + results["TP1+BE"]
+    losses = results["SL"]
+    print(f"Wyniki: {results}")
+    if wins + losses > 0:
+        print(f"Win rate: {wins}/{wins+losses} = {wins/(wins+losses)*100:.0f}%")
+    print(f"PnL suma: ${pnl_sum:+.2f}")
 
-        print(f"\nPer setup type:")
-        for t, s in sorted(by_type.items()):
-            wr = s["wins"] / (s["wins"] + s["losses"]) * 100 if s["wins"] + s["losses"] > 0 else 0
-            avg = s["pnl"] / s["count"] if s["count"] > 0 else 0
-            print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}  avg=${avg:+.2f}")
+    print(f"\nPer setup type:")
+    for t, s in sorted(by_type.items()):
+        wr = s["wins"] / (s["wins"] + s["losses"]) * 100 if s["wins"] + s["losses"] > 0 else 0
+        avg = s["pnl"] / s["count"] if s["count"] > 0 else 0
+        print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}  avg=${avg:+.2f}")
 
-        # Daily stats
-        if daily_pnl:
-            days_with_trades = {d: p for d, p in daily_pnl.items() if p != 0}
-            total_days = (to_ts - from_ts) / 86400
-            trading_days = len(days_with_trades)
-            daily_values = list(days_with_trades.values()) if days_with_trades else [0]
+    # Daily stats
+    if daily_pnl:
+        days_with_trades = {d: p for d, p in daily_pnl.items() if p != 0}
+        total_days = (to_ts - from_ts) / 86400
+        trading_days = len(days_with_trades)
+        daily_values = list(days_with_trades.values()) if days_with_trades else [0]
 
-            print(f"\nDaily stats:")
-            print(f"  Okres:             {total_days:.0f} dni")
-            print(f"  Dni z trade'ami:   {trading_days}")
-            print(f"  Avg PnL/dzień:     ${pnl_sum / total_days:+.2f} (cały okres)")
-            if trading_days > 0:
-                print(f"  Avg PnL/trading d: ${pnl_sum / trading_days:+.2f} (tylko dni z trade'ami)")
-            print(f"  Best day:          ${max(daily_values):+.2f}")
-            print(f"  Worst day:         ${min(daily_values):+.2f}")
+        print(f"\nDaily stats:")
+        print(f"  Okres:             {total_days:.0f} dni")
+        print(f"  Dni z trade'ami:   {trading_days}")
+        print(f"  Avg PnL/dzień:     ${pnl_sum / total_days:+.2f} (cały okres)")
+        if trading_days > 0:
+            print(f"  Avg PnL/trading d: ${pnl_sum / trading_days:+.2f} (tylko dni z trade'ami)")
+        print(f"  Best day:          ${max(daily_values):+.2f}")
+        print(f"  Worst day:         ${min(daily_values):+.2f}")
 
-            # Top 5 best / worst days
-            sorted_days = sorted(days_with_trades.items(), key=lambda x: x[1])
-            if len(sorted_days) >= 3:
-                print(f"\n  Najgorsze dni:")
-                for d, p in sorted_days[:3]:
-                    print(f"    {d}: ${p:+.2f}")
-                print(f"  Najlepsze dni:")
-                for d, p in sorted_days[-3:]:
-                    print(f"    {d}: ${p:+.2f}")
+        # Top 5 best / worst days
+        sorted_days = sorted(days_with_trades.items(), key=lambda x: x[1])
+        if len(sorted_days) >= 3:
+            print(f"\n  Najgorsze dni:")
+            for d, p in sorted_days[:3]:
+                print(f"    {d}: ${p:+.2f}")
+            print(f"  Najlepsze dni:")
+            for d, p in sorted_days[-3:]:
+                print(f"    {d}: ${p:+.2f}")
 
 
 if __name__ == "__main__":
