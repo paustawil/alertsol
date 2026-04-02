@@ -1,1 +1,1 @@
-This file is too large to update via API - please merge PR #89 instead and then I will update the avg/trade line separately.
+This content is a placeholder - the file is too large for the API. Please close PR #89 and merge manually after resolving the conflict by accepting the feature branch version.
