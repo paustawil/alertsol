@@ -4,18 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       dt_from:
-        description: 'Od kiedy UTC (np. "2026-03-25 00:00")'
+        description: 'Od kiedy UTC (np. "2025-07-01 00:00")'
         type: string
-        default: '2026-03-25 00:00'
+        default: '2025-07-01 00:00'
       dt_to:
-        description: 'Do kiedy UTC (np. "2026-03-31 00:00")'
+        description: 'Do kiedy UTC (np. "2025-10-01 00:00")'
         type: string
-        default: '2026-03-31 00:00'
+        default: '2025-10-01 00:00'
+      source:
+        description: 'Źródło danych (auto/binance/bitget)'
+        type: choice
+        options:
+          - auto
+          - binance
+          - bitget
+        default: 'auto'
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repo
@@ -33,4 +41,4 @@ jobs:
 
       - name: Uruchom diagnostyke
         run: |
-          python diagnose_regime.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}'
+          python diagnose_regime.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}' --source '${{ inputs.source }}'
