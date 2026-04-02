@@ -1,0 +1,34 @@
+name: Diagnose Regime
+
+on:
+  workflow_dispatch:
+    inputs:
+      dt_from:
+        description: 'Od kiedy UTC (np. "2026-03-25 00:00")'
+        type: string
+        default: '2026-03-25 00:00'
+      dt_to:
+        description: 'Do kiedy UTC (np. "2026-03-31 00:00")'
+        type: string
+        default: '2026-03-31 00:00'
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zaleznosci
+        run: pip install requests
+
+      - name: Uruchom diagnostyke
+        run: |
+          python diagnose_regime.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}'
