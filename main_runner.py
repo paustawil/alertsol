@@ -378,6 +378,7 @@ def dashboard():
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP1"> TP1</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP2"> TP2</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP1+BE"> TP1+BE</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP1+SL"> TP1+SL</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="SL"> SL</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="nie weszlo"> Nie weszło</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="anulowany"> Anulowane</label>
@@ -399,7 +400,7 @@ def dashboard():
 </body>
 <script>
 var RESULT_LABELS = {{
-  'TP1':'TP1','TP2':'TP2','TP1+BE':'TP1+BE','SL':'SL',
+  'TP1':'TP1','TP2':'TP2','TP1+BE':'TP1+BE','TP1+SL':'TP1+SL','SL':'SL',
   'nieokreslone':'Nieokreślone','nie weszlo':'Nie weszło','anulowany':'Anulowane'
 }};
 
@@ -441,12 +442,13 @@ function calcAvgExit(result, d) {{
   if (result === 'TP1')    return d.tp1;
   if (result === 'TP2')    return (d.tp1 != null && d.tp2 != null) ? (d.tp1 + d.tp2) / 2 : d.tp2;
   if (result === 'TP1+BE') return (d.tp1 != null && d.sl_after_tp1 != null) ? (d.tp1 + d.sl_after_tp1) / 2 : null;
+  if (result === 'TP1+SL') return (d.tp1 != null && d.sl_after_tp1 != null) ? (d.tp1 + d.sl_after_tp1) / 2 : null;
   return null;
 }}
 
 function calcPnl(result, d, avgExit) {{
   if (!d.avg_entry || !d.full_qty || avgExit == null || isNaN(avgExit)) return null;
-  if (!['TP1','TP2','TP1+BE','SL'].includes(result)) return null;
+  if (!['TP1','TP2','TP1+BE','TP1+SL','SL'].includes(result)) return null;
   var sign = d.direction === 'long' ? 1 : -1;
   if (result === 'SL')  return sign * d.full_qty  * (avgExit - d.avg_entry);
   if (result === 'TP1') return sign * d.half_qty  * (avgExit - d.avg_entry);
@@ -473,7 +475,7 @@ function refreshAllCells(tr, pnl) {{
   var altCell = tr.querySelector('.alt-pnl-cell');
   var deltaCell = tr.querySelector('.delta-cell');
   var alt = null;
-  if ((result === 'TP2' || result === 'TP1+BE') && d.tp1 && d.avg_entry && d.full_qty) {{
+  if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && d.tp1 && d.avg_entry && d.full_qty) {{
     alt = (d.direction === 'long' ? 1 : -1) * d.full_qty * (d.tp1 - d.avg_entry);
   }}
   altCell.textContent = alt != null ? fmt(alt) : '—';
@@ -749,7 +751,7 @@ async function saveResult(btn) {{
 
 // ── Historia z filtrami ──────────────────────────────────────────────────────
 var TRADE_USDT = {trade_usdt};
-var RESULT_OPTS_ARR = ['TP1','TP2','TP1+BE','SL','nieokreslone','nie weszlo','anulowany'];
+var RESULT_OPTS_ARR = ['TP1','TP2','TP1+BE','TP1+SL','SL','nieokreslone','nie weszlo','anulowany'];
 var histOffset = 0;
 var HIST_PAGE  = 50;
 
@@ -766,7 +768,7 @@ function getFilterParams() {{
 }}
 
 function buildHistRow(s) {{
-  var TRADING = {{'TP1':1,'TP2':1,'TP1+BE':1,'SL':1}};
+  var TRADING = {{'TP1':1,'TP2':1,'TP1+BE':1,'TP1+SL':1,'SL':1}};
   var entries = s.entries || [];
   var tps     = s.tps || [];
   var w1      = entries[0] || null;
@@ -796,7 +798,7 @@ function buildHistRow(s) {{
   // Alt PnL (TP1-only)
   var tp1p = tps[0] || null;
   var alt = null, dlt = null;
-  if ((result === 'TP2' || result === 'TP1+BE') && tp1p && efc && fq) {{
+  if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && tp1p && efc && fq) {{
     alt = Math.round(sign * fq * (tp1p - efc) * 100) / 100;
     if (pnl != null) dlt = Math.round((pnl - alt) * 100) / 100;
   }}
@@ -1813,7 +1815,7 @@ def api_cancel_setup(setup_id: int):
 @app.post("/api/update-result/{setup_id}")
 def api_update_result(setup_id: int, body: ResultUpdate):
     """Ręczna korekta wyniku i PnL zamkniętego setupu."""
-    VALID_RESULTS = {"TP1", "TP2", "TP1+BE", "SL", "nieokreslone", "nie weszlo", "anulowany"}
+    VALID_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "SL", "nieokreslone", "nie weszlo", "anulowany"}
     if body.result not in VALID_RESULTS:
         raise HTTPException(status_code=400, detail=f"Nieprawidłowy wynik: {body.result}")
 
@@ -1832,7 +1834,7 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         float(s["avg_entry"]) if s.get("avg_entry") else None
     )
 
-    if avg_exit is not None and avg_entry and body.result in ("TP1", "TP2", "TP1+BE", "SL"):
+    if avg_exit is not None and avg_entry and body.result in ("TP1", "TP2", "TP1+BE", "TP1+SL", "SL"):
         direction = s.get("direction", "long")
         sign      = 1 if direction == "long" else -1
 
@@ -1853,7 +1855,7 @@ def api_update_result(setup_id: int, body: ResultUpdate):
             pnl_usd = sign * full_qty * (avg_exit - avg_entry)
         elif body.result == "TP1":
             pnl_usd = sign * half_qty * (avg_exit - avg_entry)
-        elif body.result in ("TP2", "TP1+BE"):
+        elif body.result in ("TP2", "TP1+BE", "TP1+SL"):
             pnl_usd = sign * (half_qty + half_qty) * (avg_exit - avg_entry)
 
     db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)

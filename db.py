@@ -438,7 +438,7 @@ def get_summary_stats() -> dict:
                     ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
                                                                          AS total_pnl_usd,
                     COUNT(*) FILTER (WHERE resolved = TRUE
-                        AND result IN ('TP1','TP2','TP1+BE'))             AS wins,
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))   AS wins,
                     COUNT(*) FILTER (WHERE resolved = TRUE
                         AND result = 'SL')                               AS losses
                 FROM setups
@@ -458,11 +458,11 @@ def get_summary_stats() -> dict:
                 SELECT model,
                        COUNT(*)                                              AS all_setups,
                        COUNT(*) FILTER (WHERE resolved = TRUE
-                           AND result IN ('TP1','TP2','TP1+BE','SL'))        AS entered,
+                           AND result IN ('TP1','TP2','TP1+BE','TP1+SL','SL'))  AS entered,
                        ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
                                                                              AS pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE
-                           AND result IN ('TP1','TP2','TP1+BE'))             AS wins
+                           AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))    AS wins
                 FROM setups
                 GROUP BY model
                 ORDER BY model
@@ -513,9 +513,9 @@ def get_period_stats(period: str) -> dict:
             cur.execute(
                 f"""
                 SELECT
-                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','SL')) AS entered,
-                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE'))       AS wins,
-                    COUNT(*) FILTER (WHERE result = 'SL')                          AS losses,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')) AS entered,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL'))   AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                               AS losses,
                     COALESCE(ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2), 0) AS total_income
                 FROM setups
                 WHERE {time_filter}
