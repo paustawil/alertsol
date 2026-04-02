@@ -2761,11 +2761,10 @@ def breakout_scan():
         c24 = regime.get("change_24h", 0)
         c48 = regime.get("change_48h", 0)
         msg = (
-            f"{icon} <b>{regime['regime']} — SOL/USDT</b>\n\n"
+            f"{icon} <b>Algo2: {regime['regime']} — SOL/USDT</b>\n\n"
             f"Cena ${current:.2f} | 24h: {c24:+.1f}% | 48h: {c48:+.1f}%\n"
             f"Siła: {regime.get('score', 0)}/10 | Volume: {regime['vol_ratio']}x\n"
-            f"Sygnały: {regime['details']}\n\n"
-            f"⏳ Szukam setupu Algo2..."
+            f"Sygnały: {regime['details']}"
         )
         send_telegram(msg)
 
