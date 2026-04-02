@@ -1081,19 +1081,26 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
     bg_symbol = symbol  # Bitget candles API używa SOLUSDT (bez sufixu U)
     granularity = _BITGET_GRANULARITY.get(interval, "15min")
     end_time_ms = str(int(time.time() * 1000))
-    r = requests.get(
-        "https://api.bitget.com/api/v2/mix/market/history-candles",
-        params={
-            "symbol":      bg_symbol,
-            "productType": "USDT-FUTURES",
-            "granularity": granularity,
-            "limit":       str(limit),
-            "endTime":     end_time_ms,
-        },
-        timeout=10,
-    )
+    url = "https://api.bitget.com/api/v2/mix/market/history-candles"
+    params = {
+        "symbol":      bg_symbol,
+        "productType": "USDT-FUTURES",
+        "granularity": granularity,
+        "limit":       str(limit),
+        "endTime":     end_time_ms,
+    }
+    r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
-    data = r.json().get("data") or []
+    raw = r.json()
+    data = raw.get("data") or []
+    # Debug: loguj pierwszy i ostatni element (newest first) + ewentualne błędy
+    if data:
+        from datetime import datetime, timezone as _tz
+        newest_ts = datetime.fromtimestamp(int(data[0][0]) // 1000, tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
+        oldest_ts = datetime.fromtimestamp(int(data[-1][0]) // 1000, tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
+        print(f"[fetch] {granularity} {len(data)} candles: {oldest_ts} → {newest_ts} UTC | endTime={end_time_ms}")
+    else:
+        print(f"[fetch] {granularity} EMPTY response | endTime={end_time_ms} | raw={str(raw)[:200]}")
     # Bitget zwraca [ts_ms, open, high, low, close, baseVol, quoteVol], newest first
     candles = [
         {
