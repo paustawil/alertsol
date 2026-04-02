@@ -41,7 +41,7 @@ SHEET_HEADER = [
 # ── Prompty (importowane z sol_alert.py) ─────────────────────────────────────
 from sol_alert import (
     GROK_PROMPT, GROK2_PROMPT,
-    detect_market_regime, countertrend_bias_threshold, _build_regime_line,
+    detect_market_regime, _build_regime_line,
     MIN_GROK_BIAS_PROC,
 )
 
@@ -550,15 +550,12 @@ def process_and_write(
     akcja      = grok_result.get("akcja", "")
     reasoning  = f"{analiza} | {akcja}" if analiza and akcja else analiza or akcja
 
-    # Graduated counter-trend filter (only for Grok2 with regime data)
+    # Filtr: odrzuć setup jeśli przekonanie za niskie
     filter_note = ""
-    if send_alert and regime is not None and bias != "neutral":
-        min_bias = countertrend_bias_threshold(regime, bias)
-        if bias_proc < min_bias:
-            ct_label = " (kontr-trend)" if min_bias > MIN_GROK_BIAS_PROC else ""
-            print(f"  [{model_label}] Odrzucono: bias_proc={bias_proc}% < próg {min_bias}%{ct_label}")
-            filter_note = f"[FILTR: {bias} {bias_proc}% < {min_bias}%{ct_label}] "
-            send_alert = False
+    if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
+        print(f"  [{model_label}] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}%")
+        filter_note = f"[FILTR: {bias} {bias_proc}% < {MIN_GROK_BIAS_PROC}%] "
+        send_alert = False
 
     print(f"  [{model_label}] send_alert={send_alert} | bias={bias} ({bias_proc}%)")
 
