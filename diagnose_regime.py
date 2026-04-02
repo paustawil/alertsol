@@ -773,8 +773,10 @@ def main():
 
     print(f"\nPer setup type:")
     for t, s in sorted(by_type.items()):
-        wr = s["wins"] / (s["wins"] + s["losses"]) * 100 if s["wins"] + s["losses"] > 0 else 0
-        print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}")
+        trades = s["wins"] + s["losses"]
+        wr = s["wins"] / trades * 100 if trades > 0 else 0
+        avg = s["pnl"] / trades if trades > 0 else 0
+        print(f"  {t:<30} count={s['count']:>3}  wins={s['wins']}  losses={s['losses']}  WR={wr:.0f}%  PnL=${s['pnl']:+.2f}  avg/trade=${avg:+.2f}")
 
     # Daily stats
     if daily_pnl:
