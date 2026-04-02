@@ -336,38 +336,37 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 
 def find_broken_support(candles_h1: list[dict], current_price: float):
     """Szuka wybitego supportu powyżej aktualnej ceny (teraz resistance)."""
-    # Szukaj w starszych świecach (8-30h temu) dołków które były wielokrotnie dotykane
-    older = candles_h1[-30:-6] if len(candles_h1) >= 30 else candles_h1[:-6]
-    if len(older) < 5:
+    # Szukaj w NIEDAWNYCH świecach (3-16h temu) — bliższe poziomy
+    older = candles_h1[-16:-3] if len(candles_h1) >= 16 else candles_h1[:-3]
+    if len(older) < 4:
         return None
 
-    # Znajdź lokalne dołki w starszych świecach
+    # Znajdź lokalne dołki
     lows = [c["low"] for c in older]
     support_levels = []
     for i in range(1, len(lows) - 1):
         if lows[i] <= lows[i-1] and lows[i] <= lows[i+1]:
             support_levels.append(lows[i])
 
-    # Szukaj poziomu który jest POWYŻEJ aktualnej ceny (został wybity)
-    for level in sorted(support_levels, reverse=True):
-        if level > current_price * 1.005 and level < current_price * 1.06:
-            # Poziom 0.5-6% powyżej ceny = dobry retest target
+    # Szukaj poziomu POWYŻEJ ceny ale MAX 3% (bliskie retesty)
+    for level in sorted(support_levels):
+        if level > current_price * 1.003 and level < current_price * 1.03:
             return level
     return None
 
 
 def find_broken_resistance(candles_h1: list[dict], current_price: float):
     """Szuka wybitej resistance poniżej aktualnej ceny (teraz support)."""
-    older = candles_h1[-30:-6] if len(candles_h1) >= 30 else candles_h1[:-6]
-    if len(older) < 5:
+    older = candles_h1[-16:-3] if len(candles_h1) >= 16 else candles_h1[:-3]
+    if len(older) < 4:
         return None
     highs = [c["high"] for c in older]
     resistance_levels = []
     for i in range(1, len(highs) - 1):
         if highs[i] >= highs[i-1] and highs[i] >= highs[i+1]:
             resistance_levels.append(highs[i])
-    for level in sorted(resistance_levels):
-        if level < current_price * 0.995 and level > current_price * 0.94:
+    for level in sorted(resistance_levels, reverse=True):
+        if level < current_price * 0.997 and level > current_price * 0.97:
             return level
     return None
 
@@ -453,11 +452,12 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
+        strength = regime.get("strength", 0)
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
 
-        # 1. trend_retest_long
+        # 1. trend_retest_long — wymaga silniejszego trendu (>= 5)
         broken_res = find_broken_resistance(candles_h1, current_price)
-        if broken_res:
+        if broken_res and strength >= 5:
             w = broken_res + atr * 0.2
             sl = broken_res - atr * 1.0
             tp1 = swing_high
@@ -470,9 +470,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "rr": round((tp1 - w) / (w - sl), 1),
                 })
 
-        # 2. trend_consolidation_long
+        # 2. trend_consolidation_long — wymaga silniejszego trendu (>= 5)
         consol = find_consolidation(candles_h1)
-        if consol:
+        if consol and strength >= 5:
             w = consol["low"] + consol["range"] * 0.2
             sl = consol["low"] - atr * 1.0
             tp1 = consol["high"] + consol["range"]
@@ -485,8 +485,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "rr": round((tp1 - w) / (w - sl), 1),
                 })
 
-        # 3. trend_pullback_long
-        if swing_high > swing_low:
+        # 3. trend_pullback_long — wymaga silniejszego trendu (>= 5)
+        if swing_high > swing_low and strength >= 5:
             swing_range = swing_high - swing_low
             fib38 = swing_high - swing_range * 0.38
             fib50 = swing_high - swing_range * 0.50
