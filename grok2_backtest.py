@@ -25,14 +25,17 @@ import gspread
 SYMBOL        = "SOLUSDT"
 SHEET_ID      = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
 XAI_KEY       = os.getenv("XAI_API_KEY", "")
+OPENAI_KEY    = os.getenv("OPENAI_API_KEY", "")
 GROK_MODEL    = "grok-4"
+GPT_MODEL     = "gpt-4o"
 GROK_TIMEOUT_S = 120
+GPT_TIMEOUT_S  = 90
 
 ENTRY_WINDOW_S   = 24 * 3600
 OUTCOME_WINDOW_S = 24 * 3600
 
 SHEET_HEADER = [
-    "Data i godzina", "Kierunek", "Pewność", "W", "TP1", "TP2", "SL",
+    "Data i godzina", "Kierunek", "Pewność", "Setup type", "W", "TP1", "TP2", "SL",
     "Wynik", "Czas do entry", "Delta (TP1+TP2)", "DeltaTP1",
     "Reżim", "Analiza",
 ]
@@ -40,7 +43,7 @@ SHEET_HEADER = [
 
 # ── Prompty (importowane z sol_alert.py) ─────────────────────────────────────
 from sol_alert import (
-    GROK_PROMPT, GROK2_PROMPT,
+    GROK_PROMPT, GROK2_PROMPT, GPT_TREND_PROMPT,
     detect_market_regime, _build_regime_line,
     MIN_GROK_BIAS_PROC,
 )
@@ -260,6 +263,44 @@ def call_grok_raw(system_prompt: str, user_msg: str, use_web_search: bool = True
                 text = future.result(timeout=GROK_TIMEOUT_S)
             except concurrent.futures.TimeoutError:
                 print(f"[{label}] Timeout — brak odpowiedzi w ciagu {GROK_TIMEOUT_S}s")
+                future.cancel()
+                return None
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        else:
+            print(f"[{label}] Brak JSON w odpowiedzi: {text[:200]}")
+    except Exception as e:
+        print(f"[{label}] Błąd API: {e}")
+    return None
+
+
+def call_gpt_raw(system_prompt: str, user_msg: str, label: str = "gpt") -> dict | None:
+    """Wywołuje GPT-4o z podanym system promptem i user message."""
+    if not OPENAI_KEY:
+        print(f"[{label}] Brak klucza OPENAI_API_KEY.")
+        return None
+
+    def _call() -> str:
+        import openai
+        client = openai.OpenAI(api_key=OPENAI_KEY)
+        response = client.chat.completions.create(
+            model=GPT_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=2048,
+        )
+        return response.choices[0].message.content.strip()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                text = future.result(timeout=GPT_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                print(f"[{label}] Timeout — brak odpowiedzi w ciagu {GPT_TIMEOUT_S}s")
                 future.cancel()
                 return None
         match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -540,15 +581,16 @@ def process_and_write(
 
     if grok_result is None:
         print(f"  [{model_label}] Brak odpowiedzi.")
-        sheet.append_row([label, "", "", "", "", "", "", f"błąd {model_label}", "", "", "", regime_str, ""])
+        sheet.append_row([label, "", "", "", "", "", "", "", f"błąd {model_label}", "", "", "", regime_str, ""])
         return None
 
-    send_alert = grok_result.get("send_alert", False)
-    bias       = grok_result.get("bias", "neutral")
-    bias_proc  = grok_result.get("bias_proc", 0)
-    analiza    = grok_result.get("analiza", "")
-    akcja      = grok_result.get("akcja", "")
-    reasoning  = f"{analiza} | {akcja}" if analiza and akcja else analiza or akcja
+    send_alert  = grok_result.get("send_alert", False)
+    bias        = grok_result.get("bias", "neutral")
+    bias_proc   = grok_result.get("bias_proc", 0)
+    setup_type  = grok_result.get("setup_type", "")
+    analiza     = grok_result.get("analiza", "")
+    akcja       = grok_result.get("akcja", "")
+    reasoning   = f"{analiza} | {akcja}" if analiza and akcja else analiza or akcja
 
     # Filtr: odrzuć setup jeśli przekonanie za niskie
     filter_note = ""
@@ -560,7 +602,7 @@ def process_and_write(
     print(f"  [{model_label}] send_alert={send_alert} | bias={bias} ({bias_proc}%)")
 
     if not send_alert or bias == "neutral":
-        sheet.append_row([label, bias if bias != "neutral" else "null", bias_proc,
+        sheet.append_row([label, bias if bias != "neutral" else "null", bias_proc, setup_type,
                           "", "", "", "", "no entry", "", "", "",
                           regime_str, filter_note + reasoning])
         return {"wynik": "no entry", "delta": None, "delta_tp1": None}
@@ -586,6 +628,7 @@ def process_and_write(
         label,
         kierunek,
         bias_proc,
+        setup_type,
         avg_w,
         tp1,
         tp2,
@@ -613,6 +656,8 @@ def run_backtest() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--grok2-only", action="store_true",
                         help="Pomiń stary Grok — testuj tylko Grok2 (oszczędność kredytów)")
+    parser.add_argument("--gpt-trend", action="store_true",
+                        help="Testuj GPT-4o z nowym promptem trendowym (zamiast Groka)")
     parser.add_argument("--from", dest="dt_from", type=str, default=None,
                         help="Początek okresu UTC, np. '2026-03-25 00:00'")
     parser.add_argument("--to", dest="dt_to", type=str, default=None,
@@ -623,7 +668,8 @@ def run_backtest() -> None:
                         help="Sufiks nazwy arkusza (np. 'v2' → 'Grok2 test v2')")
     args = parser.parse_args()
 
-    run_grok1 = not args.grok2_only
+    run_grok1 = not args.grok2_only and not args.gpt_trend
+    run_gpt_trend = args.gpt_trend
     now_ts = int(time.time())
 
     # ── Wyznacz zakres from/to ───────────────────────────────────────────────
@@ -652,7 +698,9 @@ def run_backtest() -> None:
         return
 
     print("=== Grok2 Backtest — start ===")
-    if run_grok1:
+    if run_gpt_trend:
+        print("Tryb: GPT-4o Trend (nowy prompt trendowy)")
+    elif run_grok1:
         print("Tryb: Grok (stary) vs Grok2 (nowy)")
     else:
         print("Tryb: tylko Grok2 (--grok2-only)")
@@ -707,13 +755,22 @@ def run_backtest() -> None:
     sfx = f" {args.sheet_suffix}" if args.sheet_suffix else ""
     sheet_name_grok2 = f"Grok2 test{sfx}"
     sheet_name_grok  = f"Grok test{sfx}"
-    print(f"Łączenie z Google Sheets ({sheet_name_grok2})...")
-    sheet_grok2 = get_test_sheet(sheet_name_grok2)
-    sheet_grok  = get_test_sheet(sheet_name_grok) if run_grok1 else None
+    sheet_name_gpt   = f"GPT trend{sfx}"
+    if run_gpt_trend:
+        print(f"Łączenie z Google Sheets ({sheet_name_gpt})...")
+        sheet_gpt = get_test_sheet(sheet_name_gpt)
+        sheet_grok2 = None
+        sheet_grok = None
+    else:
+        print(f"Łączenie z Google Sheets ({sheet_name_grok2})...")
+        sheet_grok2 = get_test_sheet(sheet_name_grok2)
+        sheet_grok  = get_test_sheet(sheet_name_grok) if run_grok1 else None
+        sheet_gpt = None
     print("Gotowe.")
 
     # ── 5. Statystyki ────────────────────────────────────────────────────────
-    stats = {"grok": {"alerts": 0, "entries": 0, "delta_sum": 0.0, "delta_tp1_sum": 0.0},
+    stats = {"gpt_trend": {"alerts": 0, "entries": 0, "delta_sum": 0.0, "delta_tp1_sum": 0.0},
+             "grok": {"alerts": 0, "entries": 0, "delta_sum": 0.0, "delta_tp1_sum": 0.0},
              "grok2": {"alerts": 0, "entries": 0, "delta_sum": 0.0, "delta_tp1_sum": 0.0}}
 
     # ── 6. Pętla testowa ─────────────────────────────────────────────────────
@@ -730,8 +787,11 @@ def run_backtest() -> None:
             if len(ctx_m15) < 30 or len(ctx_h1) < 10:
                 print(f"  Za mało danych (M15:{len(ctx_m15)}, H1:{len(ctx_h1)}), pomijam.")
                 if sheet_grok:
-                    sheet_grok.append_row([label, "", "", "", "", "", "", "brak danych", "", "", "", "", ""])
-                sheet_grok2.append_row([label, "", "", "", "", "", "", "brak danych", "", "", "", "", ""])
+                    sheet_grok.append_row([label, "", "", "", "", "", "", "", "brak danych", "", "", "", "", ""])
+                if sheet_grok2:
+                    sheet_grok2.append_row([label, "", "", "", "", "", "", "", "brak danych", "", "", "", "", ""])
+                if sheet_gpt:
+                    sheet_gpt.append_row([label, "", "", "", "", "", "", "", "brak danych", "", "", "", "", ""])
                 continue
 
             current_price = ctx_m15[-1]["close"]
@@ -758,21 +818,39 @@ def run_backtest() -> None:
                         if outcome1.get("delta_tp1") is not None:
                             stats["grok"]["delta_tp1_sum"] += outcome1["delta_tp1"]
 
-            # ── Grok2 (nowy) ─────────────────────────────────────────────────
-            sentiment_line = build_sentiment_line_historical(btc_h1, eth_h1, fg_history, signal_ts)
-            user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info, regime=regime)
-            grok2_result = call_grok_raw(GROK2_PROMPT, user_msg_v2, use_web_search=False, label="grok2")
-            time.sleep(1)
+            # ── GPT Trend (nowy prompt trendowy) ────────────────────────────
+            if run_gpt_trend:
+                sentiment_line = build_sentiment_line_historical(btc_h1, eth_h1, fg_history, signal_ts)
+                user_msg_gpt = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info, regime=regime)
+                gpt_result = call_gpt_raw(GPT_TREND_PROMPT, user_msg_gpt, label="gpt-trend")
+                time.sleep(1)
 
-            outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2, regime=regime)
-            if outcome2:
-                if outcome2["wynik"] != "no entry":
-                    stats["grok2"]["alerts"] += 1
-                    if outcome2.get("delta") is not None:
-                        stats["grok2"]["entries"] += 1
-                        stats["grok2"]["delta_sum"] += outcome2["delta"]
-                    if outcome2.get("delta_tp1") is not None:
-                        stats["grok2"]["delta_tp1_sum"] += outcome2["delta_tp1"]
+                outcome_gpt = process_and_write(label, "gpt-trend", gpt_result, future_m15, signal_ts, sheet_gpt, regime=regime)
+                if outcome_gpt:
+                    if outcome_gpt["wynik"] != "no entry":
+                        stats["gpt_trend"]["alerts"] += 1
+                        if outcome_gpt.get("delta") is not None:
+                            stats["gpt_trend"]["entries"] += 1
+                            stats["gpt_trend"]["delta_sum"] += outcome_gpt["delta"]
+                        if outcome_gpt.get("delta_tp1") is not None:
+                            stats["gpt_trend"]["delta_tp1_sum"] += outcome_gpt["delta_tp1"]
+
+            # ── Grok2 (nowy) ─────────────────────────────────────────────────
+            if not run_gpt_trend:
+                sentiment_line = build_sentiment_line_historical(btc_h1, eth_h1, fg_history, signal_ts)
+                user_msg_v2 = build_user_msg_grok2(ctx_m15, ctx_h1, current_price, sentiment_line, range_info, regime=regime)
+                grok2_result = call_grok_raw(GROK2_PROMPT, user_msg_v2, use_web_search=False, label="grok2")
+                time.sleep(1)
+
+                outcome2 = process_and_write(label, "grok2", grok2_result, future_m15, signal_ts, sheet_grok2, regime=regime)
+                if outcome2:
+                    if outcome2["wynik"] != "no entry":
+                        stats["grok2"]["alerts"] += 1
+                        if outcome2.get("delta") is not None:
+                            stats["grok2"]["entries"] += 1
+                            stats["grok2"]["delta_sum"] += outcome2["delta"]
+                        if outcome2.get("delta_tp1") is not None:
+                            stats["grok2"]["delta_tp1_sum"] += outcome2["delta_tp1"]
 
         except Exception as exc:
             import traceback
@@ -791,6 +869,10 @@ def run_backtest() -> None:
 
     for name, s in stats.items():
         if not run_grok1 and name == "grok":
+            continue
+        if not run_gpt_trend and name == "gpt_trend":
+            continue
+        if run_gpt_trend and name in ("grok", "grok2"):
             continue
         print(f"\n{name.upper()}:")
         print(f"  Alerty (send_alert=true): {s['alerts']}/{num_hours}")

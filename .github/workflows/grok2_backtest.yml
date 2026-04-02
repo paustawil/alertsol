@@ -7,6 +7,10 @@ on:
         description: 'Pomiń stary Grok — testuj tylko Grok2'
         type: boolean
         default: true
+      gpt_trend:
+        description: 'Testuj GPT-4o z nowym promptem trendowym (zamiast Groka)'
+        type: boolean
+        default: false
       dt_from:
         description: 'Od kiedy UTC (np. "2026-03-25 00:00")'
         type: string
@@ -46,9 +50,11 @@ jobs:
           TELEGRAM_TOKEN:     ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           XAI_API_KEY:        ${{ secrets.XAI_API_KEY }}
+          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
           ARGS=""
+          [ "${{ inputs.gpt_trend }}" = "true" ] && ARGS="$ARGS --gpt-trend"
           [ "${{ inputs.grok2_only }}" = "true" ] && ARGS="$ARGS --grok2-only"
           [ -n "${{ inputs.dt_from }}" ] && ARGS="$ARGS --from '${{ inputs.dt_from }}'"
           [ -n "${{ inputs.dt_to }}" ] && ARGS="$ARGS --to '${{ inputs.dt_to }}'"
