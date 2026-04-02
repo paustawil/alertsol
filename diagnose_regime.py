@@ -433,9 +433,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
 
-        # 1. trend_retest_short — retest wybitego supportu
+        # 1. trend_retest_short — WYŁĄCZONY (17% WR, -$38 na 3 kwartały)
         broken_sup = find_broken_support(candles_h1, current_price)
-        if broken_sup:
+        if False and broken_sup:
             w = broken_sup - atr * 0.2  # lekko poniżej poziomu (strefa)
             sl = broken_sup + atr * 1.0  # 1 ATR powyżej
             tp1 = swing_low
@@ -502,9 +502,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         strength = regime.get("strength", 0)
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
 
-        # 1. trend_retest_long — wymaga silniejszego trendu (>= 5)
+        # 1. trend_retest_long — WYŁĄCZONY (30% WR, -$7 na 3 kwartały)
         broken_res = find_broken_resistance(candles_h1, current_price)
-        if broken_res and strength >= 5:
+        if False and broken_res and strength >= 5:
             w = broken_res + atr * 0.2
             sl = broken_res - atr * 1.0
             tp1 = swing_high
