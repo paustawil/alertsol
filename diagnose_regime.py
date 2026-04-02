@@ -129,25 +129,24 @@ def _parse_dt(s: str) -> int:
 
 
 def fetch_klines_binance(symbol: str, interval: str, total: int, end_ts_s: int | None = None) -> list[dict]:
-    """Pobiera historyczne świece z Binance Futures API. Dane od 2020+."""
-    binance_interval = {"15m": "15m", "1h": "1h"}[interval]
+    """Pobiera historyczne świece z OKX API (nie blokuje US). Dane od 2020+."""
+    # OKX instId: SOL-USDT-SWAP (perpetual futures)
+    okx_bar = {"15m": "15m", "1h": "1H"}[interval]
     interval_s = {"15m": 900, "1h": 3600}[interval]
+    inst_id = "SOL-USDT-SWAP"
     result: list[dict] = []
-    end_ms = (end_ts_s * 1000) if end_ts_s else None
+    after_ms = str(int(end_ts_s * 1000)) if end_ts_s else ""
 
     while len(result) < total:
-        params: dict = {
-            "symbol": symbol, "interval": binance_interval,
-            "limit": min(total - len(result), 1000),
-        }
-        if end_ms:
-            params["endTime"] = int(end_ms)
+        params: dict = {"instId": inst_id, "bar": okx_bar, "limit": "100"}
+        if after_ms:
+            params["after"] = after_ms
         try:
-            r = requests.get("https://fapi.binance.com/fapi/v1/klines", params=params, timeout=15)
+            r = requests.get("https://www.okx.com/api/v5/market/history-candles", params=params, timeout=15)
             r.raise_for_status()
-            data = r.json()
+            data = r.json().get("data") or []
         except Exception as e:
-            print(f"[binance] Błąd API: {e}")
+            print(f"[okx] Błąd API: {e}")
             break
         if not data:
             break
@@ -155,7 +154,7 @@ def fetch_klines_binance(symbol: str, interval: str, total: int, end_ts_s: int |
                   "low": float(d[3]), "close": float(d[4]), "volume": float(d[5])} for d in data]
         batch.sort(key=lambda c: c["time"])
         result = batch + result
-        end_ms = batch[0]["time"] * 1000 - 1
+        after_ms = str(int(batch[0]["time"] * 1000))
         if len(batch) < 2:
             break
 
@@ -209,7 +208,7 @@ def fetch_klines_paginated(symbol: str, interval: str, total: int, end_ts_s: int
         print(f"  [źródło: Bitget]")
         return result
     # Fallback: Binance (spot, symbol bez produktu)
-    print(f"  [Bitget: za mało danych ({len(result)}), próbuję Binance...]")
+    print(f"  [Bitget: za mało danych ({len(result)}), próbuję OKX...]")
     return fetch_klines_binance(symbol, interval, total, end_ts_s)
 
 
