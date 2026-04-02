@@ -429,6 +429,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     if atr <= 0:
         return setups
 
+    # Max dystans entry od aktualnej ceny — odrzuć nierealistyczne pullbacki
+    max_entry_dist = current_price * 0.03  # 3%
+
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
@@ -455,7 +458,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = consol["high"] + atr * 1.0  # 1 ATR powyżej szczytu
             tp1 = consol["low"] - consol["range"]  # zakres poniżej dna
             tp2 = consol["low"] - consol["range"] * 1.5
-            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+            if (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                    and abs(w - current_price) <= max_entry_dist):
                 setups.append({
                     "type": "trend_consolidation_short", "direction": "short",
                     "w": round(w, 2), "sl": round(sl, 2),
@@ -473,7 +477,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = round(fib618 + atr * 0.3, 2)  # powyżej 61.8% + bufor
             tp1 = round(swing_low, 2)
             tp2 = round(swing_low - swing_range * 0.3, 2)
-            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5 and w > current_price * 1.003:
+            if (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                    and w > current_price * 1.003
+                    and w - current_price <= max_entry_dist):
                 setups.append({
                     "type": "trend_pullback_short", "direction": "short",
                     "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
@@ -490,7 +496,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 sl = round(pullback_high + atr * 0.8, 2)
                 tp1 = round(swing_low, 2)
                 tp2 = round(swing_low - atr, 2)
-                if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                if (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                        and abs(w - current_price) <= max_entry_dist):
                     setups.append({
                         "type": "impulse_continuation_short", "direction": "short",
                         "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
@@ -544,7 +551,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = round(fib618 - atr * 0.3, 2)
             tp1 = round(swing_high, 2)
             tp2 = round(swing_high + swing_range * 0.3, 2)
-            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5 and w < current_price * 0.997:
+            if (sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                    and w < current_price * 0.997 and current_price - w <= max_entry_dist):
                 setups.append({
                     "type": "trend_pullback_long", "direction": "long",
                     "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
@@ -562,7 +570,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = res + atr * 1.0
             tp1 = sup + rng_size * 0.5  # środek range
             tp2 = sup + rng_size * 0.1  # blisko supportu
-            if (w - tp1) / (sl - w) >= 1.5:
+            if (w - tp1) / (sl - w) >= 1.5 and abs(w - current_price) <= max_entry_dist:
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
                     "w": round(w, 2), "sl": round(sl, 2),
@@ -574,7 +582,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = sup - atr * 1.0
             tp1 = sup + rng_size * 0.5
             tp2 = res - rng_size * 0.1
-            if (tp1 - w) / (w - sl) >= 1.5:
+            if (tp1 - w) / (w - sl) >= 1.5 and abs(w - current_price) <= max_entry_dist:
                 setups.append({
                     "type": "range_support_long", "direction": "long",
                     "w": round(w, 2), "sl": round(sl, 2),

@@ -1437,30 +1437,56 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 
 
 def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[dict],
-                       current_price: float) -> list[dict]:
-    """Algorytmicznie wykrywa setupy trend/impulse/range. Zwraca listę setupów
-    w formacie kompatybilnym z save_pending (entries, sl, tps, rr, ...)."""
+                       current_price: float) -> tuple[list[dict], str]:
+    """Algorytmicznie wykrywa setupy trend/impulse/range.
+    Zwraca (setupy, log_text) — log_text trafia do reasoning/arkusza."""
     regime_name = regime["regime"]
     direction = regime.get("direction", "none")
     atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
     strength = regime.get("score", 0)
     setups = []
 
+    # Logowanie pełnej analizy
+    log_lines = []
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    log_lines.append(f"\n{'='*70}")
+    log_lines.append(f"[{now_str}] Algo2 analiza")
+    log_lines.append(f"  Cena: ${current_price:.2f} | Reżim: {regime_name}({strength}) | ATR: ${atr:.2f}")
+    # Ostatnie 12 H1 świec — zakres
+    h1_12 = candles_h1[-12:] if len(candles_h1) >= 12 else candles_h1
+    h1_closes = [f"${c['close']:.2f}" for c in h1_12[-6:]]
+    log_lines.append(f"  H1 closes (last 6): {', '.join(h1_closes)}")
+    log_lines.append(f"  H1 candles count: {len(candles_h1)} | M15 candles count: {len(candles_m15)}")
+
     if atr <= 0:
-        return setups
+        log_lines.append(f"  SKIP: ATR <= 0")
+        return setups, "\n".join(log_lines)
+
+    # Max dystans entry od aktualnej ceny — odrzuć setupy z nierealistycznym pullbackiem
+    max_entry_dist = current_price * 0.03  # 3%
+    log_lines.append(f"  Max dystans entry: ${max_entry_dist:.2f} (3%)")
 
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
+        log_lines.append(f"  Swing (12 H1): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
         # trend_consolidation_short — konsolidacja przy dnie
         consol = find_consolidation(candles_h1)
+        if consol:
+            log_lines.append(f"  Consolidation: {consol['candles']}h ${consol['low']:.2f}-${consol['high']:.2f} range=${consol['range']:.2f}")
+        else:
+            log_lines.append(f"  Consolidation: nie znaleziono")
         if consol:
             w = consol["high"] - consol["range"] * 0.2
             sl = consol["high"] + atr * 1.0
             tp1 = consol["low"] - consol["range"]
             tp2 = consol["low"] - consol["range"] * 1.5
-            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+            rr_ok = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+            dist_ok = abs(w - current_price) <= max_entry_dist
+            log_lines.append(f"  → consol_short: W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} dist=${abs(w-current_price):.2f} RR={((w-tp1)/(sl-w) if sl>w else 0):.1f} rr_ok={rr_ok} dist_ok={dist_ok}")
+            if rr_ok and dist_ok:
+                log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "trend_consolidation_short", "direction": "short",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
@@ -1468,8 +1494,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((w - tp1) / (sl - w), 1),
                     "score": strength,
-                    "reasoning": f"{regime_name}({strength})",
+                    "reasoning": f"{regime_name}({strength}); consol {consol['candles']}h ${consol['low']:.0f}-${consol['high']:.0f}",
                 })
+            else:
+                log_lines.append(f"    ✗ REJECTED: {'dist>3%' if not dist_ok else 'RR/levels'}")
 
         # trend_pullback_short — 38-50% korekty
         if swing_high > swing_low:
@@ -1481,39 +1509,57 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = round(fib618 + atr * 0.3, 2)
             tp1 = round(swing_low, 2)
             tp2 = round(swing_low - swing_range * 0.3, 2)
-            if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5 and w > current_price * 1.003:
+            rr_ok = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+            above_price = w > current_price * 1.003
+            dist_ok = w - current_price <= max_entry_dist
+            log_lines.append(f"  → pullback_short: fib38=${fib38:.2f} fib50=${fib50:.2f} W=${w:.2f} dist=${w-current_price:.2f} above={above_price} dist_ok={dist_ok}")
+            if rr_ok and above_price and dist_ok:
+                log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "trend_pullback_short", "direction": "short",
                     "entries": [w], "sl": sl, "sl_after_tp1": w,
                     "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
                     "score": strength,
-                    "reasoning": f"{regime_name}({strength})",
+                    "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f}",
                 })
+            else:
+                reasons = []
+                if not rr_ok: reasons.append("RR<1.5")
+                if not above_price: reasons.append("W<=cena")
+                if not dist_ok: reasons.append(f"dist>3%({w-current_price:.2f})")
+                log_lines.append(f"    ✗ REJECTED: {', '.join(reasons)}")
 
         # impulse_continuation_short — mini-pullback w impulsie
         if regime_name.startswith("IMPULSE_"):
             last6 = candles_m15[-6:]
             greens = [c for c in last6 if c["close"] > c["open"]]
+            log_lines.append(f"  → impulse_cont: greens={len(greens)}/6 (need 1-2)")
             if len(greens) >= 1 and len(greens) <= 2:
                 pullback_high = max(c["high"] for c in last6[-2:])
                 w = round(pullback_high, 2)
                 sl = round(pullback_high + atr * 0.8, 2)
                 tp1 = round(swing_low, 2)
                 tp2 = round(swing_low - atr, 2)
-                if sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5:
+                rr_ok = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                dist_ok = abs(w - current_price) <= max_entry_dist
+                log_lines.append(f"    W=${w:.2f} dist=${abs(w-current_price):.2f} rr_ok={rr_ok} dist_ok={dist_ok}")
+                if rr_ok and dist_ok:
+                    log_lines.append(f"    ✓ ACCEPTED")
                     setups.append({
                         "type": "impulse_continuation_short", "direction": "short",
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
                         "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
                         "score": strength,
-                        "reasoning": f"{regime_name}({strength})",
+                        "reasoning": f"{regime_name}({strength}); pullback M15",
                     })
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
+        log_lines.append(f"  Swing (12 H1): high=${swing_high:.2f} low=${swing_low:.2f}")
 
         # trend_consolidation_long — WYŁĄCZONY (31% WR, stratny w obu Q3'25 i Q1'26)
+        log_lines.append(f"  → consol_long: WYŁĄCZONY")
 
         # trend_pullback_long — 38-50% korekty (wymaga strength >= 5)
         if swing_high > swing_low and strength >= 5:
@@ -1525,27 +1571,38 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             sl = round(fib618 - atr * 0.3, 2)
             tp1 = round(swing_high, 2)
             tp2 = round(swing_high + swing_range * 0.3, 2)
-            if sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5 and w < current_price * 0.997:
+            below_price = w < current_price * 0.997
+            dist_ok = current_price - w <= max_entry_dist
+            log_lines.append(f"  → pullback_long: W=${w:.2f} dist=${current_price-w:.2f} below={below_price} dist_ok={dist_ok}")
+            if (sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                    and below_price and dist_ok):
+                log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "trend_pullback_long", "direction": "long",
                     "entries": [w], "sl": sl, "sl_after_tp1": w,
                     "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
                     "score": strength,
-                    "reasoning": f"{regime_name}({strength})",
+                    "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f}",
                 })
+        else:
+            log_lines.append(f"  → pullback_long: SKIP (strength={strength}<5 lub brak swing)")
 
     # ── RANGE ─────────────────────────────────────────────────────────────
     elif regime_name == "RANGE":
         rng = detect_range(candles_h1)
         sup, res = rng["support"], rng["resistance"]
         rng_size = res - sup
+        log_lines.append(f"  Range: S=${sup:.2f} R=${res:.2f} size=${rng_size:.2f} (min={atr*1.5:.2f})")
         if rng_size > atr * 1.5:
             # range_resistance_short
             w = res - rng_size * 0.1
             sl = res + atr * 1.0
             tp1 = sup + rng_size * 0.5
             tp2 = sup + rng_size * 0.1
-            if (w - tp1) / (sl - w) >= 1.5:
+            dist_ok = abs(w - current_price) <= max_entry_dist
+            log_lines.append(f"  → range_short: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok}")
+            if (w - tp1) / (sl - w) >= 1.5 and dist_ok:
+                log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
@@ -1553,14 +1610,17 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((w - tp1) / (sl - w), 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S={sup:.2f} R={res:.2f}",
+                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f}",
                 })
             # range_support_long
             w = sup + rng_size * 0.1
             sl = sup - atr * 1.0
             tp1 = sup + rng_size * 0.5
             tp2 = res - rng_size * 0.1
-            if (tp1 - w) / (w - sl) >= 1.5:
+            dist_ok = abs(w - current_price) <= max_entry_dist
+            log_lines.append(f"  → range_long: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok}")
+            if (tp1 - w) / (w - sl) >= 1.5 and dist_ok:
+                log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_support_long", "direction": "long",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
@@ -1568,10 +1628,13 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((tp1 - w) / (w - sl), 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S={sup:.2f} R={res:.2f}",
+                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f}",
                 })
+    else:
+        log_lines.append(f"  Brak setupów dla direction={direction}")
 
-    return setups
+    log_lines.append(f"  WYNIK: {len(setups)} setupów")
+    return setups, "\n".join(log_lines)
 
 
 # ── Claude API ────────────────────────────────────────────────────────────────
@@ -2646,14 +2709,23 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
 
     sid_txt = f" #{setup.get('setup_id')}" if setup.get("setup_id") else ""
 
-    # Typ setupu + reżim (dla Algo2)
+    # Typ setupu + skrócona diagnostyka (dla Algo2)
     type_line = f"<b>Typ:</b> {setup_type}\n" if setup_type else ""
+
+    # Wyciągnij kluczowe linie z loga (swing, consol, reżim) do Telegrama
+    diag_lines = []
+    if reasoning:
+        for line in reasoning.split("\n"):
+            line = line.strip()
+            if any(k in line for k in ["Cena:", "Swing", "Consolidation:", "WYNIK:"]):
+                diag_lines.append(line)
+    diag_txt = "\n".join(diag_lines) if diag_lines else ""
 
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
         f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n\n"
         + type_line
-        + (f"<b>Reżim:</b> {reasoning}\n" if reasoning else "")
+        + (f"<pre>{diag_txt}</pre>\n" if diag_txt else "")
         + f"\nCena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejścia)\n\n"
         f"<b>Ustaw zlecenia:</b>\n{entries_txt}\n\n"
         f"<b>SL:</b>  ${sl:.2f}\n"
@@ -2761,20 +2833,20 @@ def breakout_scan():
         c24 = regime.get("change_24h", 0)
         c48 = regime.get("change_48h", 0)
         msg = (
-            f"{icon} <b>{regime['regime']} — SOL/USDT</b>\n\n"
+            f"{icon} <b>Algo2: {regime['regime']} — SOL/USDT</b>\n\n"
             f"Cena ${current:.2f} | 24h: {c24:+.1f}% | 48h: {c48:+.1f}%\n"
             f"Siła: {regime.get('score', 0)}/10 | Volume: {regime['vol_ratio']}x\n"
-            f"Sygnały: {regime['details']}\n\n"
-            f"⏳ Szukam setupu Algo2..."
+            f"Sygnały: {regime['details']}"
         )
         send_telegram(msg)
 
     # Algo2 przy IMPULSE/TREND — save_pending odrzuci duplikaty
     print(f"[breakout-scan] {regime['regime']} wykryty — szukam setupu Algo2...")
-    algo2_setups = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
 
     if algo2_setups:
         best = max(algo2_setups, key=lambda s: s["rr"])
+        best["reasoning"] = algo2_log
         level = best["entries"][0]
         d = best["direction"]
         print(f"[breakout-scan] Algo2: {best['type']} {d} W={level:.2f} RR={best['rr']}")
@@ -2788,8 +2860,13 @@ def breakout_scan():
             else:
                 print("[breakout-scan] Duplikat — setup już istnieje.")
         else:
+            log_to_alerty("Algo2", rejection, best)
             print(f"[breakout-scan] Algo2 odrzucony: {rejection}")
     else:
+        log_to_alerty("Algo2", "brak_setupu", {
+            "type": "", "direction": "", "reasoning": algo2_log,
+            "kurs": round(current, 2),
+        })
         print(f"[breakout-scan] Algo2 nie znalazł setupu.")
 
 
@@ -2957,12 +3034,12 @@ def main():
         print("[grok] Pominięty (ENABLE_GROK=False).")
 
     # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
-    regime_label = f"{regime['regime']}({regime.get('score', 0)})"
-    algo2_setups = algo_detect_setups(regime, candles_m15, candles_h1, current)
-    print(f"[algo2] Reżim: {regime_label} | Setupów: {len(algo2_setups)}")
+    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
 
     if algo2_setups:
         best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
+        best_algo2["reasoning"] = algo2_log
         level = best_algo2["entries"][0]
         d = best_algo2["direction"]
         dist = abs(current - level)
@@ -2981,9 +3058,8 @@ def main():
         else:
             print(f"[algo2] Duplikat w cooldown, pomijam.")
     else:
-        # Loguj brak setupu do arkusza (żeby widzieć co algo widzi)
         log_to_alerty("Algo2", "brak_setupu", {
-            "type": "", "direction": "", "reasoning": regime_label,
+            "type": "", "direction": "", "reasoning": algo2_log,
             "kurs": round(current, 2),
         })
 
