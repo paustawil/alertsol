@@ -129,7 +129,7 @@ def _parse_dt(s: str) -> int:
 
 
 def fetch_klines_binance(symbol: str, interval: str, total: int, end_ts_s: int | None = None) -> list[dict]:
-    """Pobiera historyczne świece z Binance API (spot). Dane od 2020+."""
+    """Pobiera historyczne świece z Binance Futures API. Dane od 2020+."""
     binance_interval = {"15m": "15m", "1h": "1h"}[interval]
     interval_s = {"15m": 900, "1h": 3600}[interval]
     result: list[dict] = []
@@ -143,7 +143,7 @@ def fetch_klines_binance(symbol: str, interval: str, total: int, end_ts_s: int |
         if end_ms:
             params["endTime"] = int(end_ms)
         try:
-            r = requests.get("https://api.binance.com/api/v3/klines", params=params, timeout=15)
+            r = requests.get("https://fapi.binance.com/fapi/v1/klines", params=params, timeout=15)
             r.raise_for_status()
             data = r.json()
         except Exception as e:
