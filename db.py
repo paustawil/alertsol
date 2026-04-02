@@ -428,17 +428,47 @@ def mark_sheets_exported(setup_id: int) -> None:
 
 def get_summary_stats() -> dict:
     """Zwraca statystyki podsumowujące dla dashboardu."""
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage   = 20
+
+    # Fragment SQL obliczający PnL z fallbackiem gdy pnl_usd IS NULL
+    pnl_calc = f"""
+        COALESCE(pnl_usd,
+            CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')
+                      AND avg_exit IS NOT NULL
+                      AND COALESCE(avg_entry, (entries->>0)::numeric) IS NOT NULL
+            THEN
+                CASE direction WHEN 'long'
+                    THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
+                    ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
+                END *
+                CASE result WHEN 'SL'
+                    THEN COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                         FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                    WHEN 'TP1'
+                    THEN COALESCE(NULLIF(exchange_qty_half,'')::numeric,
+                         FLOOR(COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                               FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                               /2/0.1)*0.1)
+                    ELSE COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                         FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                END
+            END
+        )"""
+
+    trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')"
+
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*) FILTER (WHERE resolved = FALSE)             AS active_count,
                     COUNT(*) FILTER (WHERE resolved = TRUE)              AS total_resolved,
-                    ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
-                                                                         AS total_pnl_usd,
+                    ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
+                        AND {trading_filter})::numeric, 2)               AS total_pnl_usd,
                     COUNT(*) FILTER (WHERE resolved = TRUE
-                        AND result IN ('TP1','TP2','TP1+BE'))             AS wins,
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))   AS wins,
                     COUNT(*) FILTER (WHERE resolved = TRUE
                         AND result = 'SL')                               AS losses
                 FROM setups
@@ -454,15 +484,15 @@ def get_summary_stats() -> dict:
 
             # Per-model breakdown
             cur.execute(
-                """
+                f"""
                 SELECT model,
                        COUNT(*)                                              AS all_setups,
                        COUNT(*) FILTER (WHERE resolved = TRUE
-                           AND result IN ('TP1','TP2','TP1+BE','SL'))        AS entered,
-                       ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2)
-                                                                             AS pnl_usd,
+                           AND {trading_filter})                             AS entered,
+                       ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})::numeric, 2)                AS pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE
-                           AND result IN ('TP1','TP2','TP1+BE'))             AS wins
+                           AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))    AS wins
                 FROM setups
                 GROUP BY model
                 ORDER BY model
@@ -509,14 +539,40 @@ def get_period_stats(period: str) -> dict:
             )
             total_setups = cur.fetchone()["total"] or 0
 
-            # Entered = resolved with trading result (TP1/TP2/TP1+BE/SL)
+            # Entered = resolved with trading result (TP1/TP2/TP1+BE/TP1+SL/SL)
+            # PnL with fallback computation when pnl_usd is NULL
+            leverage = 20
+            pnl_calc = f"""
+                COALESCE(pnl_usd,
+                    CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')
+                              AND avg_exit IS NOT NULL
+                              AND COALESCE(avg_entry, (entries->>0)::numeric) IS NOT NULL
+                    THEN
+                        CASE direction WHEN 'long'
+                            THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
+                            ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
+                        END *
+                        CASE result WHEN 'SL'
+                            THEN COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                 FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                            WHEN 'TP1'
+                            THEN COALESCE(NULLIF(exchange_qty_half,'')::numeric,
+                                 FLOOR(COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                       FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                                       /2/0.1)*0.1)
+                            ELSE COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                 FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                        END
+                    END
+                )"""
             cur.execute(
                 f"""
                 SELECT
-                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','SL')) AS entered,
-                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE'))       AS wins,
-                    COUNT(*) FILTER (WHERE result = 'SL')                          AS losses,
-                    COALESCE(ROUND(SUM(pnl_usd) FILTER (WHERE resolved = TRUE)::numeric, 2), 0) AS total_income
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')) AS entered,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL'))   AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                               AS losses,
+                    COALESCE(ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','SL'))::numeric, 2), 0) AS total_income
                 FROM setups
                 WHERE {time_filter}
                 """,

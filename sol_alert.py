@@ -1800,7 +1800,7 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         # Alternatywny scenariusz: całość na TP1 (tylko dla TP2 i TP1+BE)
         alt_pnl_val = ""
         delta_val   = ""
-        if result in ("TP2", "TP1+BE") and eff_entry and tps:
+        if result in ("TP2", "TP1+BE", "TP1+SL") and eff_entry and tps:
             tp1_p = float(tps[0])
             sign  = 1 if s.get("direction") == "long" else -1
             fq    = (s.get("exchange_qty_full") or "0").replace(",", ".")
@@ -2058,6 +2058,9 @@ def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
                 break
             if tp1_now and tp1_hit_at is None:
                 tp1_hit_at = c["time"]
+                if tp2 is None:
+                    result = "TP1"
+                    break
                 if sl_after_tp1 is not None and not sl_adjusted:
                     effective_sl = sl_after_tp1
                     sl_adjusted  = True
@@ -2075,6 +2078,8 @@ def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
         # Oblicz avg exit
         if result == "SL":
             eff_exit = sl
+        elif result == "TP1":
+            eff_exit = tp1
         elif result == "TP2":
             eff_exit = (tp1 + tp2) / 2 if tp1 else tp2
         else:  # TP1+BE, TP1+SL
@@ -2090,6 +2095,8 @@ def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
 
         if result == "SL":
             hypo_pnl = round(sign * full_qty * (eff_exit - eff_entry), 2)
+        elif result == "TP1":
+            hypo_pnl = round(sign * half_qty * (eff_exit - eff_entry), 2)
         else:  # TP2, TP1+BE, TP1+SL — obie połówki
             hypo_pnl = round(sign * (half_qty + half_qty) * (eff_exit - eff_entry), 2)
 
@@ -2200,10 +2207,26 @@ def check_pending(candles_m15: list[dict]):
             if tp1_now and sl_hit and tp1_hit_at is None:
                 result, exit_ts = "SL", c["time"]; break
 
-            # TP1 trafiony po raz pierwszy — zapisz, wyślij powiadomienie, przestaw SL
+            # TP1 trafiony po raz pierwszy — zapisz, wyślij powiadomienie
             if tp1_now and tp1_hit_at is None:
                 tp1_hit_at = c["time"]
                 s["tp1_hit_at"] = tp1_hit_at
+                # Bez TP2 — cała pozycja zamykana na TP1
+                if not tp2:
+                    result, exit_ts = "TP1", c["time"]
+                    if not s.get("shadow"):
+                        try:
+                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                            send_telegram(
+                                f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}\n"
+                                f"Setup {s['type']} {d.upper()}\n"
+                                f"TP1: ${tp1:.2f} osiągnięty ✅\n"
+                                f"Pozycja zamknięta na TP1."
+                            )
+                        except Exception:
+                            pass
+                    break
+                # Z TP2 — przestaw SL i kontynuuj monitorowanie
                 if sl_after_tp1 is not None and not s.get("sl_adjusted"):
                     effective_sl   = sl_after_tp1
                     s["sl_adjusted"] = True
@@ -2216,7 +2239,7 @@ def check_pending(candles_m15: list[dict]):
                                 f"Setup {s['type']} {d.upper()}\n"
                                 f"TP1: ${tp1:.2f} osiągnięty ✅\n"
                                 f"<b>Przesuń SL na: ${sl_after_tp1:.2f}</b>  ({be_label})\n"
-                                + (f"Cel: TP2 ${tp2:.2f}" if tp2 else "")
+                                f"Cel: TP2 ${tp2:.2f}"
                             )
                         except Exception:
                             pass
@@ -2245,6 +2268,8 @@ def check_pending(candles_m15: list[dict]):
             eff_sl_exit = sl_after_tp1 if s.get("sl_adjusted") and sl_after_tp1 is not None else sl
             if result == "SL":
                 exit_prices = [sl]
+            elif result == "TP1":
+                exit_prices = [tp1]
             elif result == "TP2":
                 exit_prices = [tp1, tp2] if tp1 else [tp2]
             else:  # TP1+BE lub TP1+SL

@@ -249,6 +249,8 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
 
         if tp1_now and tp1_hit_at is None:
             tp1_hit_at = c["time"]
+            if tp2 is None:
+                result, exit_ts = "TP1", c["time"]; break
             if sl_after_tp1 is not None and not sl_adjusted:
                 effective_sl = sl_after_tp1
                 sl_adjusted  = True
@@ -278,6 +280,8 @@ def simulate_result(setup: dict, future_candles: list[dict]) -> dict:
     eff_sl_exit = effective_sl   # ostatni SL jaki był aktywny przy wyjściu
     if result == "SL":
         exit_prices = [sl]       # wyszło SL bez TP1
+    elif result == "TP1":
+        exit_prices = [tp1]
     elif result == "TP2":
         exit_prices = [tp1, tp2] if tp1 else [tp2]
     else:                        # TP1+BE lub TP1+SL
