@@ -470,9 +470,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "rr": round((tp1 - w) / (w - sl), 1),
                 })
 
-        # 2. trend_consolidation_long — wymaga silniejszego trendu (>= 5)
+        # 2. trend_consolidation_long — WYŁĄCZONY (14% WR w Q1, -$48)
         consol = find_consolidation(candles_h1)
-        if consol and strength >= 5:
+        if False and consol and strength >= 5:
             w = consol["low"] + consol["range"] * 0.2
             sl = consol["low"] - atr * 1.0
             tp1 = consol["high"] + consol["range"]
