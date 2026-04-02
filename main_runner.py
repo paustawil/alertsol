@@ -289,7 +289,8 @@ def dashboard():
 
 <!-- ── Ustawienia ──────────────────────────────────────────────────────── -->
 <div class="indicators-panel">
-  <h3>⚙️ Ustawienia</h3>
+  <h3 style="cursor:pointer;user-select:none" onclick="var p=document.getElementById('settings-body');p.style.display=p.style.display==='none'?'block':'none'">⚙️ Ustawienia <span style="font-size:0.6em;color:#888">▶ kliknij</span></h3>
+  <div id="settings-body" style="display:none">
   <div class="ind-row">
     <div class="ind-card">
       <div class="label">Kwota zlecenia (USDT)</div>
@@ -307,6 +308,7 @@ def dashboard():
       <button class="settings-save" id="settings-save-btn" onclick="saveSettings()">Zapisz ustawienia</button>
       <span id="settings-status" style="margin-left:8px;font-size:0.8em;color:#888"></span>
     </div>
+  </div>
   </div>
 </div>
 
