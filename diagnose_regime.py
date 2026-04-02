@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Diagnostyka rezimu rynkowego - porownanie starego algorytmu z nowa logika IMPULSE/TREND/RANGE.
 
@@ -165,10 +166,10 @@ def fetch_klines_paginated(symbol: str, interval: str, total: int, end_ts_s: int
     return deduped[-total:] if len(deduped) > total else deduped
 
 
-# -- Nowa logika IMPULSE / TREND / RANGE (prototyp do porownania) ----
+# -- Nowa logika IMPULSE / TREND / RANGE (prototyp v2) ----
 
 def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict:
-    """Nowy 3-stanowy detektor rezimu: IMPULSE / TREND / RANGE."""
+    """Nowy 3-stanowy detektor rezimu: IMPULSE / TREND / RANGE (v2)."""
 
     trend = h1_trend(candles_h1)
     imp_str = impulse_strength(candles_m15)
@@ -238,7 +239,7 @@ def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_p
             "details": "; ".join(details),
         }
 
-    # -- TREND: utrzymujacy sie ruch kierunkowy ----
+    # -- TREND: utrzymujacy sie ruch kierunkowy (v2) ----
     trend_score = 0
     trend_details = []
 
@@ -256,16 +257,17 @@ def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_p
         trend_score += 1
         trend_details.append(f"48h:{change_48h:+.1f}%")
 
-    if lower_lows >= 4:
+    # Progi struktury podniesione do 5/11 (v2)
+    if lower_lows >= 5:
         trend_score += 1
         trend_details.append(f"LL:{lower_lows}/{len(h1_12)-1}")
-    if higher_highs >= 4:
+    if higher_highs >= 5:
         trend_score += 1
         trend_details.append(f"HH:{higher_highs}/{len(h1_12)-1}")
-    if lower_highs >= 4:
+    if lower_highs >= 5:
         trend_score += 1
         trend_details.append(f"LH:{lower_highs}/{len(h1_12)-1}")
-    if higher_lows >= 4:
+    if higher_lows >= 5:
         trend_score += 1
         trend_details.append(f"HL:{higher_lows}/{len(h1_12)-1}")
 
@@ -273,11 +275,15 @@ def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_p
         trend_score += 1
         trend_details.append(f"h1:{trend}")
 
-    if trend_score >= 3:
-        if change_24h < -1.0:
-            trend_dir = "down"
-        elif change_24h > 1.0:
-            trend_dir = "up"
+    # TREND wymaga zmiany cenowej -- sama struktura nie wystarczy (v2)
+    has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
+
+    if trend_score >= 3 and has_price_change:
+        # Kierunek: 48h ma priorytet nad 24h gdy sie klocza (v2)
+        if abs(change_48h) >= 3.0:
+            trend_dir = "down" if change_48h < 0 else "up"
+        elif abs(change_24h) >= 1.5:
+            trend_dir = "down" if change_24h < 0 else "up"
         elif change_48h < -2.0:
             trend_dir = "down"
         elif change_48h > 2.0:
