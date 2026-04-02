@@ -1454,12 +1454,22 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     log_lines.append(f"  Cena: ${current_price:.2f} | Reżim: {regime_name}({strength}) | ATR: ${atr:.2f}")
     # Ostatnie 12 H1 świec — zakres
     h1_12 = candles_h1[-12:] if len(candles_h1) >= 12 else candles_h1
+    h1_last_ts = datetime.fromtimestamp(candles_h1[-1]["time"], tz=timezone.utc).strftime("%H:%M") if candles_h1 else "?"
+    m15_last_ts = datetime.fromtimestamp(candles_m15[-1]["time"], tz=timezone.utc).strftime("%H:%M") if candles_m15 else "?"
     h1_closes = [f"${c['close']:.2f}" for c in h1_12[-6:]]
-    log_lines.append(f"  H1 closes (last 6): {', '.join(h1_closes)}")
+    log_lines.append(f"  H1 closes (last 6): {', '.join(h1_closes)} [ostatnia H1: {h1_last_ts} UTC]")
+    log_lines.append(f"  M15 last close: ${candles_m15[-1]['close']:.2f} [{m15_last_ts} UTC]")
     log_lines.append(f"  H1 candles count: {len(candles_h1)} | M15 candles count: {len(candles_m15)}")
 
     if atr <= 0:
         log_lines.append(f"  SKIP: ATR <= 0")
+        return setups, "\n".join(log_lines)
+
+    # Sprawdź świeżość danych H1 — jeśli ostatnia świeca > 2h temu, dane są przestarzałe
+    now_ts = datetime.now(timezone.utc).timestamp()
+    h1_age_min = (now_ts - candles_h1[-1]["time"]) / 60 if candles_h1 else 9999
+    if h1_age_min > 120:
+        log_lines.append(f"  SKIP: dane H1 przestarzałe ({h1_age_min:.0f} min temu)")
         return setups, "\n".join(log_lines)
 
     # Max dystans entry od aktualnej ceny — odrzuć setupy z nierealistycznym pullbackiem
@@ -1469,11 +1479,18 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
-        log_lines.append(f"  Swing (12 H1): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
+        # Uwzględnij aktualną cenę jako przybliżenie niezamkniętej świecy H1
+        swing_low = min(swing_low, current_price)
+        swing_high = max(swing_high, current_price)
+        log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
         # trend_consolidation_short — konsolidacja przy dnie
         consol = find_consolidation(candles_h1)
-        if consol:
+        if consol and current_price < consol["low"] - atr * 0.5:
+            # Cena wybiła poniżej konsolidacji — setup już się rozegrał
+            log_lines.append(f"  Consolidation: {consol['candles']}h ${consol['low']:.2f}-${consol['high']:.2f} → BROKEN (cena=${current_price:.2f} < dół-0.5ATR)")
+            consol = None
+        elif consol:
             log_lines.append(f"  Consolidation: {consol['candles']}h ${consol['low']:.2f}-${consol['high']:.2f} range=${consol['range']:.2f}")
         else:
             log_lines.append(f"  Consolidation: nie znaleziono")
@@ -1556,7 +1573,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
-        log_lines.append(f"  Swing (12 H1): high=${swing_high:.2f} low=${swing_low:.2f}")
+        # Uwzględnij aktualną cenę jako przybliżenie niezamkniętej świecy H1
+        swing_low = min(swing_low, current_price)
+        swing_high = max(swing_high, current_price)
+        log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f}")
 
         # trend_consolidation_long — WYŁĄCZONY (31% WR, stratny w obu Q3'25 i Q1'26)
         log_lines.append(f"  → consol_long: WYŁĄCZONY")
