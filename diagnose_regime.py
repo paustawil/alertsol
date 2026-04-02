@@ -128,8 +128,45 @@ def _parse_dt(s: str) -> int:
     return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp())
 
 
-def fetch_klines_paginated(symbol: str, interval: str, total: int, end_ts_s: int | None = None) -> list[dict]:
-    """Pobiera historyczne świece z Bitget API (kopia z grok2_backtest.py)."""
+def fetch_klines_binance(symbol: str, interval: str, total: int, end_ts_s: int | None = None) -> list[dict]:
+    """Pobiera historyczne świece z Binance API (spot). Dane od 2020+."""
+    binance_interval = {"15m": "15m", "1h": "1h"}[interval]
+    interval_s = {"15m": 900, "1h": 3600}[interval]
+    result: list[dict] = []
+    end_ms = (end_ts_s * 1000) if end_ts_s else None
+
+    while len(result) < total:
+        params: dict = {
+            "symbol": symbol, "interval": binance_interval,
+            "limit": min(total - len(result), 1000),
+        }
+        if end_ms:
+            params["endTime"] = int(end_ms)
+        try:
+            r = requests.get("https://api.binance.com/api/v3/klines", params=params, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            print(f"[binance] Błąd API: {e}")
+            break
+        if not data:
+            break
+        batch = [{"time": int(d[0]) // 1000, "open": float(d[1]), "high": float(d[2]),
+                  "low": float(d[3]), "close": float(d[4]), "volume": float(d[5])} for d in data]
+        batch.sort(key=lambda c: c["time"])
+        result = batch + result
+        end_ms = batch[0]["time"] * 1000 - 1
+        if len(batch) < 2:
+            break
+
+    seen: set[int] = set()
+    deduped = [c for c in result if c["time"] not in seen and not seen.add(c["time"])]
+    deduped.sort(key=lambda c: c["time"])
+    return deduped[-total:] if len(deduped) > total else deduped
+
+
+def fetch_klines_bitget(symbol: str, interval: str, total: int, end_ts_s: int | None = None) -> list[dict]:
+    """Pobiera historyczne świece z Bitget API (futures)."""
     granularity = {"15m": "15m", "1h": "1H"}[interval]
     interval_s = {"15m": 900, "1h": 3600}[interval]
     result: list[dict] = []
@@ -147,7 +184,7 @@ def fetch_klines_paginated(symbol: str, interval: str, total: int, end_ts_s: int
             r.raise_for_status()
             data = r.json().get("data") or []
         except Exception as e:
-            print(f"[fetch] Błąd API: {e}")
+            print(f"[bitget] Błąd API: {e}")
             break
         if not data:
             break
@@ -163,6 +200,17 @@ def fetch_klines_paginated(symbol: str, interval: str, total: int, end_ts_s: int
     deduped = [c for c in result if c["time"] not in seen and not seen.add(c["time"])]
     deduped.sort(key=lambda c: c["time"])
     return deduped[-total:] if len(deduped) > total else deduped
+
+
+def fetch_klines_paginated(symbol: str, interval: str, total: int, end_ts_s: int | None = None) -> list[dict]:
+    """Próbuje Bitget, jak nie ma danych — fallback na Binance."""
+    result = fetch_klines_bitget(symbol, interval, total, end_ts_s)
+    if len(result) >= total * 0.5:
+        print(f"  [źródło: Bitget]")
+        return result
+    # Fallback: Binance (spot, symbol bez produktu)
+    print(f"  [Bitget: za mało danych ({len(result)}), próbuję Binance...]")
+    return fetch_klines_binance(symbol, interval, total, end_ts_s)
 
 
 # ── Nowa logika IMPULSE / TREND / RANGE (prototyp do porównania) ────────────
@@ -604,7 +652,16 @@ def main():
     parser = argparse.ArgumentParser(description="Diagnostyka reżimu + algorytmiczne setupy")
     parser.add_argument("--from", dest="dt_from", default="2026-01-01 00:00")
     parser.add_argument("--to", dest="dt_to", default="2026-04-01 00:00")
+    parser.add_argument("--source", choices=["auto", "binance", "bitget"], default="auto",
+                        help="Źródło danych: auto (Bitget z fallback Binance), binance, bitget")
     args = parser.parse_args()
+
+    # Override fetch function based on source
+    global fetch_klines_paginated
+    if args.source == "binance":
+        fetch_klines_paginated = fetch_klines_binance
+    elif args.source == "bitget":
+        fetch_klines_paginated = fetch_klines_bitget
 
     from_ts = _parse_dt(args.dt_from)
     to_ts = _parse_dt(args.dt_to)
