@@ -1080,6 +1080,7 @@ _BITGET_GRANULARITY = {"15m": "15m", "1h": "1H"}
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
     bg_symbol = symbol  # Bitget candles API używa SOLUSDT (bez sufixu U)
     granularity = _BITGET_GRANULARITY.get(interval, "15min")
+    end_time_ms = str(int(time.time() * 1000))
     r = requests.get(
         "https://api.bitget.com/api/v2/mix/market/candles",
         params={
@@ -1087,6 +1088,7 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
             "productType": "USDT-FUTURES",
             "granularity": granularity,
             "limit":       str(limit),
+            "endTime":     end_time_ms,
         },
         timeout=10,
     )
