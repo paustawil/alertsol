@@ -493,16 +493,86 @@ Zasady:
   c) Widzisz wyraźny, konkretny setup z jasnym entry, SL i TP.
   d) Setup NIE jest kontynuacją M15 prosto w resistance (long) lub support (short) na H1.
 - Przy bocznym rynku, choppingu, sprzecznych sygnałach H1/M15 lub niskim przekonaniu — send_alert=false.
+- REŻIM RYNKOWY — w danych wejściowych podany jest aktualny reżim (RANGE / IMPULS / TREND z kierunkiem i siłą):
+  - RANGE: normalny rynek boczny. Szukaj setupów od supportu i resistance w obu kierunkach.
+  - IMPULS (SPADKOWY/WZROSTOWY): gwałtowny ruch właśnie się dzieje. PRIORYTET: szukaj wejścia Z kierunkiem impulsu.
+    * W IMPULSIE SPADKOWYM: szukaj shortów na pullbackach lub retestach wybitych poziomów. NIE szukaj longów — łapanie noża w spadającym rynku.
+    * W IMPULSIE WZROSTOWYM: szukaj longów na pullbackach. NIE shortuj w impulsie wzrostowym.
+  - TREND (SPADKOWY/WZROSTOWY): utrzymujący się ruch kierunkowy (godziny/dni). PRIORYTET: szukaj pullbacków Z trendem.
+    * W TRENDZIE SPADKOWYM: short na pullbacku do oporu, retest wybitego supportu (teraz resistance), kontynuacja po konsolidacji. Long kontr-trend TYLKO z wyjątkowym uzasadnieniem (volume spike + dywergencja + silna strefa).
+    * W TRENDZIE WZROSTOWYM: analogicznie — long na pullbacku, short kontr-trend tylko z silnym uzasadnieniem.
+    * Przy kontr-trendzie: bias_proc musi uczciwie odzwierciedlać niepewność — nie zawyżaj.
 - tf_aligned: Oceń czy H1 i M15 pokazują ten sam kierunek. true = zgodne, false = sprzeczne lub jeden neutralny.
 - sl_after_tp1: Po osiągnięciu TP1 SL należy przesunąć. Znajdź ostatni strukturalny support (long) lub resistance (short) między W1 a TP1. Jeśli taki poziom istnieje i jest w strefie zysku (powyżej W1 dla long, poniżej W1 dla short) — użyj go jako sl_after_tp1. Jeśli nie — użyj W1 (break-even). Zawsze podaj tę wartość gdy send_alert=true.
 
 Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
 
 Gdy send_alert=true:
-{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem pozycji w zakresie","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
+{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"konkretna analiza techniczna H1/M15 z uwzględnieniem pozycji w zakresie i reżimu rynkowego","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"Czekam na pullback do 124.50 i wchodzę long"}
 
 Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
+
+
+# ── System prompt dla GPT Trend (konkretne setupy trendowe) ─────────────────
+GPT_TREND_PROMPT = """Jesteś traderem kryptowalut specjalizującym się w SOL/USDT na M15 i H1.
+
+Otrzymasz dane OHLCV (M15 + H1), sentyment (BTC/ETH/SOL + Fear & Greed), pozycję w zakresie H1 i aktualny reżim rynkowy.
+
+NIE szukaj niczego w internecie — wszystko jest w danych wejściowych.
+
+Twoim zadaniem jest znaleźć setup transakcyjny. Zachowanie zależy od reżimu:
+
+## RANGE (rynek boczny)
+Szukaj setupów od S/R: long od supportu, short od resistance. Normalne zasady:
+- TP musi respektować najbliższy poziom strukturalny
+- R:R minimum 1:2
+- Volume potwierdza odrzucenie (spike na świecy z knotem)
+
+## TREND SPADKOWY / IMPULS SPADKOWY
+PRIORYTET: setupy SHORT (z trendem). Szukaj DOKŁADNIE jednego z tych trzech wzorców:
+
+### 1. trend_retest_short — Retest wybitego supportu
+Szukaj poziomu który WCZEŚNIEJ był supportem a teraz jest powyżej ceny (został wybity).
+- W: Strefa przy wybitym supportzie (od poziomu do ~0.5% poniżej). Ustaw z wyprzedzeniem — nie czekaj aż cena tam dotrze.
+- SL: Powyżej strefy + margines. Zamknięcie powyżej = reclaim, setup zanegowany.
+- TP1: Ostatni dołek po wybiciu.
+- TP2: Nowe dno (dołek - zakres korekty).
+
+### 2. trend_consolidation_short — Konsolidacja w trendzie
+Cena konsoliduje 4-8 świec H1 przy dnie po spadku. EMA rozłożone w dół, volume MALEJE w konsolidacji.
+- W: Górna 1/3 konsolidacji (pullback do góry w range).
+- SL: Powyżej szczytu konsolidacji + margines.
+- TP1: Zakres konsolidacji odmierzony W DÓŁ od dna konsolidacji (nie do dna — PRZEZ dno).
+- TP2: 1.5-2x zakresu konsolidacji poniżej dna.
+
+### 3. trend_pullback_short — Pullback % w trendzie
+Cena odbija od dna po spadku. Szukaj strefy 38-50% ostatniego swingu spadkowego.
+- W: Strefa 38-50% korekty (od swing high do swing low). Ustaw z wyprzedzeniem.
+- SL: Powyżej 61.8% korekty (głębszy pullback = prawdopodobnie odwrócenie).
+- TP1: Retest dna swingu.
+- TP2: Nowe dno.
+
+### Kontr-trend (LONG w trendzie spadkowym):
+Dopuszczalny TYLKO z wyjątkowym uzasadnieniem: volume spike na odrzuceniu + dywergencja + silna strefa popytu. Bez tych sygnałów — NIE proponuj longa.
+
+## TREND WZROSTOWY / IMPULS WZROSTOWY
+Analogicznie ale w drugą stronę: szukaj LONGów (trend_retest_long, trend_consolidation_long, trend_pullback_long).
+
+## Zasady ogólne
+- Odpowiadaj po polsku, konkretnie.
+- send_alert=true TYLKO gdy widzisz konkretny setup z jasnym entry, SL, TP i R:R >= 1:2.
+- Przy chopie, sprzecznych sygnałach lub braku wzorca — send_alert=false.
+- bias_proc musi uczciwie odzwierciedlać pewność. Nie zawyżaj.
+- sl_after_tp1: Po TP1 przesuń SL do najbliższego strukturalnego poziomu między W1 a TP1 (w strefie zysku). Jeśli nie ma — użyj W1 (break-even).
+
+Zwróć dokładnie jeden obiekt JSON. Bez markdownu, bez tekstu poza JSON.
+
+Gdy send_alert=true:
+{"send_alert":true,"bias":"short","bias_proc":72,"tf_aligned":true,"setup_type":"trend_consolidation_short","sentyment":"BTC 67k (-1.2%), ETH 2.1k (-0.8%), F&G 22 Extreme Fear","analiza":"H1 trend spadkowy, konsolidacja 82-84 przy dnie, EMA 5/10 pod 30/60, volume maleje","wejscia":[{"poziom":83.80,"warunek":"cena dotrze do górnej 1/3 konsolidacji"}],"tp1":80.00,"tp2":78.00,"sl":84.80,"sl_after_tp1":83.00,"rr":2.5,"akcja":"Ustawiam short przy 83.80, SL 84.80, TP1 80.00"}
+
+Gdy send_alert=false:
+{"send_alert":false,"bias":"neutral","bias_proc":45,"tf_aligned":false,"setup_type":"none","sentyment":"BTC/ETH/SOL + F&G","analiza":"opis co widzisz i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie"}"""
 
 
 # ── System prompt dla GPT Relaxed (wzorowany na Groku) ───────────────────────
@@ -1073,7 +1143,7 @@ def detect_range(candles: list[dict], n: int = 32) -> dict:
     }
 
 
-# ── Detekcja reżimu rynkowego ────────────────────────────────────────────────
+# ── Detekcja reżimu rynkowego (IMPULSE / TREND / RANGE) ─────────────────────
 
 def detect_market_regime(
     candles_m15: list[dict],
@@ -1081,156 +1151,150 @@ def detect_market_regime(
     current_price: float,
 ) -> dict:
     """
-    Rozpoznaje reżim rynkowy: CONSOLIDATION / BREAKOUT_UP / BREAKOUT_DOWN.
+    Rozpoznaje reżim rynkowy: IMPULSE_UP/DOWN, TREND_UP/DOWN, RANGE.
 
-    Zakres referencyjny = H1[-40:-8] (pomija ostatnie 8h żeby nie przesuwał się
-    razem z trendem). Porównuje aktualną cenę z tym stabilnym zakresem.
+    Priorytet: IMPULSE > TREND > RANGE.
+    IMPULSE = gwałtowny ruch (2-6h), TREND = utrzymujący się kierunek (24-48h),
+    RANGE = brak kierunku (domyślny).
     """
-    # Zakres REFERENCYJNY — starsze świece, nie obejmuje ostatnich 8h
-    if len(candles_h1) < 20:
-        rng = detect_range(candles_h1, n=min(len(candles_h1), 32))
-        ref_support = rng["support"]
-        ref_resistance = rng["resistance"]
-    else:
-        ref_candles = candles_h1[-40:-8] if len(candles_h1) >= 40 else candles_h1[:-8]
-        ref_resistance = max(c["high"] for c in ref_candles)
-        ref_support = min(c["low"] for c in ref_candles)
+    trend = h1_trend(candles_h1)
+    imp_str = impulse_strength(candles_m15)
 
-    rng_size = ref_resistance - ref_support
-    if rng_size <= 0:
-        return {"regime": "CONSOLIDATION", "support": ref_support, "resistance": ref_resistance,
-                "range_size": 0, "details": "brak zakresu"}
+    # S/R z detect_range — zachowane dla kompatybilności (prompt, algo_detect)
+    rng = detect_range(candles_h1)
 
-    # ── Volume: średnia z ostatnich 10 M15 vs bieżąca ────────────────────────
+    # ── Volume ratio (ostatnie 2 M15 vs średnia z 10) ────────────────────────
     recent_m15 = candles_m15[-12:]
     avg_vol = sum(c["volume"] for c in recent_m15[:-2]) / max(len(recent_m15[:-2]), 1)
     last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Sygnał 1: Cena poza zakresem referencyjnym ───────────────────────────
-    last_3_closes = [c["close"] for c in candles_m15[-3:]]
-    closes_below = sum(1 for c in last_3_closes if c < ref_support)
-    closes_above = sum(1 for c in last_3_closes if c > ref_resistance)
+    # ── Zmiana cenowa 4h / 24h / 48h ─────────────────────────────────────────
+    price_4h = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
+    price_24h = candles_h1[-24]["close"] if len(candles_h1) >= 24 else candles_h1[0]["close"]
+    price_48h = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
+    change_4h = (current_price - price_4h) / price_4h * 100
+    change_24h = (current_price - price_24h) / price_24h * 100
+    change_48h = (current_price - price_48h) / price_48h * 100
 
-    # ── Sygnał 2: Momentum — dystans od granicy referencyjnej ────────────────
-    pct_below_support = (ref_support - current_price) / ref_support * 100 if current_price < ref_support else 0
-    pct_above_resistance = (current_price - ref_resistance) / ref_resistance * 100 if current_price > ref_resistance else 0
+    # ── Kierunek ostatnich 4 M15 ─────────────────────────────────────────────
+    last4 = candles_m15[-4:]
+    bearish_closes = sum(1 for c in last4 if c["close"] < c["open"])
+    bullish_closes = sum(1 for c in last4 if c["close"] > c["open"])
 
-    # ── Sygnał 3: Struktura H1 — lower lows / higher highs (ostatnie 8h) ────
-    h1_recent = candles_h1[-8:]
-    h1_lows = [c["low"] for c in h1_recent]
-    h1_highs = [c["high"] for c in h1_recent]
+    # ── Struktura H1 (last 12h) ──────────────────────────────────────────────
+    h1_12 = candles_h1[-12:] if len(candles_h1) >= 12 else candles_h1
+    h1_lows = [c["low"] for c in h1_12]
+    h1_highs = [c["high"] for c in h1_12]
     lower_lows = sum(1 for i in range(1, len(h1_lows)) if h1_lows[i] < h1_lows[i - 1])
     higher_highs = sum(1 for i in range(1, len(h1_highs)) if h1_highs[i] > h1_highs[i - 1])
+    lower_highs = sum(1 for i in range(1, len(h1_highs)) if h1_highs[i] < h1_highs[i - 1])
+    higher_lows = sum(1 for i in range(1, len(h1_lows)) if h1_lows[i] > h1_lows[i - 1])
 
-    # ── Sygnał 4: Przesunięcie zakresu — najniższy dołek z ostatnich 8h vs ref support
-    recent_low = min(c["low"] for c in candles_h1[-8:])
-    recent_high = max(c["high"] for c in candles_h1[-8:])
-    range_shift_down = (ref_support - recent_low) / rng_size * 100 if recent_low < ref_support else 0
-    range_shift_up = (recent_high - ref_resistance) / rng_size * 100 if recent_high > ref_resistance else 0
+    # Bazowy dict zwracany przez każdy reżim
+    base = {
+        "support": rng["support"], "resistance": rng["resistance"],
+        "range_size": rng["range_size"], "vol_ratio": round(vol_ratio, 1),
+        "change_24h": round(change_24h, 1), "change_48h": round(change_48h, 1),
+    }
 
-    # ── Sygnał 5: Trend 24h/48h — łapie utrzymujący się trend ────────────────
-    price_24h_ago = candles_h1[-24]["close"] if len(candles_h1) >= 24 else candles_h1[0]["close"]
-    price_48h_ago = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
-    change_24h = (current_price - price_24h_ago) / price_24h_ago * 100
-    change_48h = (current_price - price_48h_ago) / price_48h_ago * 100
+    # ── IMPULSE: gwałtowny ruch w ostatnich godzinach ────────────────────────
+    impulse_score = 0
+    impulse_dir = "none"
 
-    # ── Decyzja: BREAKOUT DOWN ────────────────────────────────────────────────
-    breakdown_score = 0
-    breakdown_details = []
+    if imp_str >= 2:
+        impulse_score += 1
+    if vol_ratio >= 1.5:
+        impulse_score += 1
+    if abs(change_4h) >= 2.0:
+        impulse_score += 1
+    elif abs(change_4h) >= 1.5 and vol_ratio >= 1.3:
+        impulse_score += 1
+    if bearish_closes >= 3:
+        impulse_score += 1
+        impulse_dir = "down"
+    elif bullish_closes >= 3:
+        impulse_score += 1
+        impulse_dir = "up"
 
-    if current_price < ref_support:
-        breakdown_score += 1
-        breakdown_details.append(f"cena ${current_price:.2f} poniżej ref. supportu ${ref_support:.2f}")
-    if closes_below >= 2:
-        breakdown_score += 1
-        breakdown_details.append(f"{closes_below}/3 zamknięć M15 poniżej ref. supportu")
-    if pct_below_support >= 1.5:
-        breakdown_score += 1
-        breakdown_details.append(f"{pct_below_support:.1f}% poniżej supportu (momentum)")
-    if vol_ratio >= 1.5 and current_price < ref_support:
-        breakdown_score += 1
-        breakdown_details.append(f"volume {vol_ratio:.1f}x średniej na wybiciu")
-    if lower_lows >= 4:
-        breakdown_score += 1
-        breakdown_details.append(f"{lower_lows}/7 coraz niższych dołków H1")
-    if range_shift_down >= 30:
-        breakdown_score += 1
-        breakdown_details.append(f"zakres przesunął się {range_shift_down:.0f}% w dół")
-    if change_24h <= -3.0:
-        breakdown_score += 2
-        breakdown_details.append(f"trend 24h: {change_24h:+.1f}% (silny spadek)")
-    elif change_24h <= -1.5:
-        breakdown_score += 1
-        breakdown_details.append(f"trend 24h: {change_24h:+.1f}%")
-    if change_48h <= -5.0:
-        breakdown_score += 2
-        breakdown_details.append(f"trend 48h: {change_48h:+.1f}% (utrzymujący się spadek)")
-    elif change_48h <= -3.0:
-        breakdown_score += 1
-        breakdown_details.append(f"trend 48h: {change_48h:+.1f}%")
-
-    # ── Decyzja: BREAKOUT UP ─────────────────────────────────────────────────
-    breakup_score = 0
-    breakup_details = []
-
-    if current_price > ref_resistance:
-        breakup_score += 1
-        breakup_details.append(f"cena ${current_price:.2f} powyżej ref. resistance ${ref_resistance:.2f}")
-    if closes_above >= 2:
-        breakup_score += 1
-        breakup_details.append(f"{closes_above}/3 zamknięć M15 powyżej ref. resistance")
-    if pct_above_resistance >= 1.5:
-        breakup_score += 1
-        breakup_details.append(f"{pct_above_resistance:.1f}% powyżej resistance (momentum)")
-    if vol_ratio >= 1.5 and current_price > ref_resistance:
-        breakup_score += 1
-        breakup_details.append(f"volume {vol_ratio:.1f}x średniej na wybiciu")
-    if higher_highs >= 4:
-        breakup_score += 1
-        breakup_details.append(f"{higher_highs}/7 coraz wyższych szczytów H1")
-    if range_shift_up >= 30:
-        breakup_score += 1
-        breakup_details.append(f"zakres przesunął się {range_shift_up:.0f}% w górę")
-    if change_24h >= 3.0:
-        breakup_score += 2
-        breakup_details.append(f"trend 24h: {change_24h:+.1f}% (silny wzrost)")
-    elif change_24h >= 1.5:
-        breakup_score += 1
-        breakup_details.append(f"trend 24h: {change_24h:+.1f}%")
-    if change_48h >= 5.0:
-        breakup_score += 2
-        breakup_details.append(f"trend 48h: {change_48h:+.1f}% (utrzymujący się wzrost)")
-    elif change_48h >= 3.0:
-        breakup_score += 1
-        breakup_details.append(f"trend 48h: {change_48h:+.1f}%")
-
-    # ── Wynik ─────────────────────────────────────────────────────────────────
-    if breakdown_score >= 2 and breakdown_score > breakup_score:
+    if impulse_score >= 3:
+        if impulse_dir == "none":
+            impulse_dir = "down" if change_4h < 0 else "up"
+        strength = min(10, impulse_score * 2 + imp_str)
+        details = f"4h:{change_4h:+.1f}%; imp:{imp_str}; vol:{vol_ratio:.1f}x"
         return {
-            "regime": "BREAKOUT_DOWN",
-            "support": ref_support, "resistance": ref_resistance, "range_size": round(rng_size, 2),
-            "score": breakdown_score, "vol_ratio": round(vol_ratio, 1),
-            "pct_outside": round(pct_below_support, 1),
-            "details": "; ".join(breakdown_details),
-        }
-    elif breakup_score >= 2 and breakup_score > breakdown_score:
-        return {
-            "regime": "BREAKOUT_UP",
-            "support": ref_support, "resistance": ref_resistance, "range_size": round(rng_size, 2),
-            "score": breakup_score, "vol_ratio": round(vol_ratio, 1),
-            "pct_outside": round(pct_above_resistance, 1),
-            "details": "; ".join(breakup_details),
+            **base,
+            "regime": f"IMPULSE_{impulse_dir.upper()}",
+            "direction": impulse_dir, "score": strength,
+            "pct_outside": 0, "details": details,
         }
 
-    else:
+    # ── TREND: utrzymujący się ruch kierunkowy ────────────────────────────────
+    trend_score = 0
+    trend_details = []
+
+    if abs(change_24h) >= 3.0:
+        trend_score += 2
+        trend_details.append(f"24h:{change_24h:+.1f}%")
+    elif abs(change_24h) >= 1.5:
+        trend_score += 1
+        trend_details.append(f"24h:{change_24h:+.1f}%")
+
+    if abs(change_48h) >= 5.0:
+        trend_score += 2
+        trend_details.append(f"48h:{change_48h:+.1f}%")
+    elif abs(change_48h) >= 3.0:
+        trend_score += 1
+        trend_details.append(f"48h:{change_48h:+.1f}%")
+
+    if lower_lows >= 5:
+        trend_score += 1
+        trend_details.append(f"LL:{lower_lows}/{len(h1_12)-1}")
+    if higher_highs >= 5:
+        trend_score += 1
+        trend_details.append(f"HH:{higher_highs}/{len(h1_12)-1}")
+    if lower_highs >= 5:
+        trend_score += 1
+        trend_details.append(f"LH:{lower_highs}/{len(h1_12)-1}")
+    if higher_lows >= 5:
+        trend_score += 1
+        trend_details.append(f"HL:{higher_lows}/{len(h1_12)-1}")
+
+    if trend != "neutral":
+        trend_score += 1
+        trend_details.append(f"h1:{trend}")
+
+    # TREND wymaga zmiany cenowej — sama struktura nie wystarczy
+    has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
+
+    if trend_score >= 3 and has_price_change:
+        # Kierunek: 48h ma priorytet nad 24h gdy się kłócą
+        if abs(change_48h) >= 3.0:
+            trend_dir = "down" if change_48h < 0 else "up"
+        elif abs(change_24h) >= 1.5:
+            trend_dir = "down" if change_24h < 0 else "up"
+        elif change_48h < -2.0:
+            trend_dir = "down"
+        elif change_48h > 2.0:
+            trend_dir = "up"
+        else:
+            trend_dir = "down" if lower_lows > higher_highs else "up"
+
+        strength = min(10, trend_score + imp_str)
         return {
-            "regime": "CONSOLIDATION",
-            "support": ref_support, "resistance": ref_resistance, "range_size": round(rng_size, 2),
-            "score": 0, "vol_ratio": round(vol_ratio, 1),
-            "pct_outside": 0,
-            "details": "brak sygnałów wybicia",
+            **base,
+            "regime": f"TREND_{trend_dir.upper()}",
+            "direction": trend_dir, "score": strength,
+            "pct_outside": 0, "details": "; ".join(trend_details),
         }
+
+    # ── RANGE: domyślny ──────────────────────────────────────────────────────
+    return {
+        **base,
+        "regime": "RANGE",
+        "direction": "none", "score": 0,
+        "pct_outside": 0, "details": f"24h:{change_24h:+.1f}%; 48h:{change_48h:+.1f}%",
+    }
 
 
 # ── Punktacja algorytmu ───────────────────────────────────────────────────────
@@ -1499,7 +1563,36 @@ def _fetch_sentiment_line() -> str:
     return " | ".join(parts) if parts else "brak danych sentymentu"
 
 
-def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+def _build_regime_line(regime: dict) -> str:
+    """Buduje linię opisu reżimu rynkowego do user message dla Groka."""
+    regime_name = regime["regime"]
+    score = regime.get("score", 0)
+    c24 = regime.get("change_24h", 0)
+    c48 = regime.get("change_48h", 0)
+    details = regime.get("details", "")
+
+    if regime_name == "RANGE":
+        return "Reżim rynkowy: RANGE — brak wyraźnego kierunku, rynek boczny."
+    elif regime_name.startswith("IMPULSE_"):
+        direction = "SPADKOWY" if "DOWN" in regime_name else "WZROSTOWY"
+        return (
+            f"Reżim rynkowy: IMPULS {direction} (siła: {score}/10) — "
+            f"gwałtowny ruch, 24h: {c24:+.1f}%, 48h: {c48:+.1f}%. "
+            f"Sygnały: {details}."
+        )
+    elif regime_name.startswith("TREND_"):
+        direction = "SPADKOWY" if "DOWN" in regime_name else "WZROSTOWY"
+        return (
+            f"Reżim rynkowy: TREND {direction} (siła: {score}/10) — "
+            f"utrzymujący się ruch, 24h: {c24:+.1f}%, 48h: {c48:+.1f}%. "
+            f"Sygnały: {details}."
+        )
+    # Fallback
+    return f"Reżim rynkowy: {regime_name} — {details}"
+
+
+def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: float,
+              regime: dict | None = None) -> dict | None:
     if not XAI_KEY:
         print("[grok] Brak klucza API.")
         return None
@@ -1530,12 +1623,18 @@ def call_grok(candles_m15: list[dict], candles_h1: list[dict], current_price: fl
     else:
         range_label = "środek zakresu"
 
+    # Reżim rynkowy
+    if regime is None:
+        regime = detect_market_regime(candles_m15, candles_h1, current_price)
+    regime_line = _build_regime_line(regime)
+
     user_msg = (
         f"Aktualne dane z Bitget: {sentiment_line}\n"
         f"Aktualna cena SOL: ${current_price:.2f}\n\n"
         f"Zakres H1 (ostatnie 32 świece): support ${rng['support']:.2f} — resistance ${rng['resistance']:.2f} "
         f"(range ${rng_size:.2f})\n"
-        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n\n"
+        f"Pozycja ceny w zakresie: {range_pos:.0f}% ({range_label})\n"
+        f"{regime_line}\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
@@ -2476,8 +2575,8 @@ def breakout_scan():
     current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     regime      = detect_market_regime(candles_m15, candles_h1, current)
 
-    if regime["regime"] == "CONSOLIDATION":
-        return  # Nic nie rób
+    if regime["regime"] == "RANGE":
+        return  # Nic nie rób w RANGE
 
     # Telegram notification — cooldown 30 min na ten sam reżim (żeby nie spamować)
     now = time.time()
@@ -2486,28 +2585,29 @@ def breakout_scan():
         _last_breakout_tg_ts = now
         _last_breakout_tg_regime = regime["regime"]
 
-        if regime["regime"] == "BREAKOUT_DOWN":
+        direction = regime.get("direction", "")
+        if direction == "down":
             icon = "🔻"
-            dir_label = "DOWN"
-            level_label = f"Support ${regime['support']:.2f} przebity"
-        else:
+        elif direction == "up":
             icon = "🔺"
-            dir_label = "UP"
-            level_label = f"Resistance ${regime['resistance']:.2f} przebity"
+        else:
+            icon = "⚡"
 
+        c24 = regime.get("change_24h", 0)
+        c48 = regime.get("change_48h", 0)
         msg = (
-            f"{icon} <b>BREAKOUT {dir_label} — SOL/USDT</b>\n\n"
-            f"{level_label} (cena ${current:.2f}, {regime['pct_outside']:.1f}% poza zakresem)\n"
-            f"Volume: {regime['vol_ratio']}x średniej\n"
+            f"{icon} <b>{regime['regime']} — SOL/USDT</b>\n\n"
+            f"Cena ${current:.2f} | 24h: {c24:+.1f}% | 48h: {c48:+.1f}%\n"
+            f"Siła: {regime.get('score', 0)}/10 | Volume: {regime['vol_ratio']}x\n"
             f"Sygnały: {regime['details']}\n\n"
             f"⏳ Triggeruję analizę Grok2..."
         )
         send_telegram(msg)
 
-    # ZAWSZE triggeruj Groka przy breakoucie — save_pending odrzuci duplikaty
+    # Triggeruj Groka przy IMPULSE/TREND — save_pending odrzuci duplikaty
     print(f"[breakout-scan] {regime['regime']} wykryty — wywołuję Groka...")
     candles_m15_full = fetch_klines(SYMBOL, "15m", limit=100)
-    grok_result = call_grok(candles_m15_full, candles_h1, current)
+    grok_result = call_grok(candles_m15_full, candles_h1, current, regime=regime)
 
     if grok_result:
         bias = grok_result.get("bias", "neutral")
@@ -2515,7 +2615,12 @@ def breakout_scan():
         bias_proc = grok_result.get("bias_proc", 0)
         print(f"[breakout-scan] Grok: {bias} ({bias_proc}%) send_alert={send_alert}")
 
-        if send_alert and bias_proc >= MIN_GROK_BIAS_PROC and bias != "neutral":
+        # Filtr: odrzuć setup jeśli przekonanie za niskie
+        if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
+            print(f"[breakout-scan] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}%")
+            send_alert = False
+
+        if send_alert and bias != "neutral":
             wejscia = grok_result.get("wejscia", [])
             entries = [w["poziom"] for w in wejscia if "poziom" in w]
             if entries:
@@ -2679,7 +2784,7 @@ def main():
 
     # ── 4. Grok (Grok2 prompt — sentyment z Bitget + kontekst strukturalny) ──
     print("[grok] Wysylam dane do analizy (Grok2 prompt)...")
-    grok_result = call_grok(candles_m15, candles_h1, current)
+    grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
 
     if grok_result:
         bias       = grok_result.get("bias", "neutral")
@@ -2688,7 +2793,7 @@ def main():
         tf_aligned = grok_result.get("tf_aligned", True)
         print(f"[grok] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert}")
 
-        # Filtr zawahania: odrzuć setup jeśli przekonanie za niskie
+        # Filtr: odrzuć setup jeśli przekonanie za niskie
         if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
             print(f"[grok] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}% — zbyt niepewny sygnał.")
             send_alert = False
