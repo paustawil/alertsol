@@ -1080,6 +1080,7 @@ _BITGET_GRANULARITY = {"15m": "15m", "1h": "1H"}
 def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
     bg_symbol = symbol  # Bitget candles API używa SOLUSDT (bez sufixu U)
     granularity = _BITGET_GRANULARITY.get(interval, "15min")
+    end_time_ms = str(int(time.time() * 1000))
     r = requests.get(
         "https://api.bitget.com/api/v2/mix/market/candles",
         params={
@@ -1087,6 +1088,7 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
             "productType": "USDT-FUTURES",
             "granularity": granularity,
             "limit":       str(limit),
+            "endTime":     end_time_ms,
         },
         timeout=10,
     )
@@ -2690,6 +2692,74 @@ def check_pending_with_grok(candles_m15: list[dict], candles_h1: list[dict], cur
     print(f"[grok-valid] Anulowano {cancelled} setupów.")
 
 
+# ── Algorytmiczne anulowanie przestarzałych setupów ──────────────────────────
+STALE_DIST_PCT = 0.05  # 5% — max dystans ceny od entry, powyżej = anuluj
+
+def check_stale_setups(regime: dict, current_price: float):
+    """Anuluje nieotwarte setupy, które się zdezaktualizowały.
+    Kryteria:
+    1. Cena uciekła >5% od entry
+    2. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
+    """
+    pending = db.get_active_setups()
+    non_entered = [s for s in pending
+                   if s.get("entry_hit_at") is None and not s.get("shadow")]
+    if not non_entered:
+        return
+
+    regime_dir = regime.get("direction", "none")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cancelled = 0
+
+    for s in non_entered:
+        sid = s.get("setup_id")
+        w1 = s["entries"][0] if s.get("entries") else None
+        d = s.get("direction", "")
+        if not w1:
+            continue
+
+        reason = None
+
+        # 1. Cena uciekła za daleko od entry
+        dist_pct = abs(current_price - w1) / current_price
+        if dist_pct > STALE_DIST_PCT:
+            reason = f"cena uciekła ({dist_pct:.1%} od entry ${w1:.2f})"
+
+        # 2. Reżim zmienił kierunek
+        if not reason and regime_dir != "none":
+            if d == "short" and regime_dir == "up":
+                reason = f"zmiana reżimu na {regime['regime']} (setup short)"
+            elif d == "long" and regime_dir == "down":
+                reason = f"zmiana reżimu na {regime['regime']} (setup long)"
+
+        if reason:
+            print(f"[stale] #{sid} anulowany: {reason}")
+            db.update_setup(sid,
+                            shadow=True,
+                            cancel_reason=reason,
+                            cancel_time=now_iso,
+                            cancel_price=round(current_price, 2))
+            db.resolve_setup(sid, "anulowany", None, None, None, None)
+            cancelled += 1
+
+            di = "📉" if d == "short" else "📈"
+            tp1 = s["tps"][0] if s.get("tps") else None
+            try:
+                send_telegram(
+                    f"🚫 <b>Setup #{sid} anulowany</b>\n"
+                    f"{di} {d.upper()}"
+                    + (f" | W1: ${w1:.2f}" if w1 else "")
+                    + (f" | TP1: ${tp1:.2f}" if tp1 else "") + "\n"
+                    f"<i>{reason}</i>\n"
+                    f"Cena: ${current_price:.2f}"
+                )
+            except Exception:
+                pass
+
+    if cancelled:
+        print(f"[stale] Anulowano {cancelled} setupów.")
+
+
 # ── Anti-spam ─────────────────────────────────────────────────────────────────
 def was_alerted(model: str, level: float, direction: str) -> bool:
     return db.was_alerted(model, level, direction)
@@ -2832,6 +2902,9 @@ def breakout_scan():
     current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     regime      = detect_market_regime(candles_m15, candles_h1, current)
 
+    # Anuluj przestarzałe setupy (co 3 min — szybciej niż main)
+    check_stale_setups(regime, current)
+
     if regime["regime"] == "RANGE":
         return  # Nic nie rób w RANGE
 
@@ -2911,9 +2984,8 @@ def main():
     # Exchange sync wyłączony — Bitget testowany osobnym workflow
     # exchange_trader.sync()
 
-    # O :45 każdej godziny — Grok weryfikował nieotwarte setupy (wyłączony)
-    # if datetime.now(TZ).minute == 45:
-    #     check_pending_with_grok(candles_m15, candles_h1, current)
+    # Algorytmiczne anulowanie przestarzałych setupów (co 15 min)
+    check_stale_setups(regime, current)
 
     # ── 1. Algorytm (stary, range-based) — WYŁĄCZONY, zastąpiony przez Algo2 ──
     # algo_setups  = algo_detect(candles_m15, candles_h1, rng)
