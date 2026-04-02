@@ -2633,7 +2633,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
     d       = setup.get("direction", "")
     dist    = abs(current_price - entries[0]) if entries else 0
     icon    = "📈 Long" if d == "long" else "📉 Short"
-    filtr   = "✅ filtr" if filter_passed else "⚠️ bez filtra"
+    setup_type = setup.get("type", "")
     entries_txt = "\n".join(f"  W{i+1}: ${e:.2f}" for i, e in enumerate(entries))
     tps_txt     = "\n".join(f"  TP{i+1}: ${t:.2f}  (+${abs(t - entries[0]):.2f})" for i, t in enumerate(tps)) if entries else "-"
     reasoning   = setup.get("reasoning", "")
@@ -2645,16 +2645,21 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         sl_after_tp1_txt = f"<b>SL po TP1:</b>  ${sl_after_tp1:.2f}  ({be_label})\n"
 
     sid_txt = f" #{setup.get('setup_id')}" if setup.get("setup_id") else ""
+
+    # Typ setupu + reżim (dla Algo2)
+    type_line = f"<b>Typ:</b> {setup_type}\n" if setup_type else ""
+
     return (
-        f"🎯 <b>SOL/USDT [{score}/15] — {model}{sid_txt}</b>\n"
-        f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}  |  {filtr}\n\n"
-        f"Cena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejscia)\n\n"
+        f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
+        f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n\n"
+        + type_line
+        + (f"<b>Reżim:</b> {reasoning}\n" if reasoning else "")
+        + f"\nCena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejścia)\n\n"
         f"<b>Ustaw zlecenia:</b>\n{entries_txt}\n\n"
         f"<b>SL:</b>  ${sl:.2f}\n"
         + sl_after_tp1_txt
         + f"\n<b>Cele:</b>\n{tps_txt}\n\n"
         f"<b>RR:</b>  {rr:.1f}:1\n"
-        + (f"\n<i>{reasoning}</i>\n" if reasoning else "")
         + f"\n⚠️ <i>Decyzja nalezy do Ciebie.</i>"
     )
 
@@ -2813,29 +2818,11 @@ def main():
     # if datetime.now(TZ).minute == 45:
     #     check_pending_with_grok(candles_m15, candles_h1, current)
 
-    # ── 1. Algorytm ───────────────────────────────────────────────────────────
-    algo_setups  = algo_detect(candles_m15, candles_h1, rng)
-    filter_passed = bool(algo_setups)
-    best_algo    = max(algo_setups, key=lambda x: x["total"]) if algo_setups else None
-
-    if best_algo:
-        print(f"[algo] Setup: {best_algo['type']} {best_algo['direction']} [{best_algo['total']}/15]")
-        if not validate_setup(best_algo, "Algorytm"):
-            pass
-        elif not was_alerted("Algorytm", best_algo["level"], best_algo["direction"]):
-            rejection = _rejection_reason(best_algo)
-            save_pending(best_algo, "Algorytm", rejection, current)
-            if best_algo.get("setup_id"):
-                log_to_alerty("Algorytm", rejection, best_algo)
-                save_alerted("Algorytm", best_algo["level"], best_algo["direction"])
-                if best_algo["total"] >= MIN_SCORE:
-                    send_telegram(format_alert("Algorytm", best_algo, current, filter_passed))
-            else:
-                print("[algo] Duplikat pominięty — setup już istnieje, pomijam alert.")
-        else:
-            print(f"[algo] Duplikat w cooldown, pomijam.")
-    else:
-        print("[algo] Brak setupu.")
+    # ── 1. Algorytm (stary, range-based) — WYŁĄCZONY, zastąpiony przez Algo2 ──
+    # algo_setups  = algo_detect(candles_m15, candles_h1, rng)
+    # filter_passed = bool(algo_setups)
+    # best_algo    = max(algo_setups, key=lambda x: x["total"]) if algo_setups else None
+    print("[algo] Pominięty (zastąpiony przez Algo2).")
 
     # ── 2. Claude (wyłączony — ENABLE_CLAUDE = False) ─────────────────────────
     if ENABLE_CLAUDE:
@@ -2970,15 +2957,19 @@ def main():
         print("[grok] Pominięty (ENABLE_GROK=False).")
 
     # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
+    regime_label = f"{regime['regime']}({regime.get('score', 0)})"
     algo2_setups = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    print(f"[algo2] Reżim: {regime_label} | Setupów: {len(algo2_setups)}")
+
     if algo2_setups:
         best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
         level = best_algo2["entries"][0]
         d = best_algo2["direction"]
-        print(f"[algo2] Setup: {best_algo2['type']} {d} W={level:.2f} RR={best_algo2['rr']}")
+        dist = abs(current - level)
+        print(f"[algo2] Best: {best_algo2['type']} {d} W=${level:.2f} (dist=${dist:.2f}) RR={best_algo2['rr']}")
         rejection = validate_setup(best_algo2, "Algo2")
         if rejection:
-            pass
+            log_to_alerty("Algo2", rejection, best_algo2)
         elif not was_alerted("Algo2", level, d):
             save_pending(best_algo2, "Algo2", "", current)
             if best_algo2.get("setup_id"):
@@ -2990,7 +2981,11 @@ def main():
         else:
             print(f"[algo2] Duplikat w cooldown, pomijam.")
     else:
-        print("[algo2] Brak setupu.")
+        # Loguj brak setupu do arkusza (żeby widzieć co algo widzi)
+        log_to_alerty("Algo2", "brak_setupu", {
+            "type": "", "direction": "", "reasoning": regime_label,
+            "kurs": round(current, 2),
+        })
 
     # ── 5. GPT Relaxed (live search — sam pobiera BTC/ETH/F&G) ──────────────
     if ENABLE_GPT_RELAXED:
