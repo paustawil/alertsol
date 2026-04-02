@@ -382,8 +382,21 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     if atr <= 0:
         return setups
 
+    # Pobierz zmiany cenowe z reżimu
+    c24 = regime.get("change_24h", 0)
+    c48 = regime.get("change_48h", 0)
+
+    # ── Filtr zgodności: 24h i 48h muszą zgadzać się z kierunkiem ─────────
+    # Nie graj longów gdy 24h jest ujemna (trend słabnie)
+    # Nie graj shortów gdy 24h jest dodatnia (trend słabnie)
+    trend_confirmed = True
+    if direction == "up" and c24 < 0.5:
+        trend_confirmed = False  # 24h nie potwierdza wzrostu
+    elif direction == "down" and c24 > -0.5:
+        trend_confirmed = False  # 24h nie potwierdza spadku
+
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
-    if direction == "down":
+    if direction == "down" and trend_confirmed:
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
 
         # 1. trend_retest_short — retest wybitego supportu
@@ -451,7 +464,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     })
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
-    elif direction == "up":
+    elif direction == "up" and trend_confirmed:
         strength = regime.get("strength", 0)
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
 
