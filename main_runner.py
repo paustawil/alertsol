@@ -1274,12 +1274,13 @@ def admin_test_candles():
                 oldest = candles[0]
                 now_ts = time.time()
                 age_min = (now_ts - newest["time"]) / 60
+                max_age = 90 if interval == "1h" else 30
                 result[interval] = {
                     "oldest": datetime.fromtimestamp(oldest["time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                     "newest": datetime.fromtimestamp(newest["time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                     "newest_age_min": round(age_min, 1),
                     "newest_close": newest["close"],
-                    "fresh": age_min < 30,
+                    "fresh": age_min < max_age,
                 }
             else:
                 result[interval] = {"error": "empty response"}
