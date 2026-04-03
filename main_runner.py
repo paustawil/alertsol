@@ -2022,6 +2022,23 @@ def admin_run_gpt3_backtest():
     return {"ok": True, "message": "Backtest GPT3 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT3 test' (~30-60 min)."}
 
 
+@app.post("/admin/run-gpt-relaxed-backtest")
+def admin_run_gpt_relaxed_backtest():
+    """Uruchamia backtest GPT-Relaxed (web search) w tle. Wyniki: arkusz 'GPT-Relaxed test'."""
+    import threading
+    import gpt_relaxed_backtest
+
+    def _run():
+        try:
+            gpt_relaxed_backtest.run_backtest()
+        except Exception as e:
+            logging.error(f"[gpt-relaxed-backtest] Błąd: {e}", exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return {"ok": True, "message": "Backtest GPT-Relaxed uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT-Relaxed test' (~60-90 min)."}
+
+
 # ── Uruchomienie ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
