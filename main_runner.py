@@ -1259,6 +1259,36 @@ def admin_run_sheets_export():
     }
 
 
+@app.get("/admin/test-candles")
+def admin_test_candles():
+    """Test świeżości danych z Bitget: pobiera świece i zwraca zakres dat + wiek najnowszej."""
+    from datetime import datetime, timezone
+    import time
+    import sol_alert
+    result = {}
+    for interval, limit in [("15m", 5), ("1h", 5)]:
+        try:
+            candles = sol_alert.fetch_klines(sol_alert.SYMBOL, interval, limit=limit)
+            if candles:
+                newest = candles[-1]
+                oldest = candles[0]
+                now_ts = time.time()
+                age_min = (now_ts - newest["time"]) / 60
+                result[interval] = {
+                    "oldest": datetime.fromtimestamp(oldest["time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                    "newest": datetime.fromtimestamp(newest["time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                    "newest_age_min": round(age_min, 1),
+                    "newest_close": newest["close"],
+                    "fresh": age_min < 30,
+                }
+            else:
+                result[interval] = {"error": "empty response"}
+        except Exception as e:
+            result[interval] = {"error": str(e)}
+    result["server_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return result
+
+
 @app.post("/admin/reset-sheets-export")
 def admin_reset_sheets_export():
     """Resetuje sheets_exported=FALSE dla wszystkich zamkniętych setupów.
