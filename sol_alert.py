@@ -1330,13 +1330,15 @@ def detect_market_regime(
     last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Zmiana cenowa 4h / 24h / 48h ─────────────────────────────────────────
+    # ── Zmiana cenowa 4h / 24h / 48h / 7d ───────────────────────────────────
     price_4h = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
     price_24h = candles_h1[-24]["close"] if len(candles_h1) >= 24 else candles_h1[0]["close"]
     price_48h = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
-    change_4h = (current_price - price_4h) / price_4h * 100
+    price_7d  = candles_h1[-168]["close"] if len(candles_h1) >= 168 else candles_h1[0]["close"]
+    change_4h  = (current_price - price_4h)  / price_4h  * 100
     change_24h = (current_price - price_24h) / price_24h * 100
     change_48h = (current_price - price_48h) / price_48h * 100
+    change_7d  = (current_price - price_7d)  / price_7d  * 100
 
     # ── Kierunek ostatnich 4 M15 ─────────────────────────────────────────────
     last4 = candles_m15[-4:]
@@ -1451,6 +1453,11 @@ def detect_market_regime(
             trend_dir = "up"
         else:
             trend_dir = "down" if lower_lows > higher_highs else "up"
+
+        # Blokada TREND_UP gdy kontekst 7d jest silnie niedźwiedzi (odbicie w trendzie,
+        # nie nowy trend wzrostowy). Próg -5% = wyraźny bear market w szerszym oknie.
+        if trend_dir == "up" and change_7d < -5.0:
+            trend_dir = "down"
 
         strength = min(10, trend_score + imp_str)
         return {

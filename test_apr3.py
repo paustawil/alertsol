@@ -109,7 +109,7 @@ def detect_regime_old(candles_m15, candles_h1, current_price):
     if impulse_score >= 3:
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
-        return f"IMPULSE_{impulse_dir.upper()}", change_24h, change_48h
+        return f"IMPULSE_{impulse_dir.upper()}", change_24h, change_48h, 0.0
 
     # TREND
     trend_score = 0
@@ -130,9 +130,9 @@ def detect_regime_old(candles_m15, candles_h1, current_price):
             trend_dir = "down" if change_24h < 0 else "up"
         else:
             trend_dir = "down" if lower_lows > higher_highs else "up"
-        return f"TREND_{trend_dir.upper()}", change_24h, change_48h
+        return f"TREND_{trend_dir.upper()}", change_24h, change_48h, 0.0
 
-    return "RANGE", change_24h, change_48h
+    return "RANGE", change_24h, change_48h, 0.0
 
 
 # ── NOWY algorytm detekcji reżimu (z poprawkami) ─────────────────────────────
@@ -146,12 +146,14 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
     last_vol = sum(c["volume"] for c in recent[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    price_4h = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
-    price_24h = candles_h1[-24]["close"] if len(candles_h1) >= 24 else candles_h1[0]["close"]
-    price_48h = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
+    price_4h  = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
+    price_24h = candles_h1[-24]["close"]  if len(candles_h1) >= 24  else candles_h1[0]["close"]
+    price_48h = candles_h1[-48]["close"]  if len(candles_h1) >= 48  else candles_h1[0]["close"]
+    price_7d  = candles_h1[-168]["close"] if len(candles_h1) >= 168 else candles_h1[0]["close"]
     change_4h  = (current_price - price_4h)  / price_4h  * 100
     change_24h = (current_price - price_24h) / price_24h * 100
     change_48h = (current_price - price_48h) / price_48h * 100
+    change_7d  = (current_price - price_7d)  / price_7d  * 100
 
     last4 = candles_m15[-4:]
     bearish = sum(1 for c in last4 if c["close"] < c["open"])
@@ -161,7 +163,7 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
     lower_lows  = sum(1 for i in range(1, len(h1_12)) if h1_12[i]["low"]  < h1_12[i-1]["low"])
     higher_highs= sum(1 for i in range(1, len(h1_12)) if h1_12[i]["high"] > h1_12[i-1]["high"])
 
-    # IMPULSE (bez zmian)
+    # IMPULSE
     impulse_score = 0
     impulse_dir = "none"
     if imp_str >= 2: impulse_score += 1
@@ -174,7 +176,7 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
     if impulse_score >= 3:
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
-        return f"IMPULSE_{impulse_dir.upper()}", change_24h, change_48h
+        return f"IMPULSE_{impulse_dir.upper()}", change_24h, change_48h, change_7d
 
     # TREND
     trend_score = 0
@@ -188,16 +190,13 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
 
     has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
 
-    # NOWOŚĆ: blokada konfliktu 24h vs 48h
     signals_conflict = (
         abs(change_24h) >= 1.5
         and abs(change_48h) >= 1.5
         and change_24h * change_48h < 0
     )
-    conflict_note = ""
     if signals_conflict:
         trend_score -= 2
-        conflict_note = f" [KONFLIKT: 24h={change_24h:+.1f}% vs 48h={change_48h:+.1f}%]"
 
     if trend_score >= 3 and has_price_change:
         if abs(change_48h) >= 3.0:
@@ -206,9 +205,14 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
             trend_dir = "down" if change_24h < 0 else "up"
         else:
             trend_dir = "down" if lower_lows > higher_highs else "up"
-        return f"TREND_{trend_dir.upper()}{conflict_note}", change_24h, change_48h
 
-    return f"RANGE{conflict_note}", change_24h, change_48h
+        # Blokada TREND_UP gdy kontekst 7d jest silnie niedźwiedzi
+        if trend_dir == "up" and change_7d < -5.0:
+            trend_dir = "down"
+
+        return f"TREND_{trend_dir.upper()}", change_24h, change_48h, change_7d
+
+    return f"RANGE", change_24h, change_48h, change_7d
 
 
 # ── find_consolidation STARY vs NOWY ─────────────────────────────────────────
@@ -351,7 +355,8 @@ def main():
     print(hdr)
     print("-" * len(hdr))
 
-    stats = {"old_sl": 0, "old_tp": 0, "old_no": 0, "new_sl": 0, "new_tp": 0, "new_no": 0}
+    stats = {"old_sl": 0, "old_tp": 0, "old_no": 0, "old_pnl": 0.0,
+             "new_sl": 0, "new_tp": 0, "new_no": 0, "new_pnl": 0.0}
 
     for ts in test_hours:
         m15_snap = [c for c in m15_all if c["time"] < ts]
@@ -365,8 +370,8 @@ def main():
         max_dist = price * 0.03
         dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d.%m %H:%M")
 
-        old_regime, c24, c48 = detect_regime_old(m15_snap, h1_snap, price)
-        new_regime, _, _     = detect_regime_new(m15_snap, h1_snap, price)
+        old_regime, c24, c48, _ = detect_regime_old(m15_snap, h1_snap, price)
+        new_regime, _, _, c7d   = detect_regime_new(m15_snap, h1_snap, price)
 
         swing_high = max(c["high"] for c in h1_snap[-12:])
 
@@ -389,26 +394,42 @@ def main():
             if s is None: return f"{'brak':>30}"
             return f"W={s['w']:.2f} SL={s['sl']:.2f} TP1={s['tp1']:.2f} RR={s['rr']:.1f}"
 
+        # P&L w punktach (W→TP1 lub W→SL)
+        def pnl(s, res):
+            if not s: return 0.0
+            if "TP1" in res: return round(s["w"] - s["tp1"], 2)   # short: zysk
+            if "SL"  in res: return round(s["sl"] - s["w"],  2) * -1  # short: strata
+            return 0.0
+
+        old_pnl = pnl(old_setup, old_res)
+        new_pnl = pnl(new_setup, new_res)
+
         # Statystyki
         if old_setup:
-            if "TP1" in old_res: stats["old_tp"] += 1
-            elif "SL"  in old_res: stats["old_sl"] += 1
+            if "TP1" in old_res: stats["old_tp"] += 1; stats["old_pnl"] += old_pnl
+            elif "SL" in old_res: stats["old_sl"] += 1; stats["old_pnl"] += old_pnl
             else:                  stats["old_no"] += 1
         if new_setup:
-            if "TP1" in new_res: stats["new_tp"] += 1
-            elif "SL"  in new_res: stats["new_sl"] += 1
+            if "TP1" in new_res: stats["new_tp"] += 1; stats["new_pnl"] += new_pnl
+            elif "SL" in new_res: stats["new_sl"] += 1; stats["new_pnl"] += new_pnl
             else:                  stats["new_no"] += 1
 
+        pnl_str_old = f"{old_pnl:+.2f}" if old_setup and old_pnl != 0 else ""
+        pnl_str_new = f"{new_pnl:+.2f}" if new_setup and new_pnl != 0 else ""
         regime_changed = " ◄" if old_regime.split()[0] != new_regime.split()[0] else ""
-        print(f"{dt_str}  {price:>7.2f}  {old_regime.split()[0]:>16}  {new_regime.split()[0]:>16}  "
-              f"{fmt(old_setup)}  {old_res:>8}  {fmt(new_setup)}  {new_res:>8}{regime_changed}")
+
+        print(f"{dt_str}  {price:>7.2f}  {c7d:>+5.1f}%7d  {old_regime.split()[0]:>14}  {new_regime.split()[0]:>14}  "
+              f"{fmt(old_setup)}  {old_res:>8} {pnl_str_old:>6}  "
+              f"{fmt(new_setup)}  {new_res:>8} {pnl_str_new:>6}{regime_changed}")
 
     print()
-    print("=" * 80)
-    print(f"STARY: TP1={stats['old_tp']}  SL={stats['old_sl']}  no_entry/open={stats['old_no']}"
-          f"  (setupów: {stats['old_tp']+stats['old_sl']+stats['old_no']})")
-    print(f"NOWY:  TP1={stats['new_tp']}  SL={stats['new_sl']}  no_entry/open={stats['new_no']}"
-          f"  (setupów: {stats['new_tp']+stats['new_sl']+stats['new_no']})")
+    print("=" * 90)
+    n_old = stats['old_tp'] + stats['old_sl'] + stats['old_no']
+    n_new = stats['new_tp'] + stats['new_sl'] + stats['new_no']
+    print(f"STARY: TP1={stats['old_tp']}  SL={stats['old_sl']}  brak={stats['old_no']}  "
+          f"setupów={n_old}  P&L suma={stats['old_pnl']:+.2f} pkt")
+    print(f"NOWY:  TP1={stats['new_tp']}  SL={stats['new_sl']}  brak={stats['new_no']}  "
+          f"setupów={n_new}  P&L suma={stats['new_pnl']:+.2f} pkt")
 
 
 if __name__ == "__main__":
