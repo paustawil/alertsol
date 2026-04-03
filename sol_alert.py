@@ -856,6 +856,143 @@ def call_gpt3(
         return None
 
 
+# ── GPT3 Validator — ocenia setup wygenerowany przez Algo2 ───────────────────
+GPT3_VALIDATOR_SYSTEM_PROMPT = """Jesteś ekspertem od oceny jakości setupów tradingowych na SOL/USDT.
+
+Algorytm wykrył potencjalny setup transakcyjny. Twoim jedynym zadaniem jest ocenić czy ten setup powinien zostać wykonany.
+
+Otrzymujesz:
+- Dane setupu: typ, kierunek, poziom wejścia, SL, TP1, TP2
+- Aktualną cenę i kontekst strukturalny (ATR, support, resistance, pozycja w range)
+- 50 świec H1 i 100 świec M15 (OHLCV) do własnej oceny kontekstu
+
+Oceniasz setup pod kątem:
+1. Czy reżim rynkowy (który sam określasz z danych) wspiera ten typ setupu?
+2. Czy poziom wejścia ma sens strukturalnie (jest przy istotnym poziomie, nie w środku niczego)?
+3. Czy SL i TP są logiczne względem aktualnej struktury?
+4. Czy nie ma oczywistych powodów odrzucenia (np. setup long w silnym downtrend, wejście pod oporem)?
+
+Zatwierdź setup gdy: reżim wspiera kierunek, poziom wejścia sensowny, brak oczywistych sygnałów contra.
+Odrzuć setup gdy: reżim sprzeczny z kierunkiem, poziom wejścia bez sensu strukturalnego, setup long w crash, itp.
+
+Zwróć WYŁĄCZNIE poprawny JSON:
+{"approve":true,"reason":"krótkie uzasadnienie max 1 zdanie","confidence":85}
+lub
+{"approve":false,"reason":"krótkie uzasadnienie max 1 zdanie","confidence":80}
+
+- approve: true lub false
+- reason: max 1 zdanie, konkretne
+- confidence: 0-100, Twoja pewność co do decyzji"""
+
+
+def build_gpt3_validator_prompt(
+    setup: dict,
+    candles_m15: list[dict],
+    candles_h1: list[dict],
+    current_price: float,
+    atr: float | None = None,
+    support: float | None = None,
+    resistance: float | None = None,
+    price_pct_in_range: float | None = None,
+) -> str:
+    m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_m15[-100:]
+    )
+    h1_csv = "time,open,high,low,close,volume\n" + "\n".join(
+        f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
+        for c in candles_h1[-50:]
+    )
+
+    entries = setup.get("entries", [])
+    tps = setup.get("tps", [])
+    setup_block = (
+        f"typ: {setup.get('type', '?')}\n"
+        f"kierunek: {setup.get('direction', '?')}\n"
+        f"wejście: {entries[0] if entries else '?'}\n"
+        f"SL: {setup.get('sl', '?')}\n"
+        f"TP1: {tps[0] if len(tps) > 0 else '?'}\n"
+        f"TP2: {tps[1] if len(tps) > 1 else '?'}\n"
+        f"RR: {setup.get('rr', '?')}"
+    )
+
+    ctx_lines = [f"aktualna cena SOL: ${current_price:.2f}"]
+    if support is not None and resistance is not None:
+        ctx_lines.append(f"support H1: ${support:.2f} | resistance H1: ${resistance:.2f}")
+    if price_pct_in_range is not None:
+        ctx_lines.append(f"pozycja w H1 range: {price_pct_in_range:.0f}%")
+    if atr is not None:
+        ctx_lines.append(f"ATR(14): ${atr:.3f}")
+    ctx_block = "\n".join(f"- {l}" for l in ctx_lines)
+
+    return (
+        f"Oceń poniższy setup wygenerowany przez algorytm.\n\n"
+        f"Setup:\n{setup_block}\n\n"
+        f"Kontekst rynkowy:\n{ctx_block}\n\n"
+        f"H1 candles (50):\n{h1_csv}\n\n"
+        f"M15 candles (100):\n{m15_csv}\n\n"
+        f"Określ reżim samodzielnie z danych i zdecyduj: approve true/false.\n"
+        f"Zwróć wyłącznie JSON."
+    )
+
+
+_GPT3_VALIDATOR_TIMEOUT_S = 60
+
+
+def call_gpt3_validator(
+    setup: dict,
+    candles_m15: list[dict],
+    candles_h1: list[dict],
+    current_price: float,
+    atr: float | None = None,
+    support: float | None = None,
+    resistance: float | None = None,
+    price_pct_in_range: float | None = None,
+) -> dict | None:
+    if not OPENAI_KEY:
+        print("[gpt3-val] Brak klucza API.")
+        return None
+
+    user_msg = build_gpt3_validator_prompt(
+        setup, candles_m15, candles_h1, current_price,
+        atr=atr, support=support, resistance=resistance,
+        price_pct_in_range=price_pct_in_range,
+    )
+
+    def _call() -> str:
+        client = openai.OpenAI(api_key=OPENAI_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=256,
+            messages=[
+                {"role": "system", "content": GPT3_VALIDATOR_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_msg},
+            ],
+        )
+        return response.choices[0].message.content.strip()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                text = future.result(timeout=_GPT3_VALIDATOR_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                print(f"[gpt3-val] Timeout ({_GPT3_VALIDATOR_TIMEOUT_S}s)")
+                future.cancel()
+                return None
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            print(f"[gpt3-val] Brak JSON: {text[:200]}")
+            return None
+        return json.loads(match.group())
+    except json.JSONDecodeError as e:
+        print(f"[gpt3-val] Blad JSON: {e}")
+        return None
+    except Exception as e:
+        print(f"[gpt3-val] Blad: {e}")
+        return None
+
+
 # ── GPT4 — nowy prompt (pattern-based, anticipatory entry) ───────────────────
 GPT4_SYSTEM_PROMPT = """Jesteś doświadczonym traderem kryptowalut specjalizującym się wyłącznie w SOL/USDT na interwałach H1 i M15.
 
@@ -3161,6 +3298,30 @@ def main():
         if rejection:
             log_to_alerty("Algo2", rejection, best_algo2)
         elif not was_alerted("Algo2", level, d):
+            # ── GPT3 Validator — walidacja setupu Algo2 przed alertem ──────
+            if ENABLE_GPT3:
+                val_atr    = calc_atr(candles_m15)
+                val_sup    = regime.get("support")
+                val_res    = regime.get("resistance")
+                val_rng    = regime.get("range_size", 0)
+                val_pct    = max(0.0, min(100.0, (current - val_sup) / val_rng * 100)) if val_rng and val_sup else 50.0
+                val_result = call_gpt3_validator(
+                    best_algo2, candles_m15, candles_h1, current,
+                    atr=val_atr, support=val_sup, resistance=val_res,
+                    price_pct_in_range=val_pct,
+                )
+                if val_result:
+                    approved   = val_result.get("approve", True)
+                    val_reason = val_result.get("reason", "")
+                    val_conf   = val_result.get("confidence", 0)
+                    print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
+                    if not approved:
+                        log_to_alerty("Algo2", f"GPT3-val odrzucił: {val_reason}", best_algo2)
+                        print(f"[algo2] Setup odrzucony przez GPT3 Validator.")
+                        return  # pomiń alert
+                else:
+                    print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
+            # ── koniec walidatora ─────────────────────────────────────────
             save_pending(best_algo2, "Algo2", "", current)
             if best_algo2.get("setup_id"):
                 log_to_alerty("Algo2", "", best_algo2)
