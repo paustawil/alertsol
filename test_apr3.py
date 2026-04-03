@@ -142,10 +142,15 @@ def detect_regime_old(candles_m15, candles_h1, current_price):
     return "RANGE", "none", 0
 
 
-# ── Detekcja reżimu — NOWY (MA20 slope, jak w sol_alert.py) ──────────────────
+# ── Detekcja reżimu — NOWY (stary algo + wygładzone referencje 24h/48h) ───────
 
 def detect_regime_new(candles_m15, candles_h1, current_price):
-    """Zwraca (regime_str, direction, score, ma20_slope)."""
+    """
+    Stary algorytm change_24h/48h, ale zamiast jednej świecy — średnia z 3 świec
+    w okolicy punktu referencyjnego. Eliminuje niestabilność bez zmiany logiki.
+    Zwraca (regime_str, direction, score, change_24h).
+    """
+    trend = h1_trend(candles_h1)
     imp_str = impulse_strength(candles_m15)
 
     recent = candles_m15[-12:]
@@ -154,13 +159,26 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
     price_4h  = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
-    change_4h = (current_price - price_4h) / price_4h * 100
+
+    # Wygładzone referencje — średnia 3 świec wokół punktu 24h / 48h wstecz
+    price_24h = (sum(c["close"] for c in candles_h1[-25:-22]) / 3
+                 if len(candles_h1) >= 25 else candles_h1[0]["close"])
+    price_48h = (sum(c["close"] for c in candles_h1[-49:-46]) / 3
+                 if len(candles_h1) >= 49 else candles_h1[0]["close"])
+
+    change_4h  = (current_price - price_4h)  / price_4h  * 100
+    change_24h = (current_price - price_24h) / price_24h * 100
+    change_48h = (current_price - price_48h) / price_48h * 100
 
     last4 = candles_m15[-4:]
     bearish = sum(1 for c in last4 if c["close"] < c["open"])
     bullish = sum(1 for c in last4 if c["close"] > c["open"])
 
-    # IMPULSE — bez zmian
+    h1_12 = candles_h1[-12:]
+    lower_lows   = sum(1 for i in range(1, len(h1_12)) if h1_12[i]["low"]  < h1_12[i-1]["low"])
+    higher_highs = sum(1 for i in range(1, len(h1_12)) if h1_12[i]["high"] > h1_12[i-1]["high"])
+
+    # IMPULSE
     impulse_score = 0
     impulse_dir = "none"
     if imp_str >= 2: impulse_score += 1
@@ -173,23 +191,30 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
     if impulse_score >= 3:
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
-        score = min(10, impulse_score * 2 + imp_str)
-        return f"IMPULSE_{impulse_dir.upper()}", impulse_dir, score, 0.0
+        return f"IMPULSE_{impulse_dir.upper()}", impulse_dir, min(10, impulse_score * 2 + imp_str), change_24h
 
-    # TREND — slope MA20(H1) + pozycja ceny vs MA20
-    ma20      = sum(c["close"] for c in candles_h1[-20:])   / 20 if len(candles_h1) >= 20 else current_price
-    ma20_prev = sum(c["close"] for c in candles_h1[-25:-5]) / 20 if len(candles_h1) >= 25 else ma20
-    ma5       = sum(c["close"] for c in candles_h1[-5:])    / 5  if len(candles_h1) >= 5  else current_price
-    ma20_slope = (ma20 - ma20_prev) / ma20_prev * 100
+    # TREND
+    trend_score = 0
+    if abs(change_24h) >= 3.0: trend_score += 2
+    elif abs(change_24h) >= 1.5: trend_score += 1
+    if abs(change_48h) >= 5.0: trend_score += 2
+    elif abs(change_48h) >= 3.0: trend_score += 1
+    if lower_lows >= 5: trend_score += 1
+    if higher_highs >= 5: trend_score += 1
+    if trend != "neutral": trend_score += 1
 
-    if ma20_slope < -0.3 and current_price < ma20:
-        score = min(10, imp_str + (2 if ma20_slope < -0.8 else 1) + (1 if ma5 < ma20 else 0))
-        return "TREND_DOWN", "down", score, ma20_slope
-    if ma20_slope > 0.3 and current_price > ma20:
-        score = min(10, imp_str + (2 if ma20_slope > 0.8 else 1) + (1 if ma5 > ma20 else 0))
-        return "TREND_UP", "up", score, ma20_slope
+    has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
 
-    return "RANGE", "none", 0, ma20_slope
+    if trend_score >= 3 and has_price_change:
+        if abs(change_48h) >= 3.0:
+            trend_dir = "down" if change_48h < 0 else "up"
+        elif abs(change_24h) >= 1.5:
+            trend_dir = "down" if change_24h < 0 else "up"
+        else:
+            trend_dir = "down" if lower_lows > higher_highs else "up"
+        return f"TREND_{trend_dir.upper()}", trend_dir, trend_score, change_24h
+
+    return "RANGE", "none", 0, change_24h
 
 
 # ── Generowanie setupów (wszystkie aktywne typy) ──────────────────────────────
@@ -426,7 +451,7 @@ def main():
             return ", ".join(names)[:28].ljust(28)
 
         regime_mark = " ◄" if old_r != new_r else ""
-        print(f"{dt_str}  {price:>7.2f}  {slope:>+6.2f}%  {old_r:>14}  {new_r:>14}  "
+        print(f"{dt_str}  {price:>7.2f}  c24={slope:>+5.1f}%  {old_r:>14}  {new_r:>14}  "
               f"{fmt_setups(old_setups)}  {fmt_setups(new_setups)}{regime_mark}")
 
     # ── Podsumowanie per typ ───────────────────────────────────────────────────
