@@ -1274,12 +1274,13 @@ def admin_test_candles():
                 oldest = candles[0]
                 now_ts = time.time()
                 age_min = (now_ts - newest["time"]) / 60
+                max_age = 90 if interval == "1h" else 30
                 result[interval] = {
                     "oldest": datetime.fromtimestamp(oldest["time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                     "newest": datetime.fromtimestamp(newest["time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                     "newest_age_min": round(age_min, 1),
                     "newest_close": newest["close"],
-                    "fresh": age_min < 30,
+                    "fresh": age_min < max_age,
                 }
             else:
                 result[interval] = {"error": "empty response"}
@@ -2019,6 +2020,23 @@ def admin_run_gpt3_backtest():
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return {"ok": True, "message": "Backtest GPT3 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT3 test' (~30-60 min)."}
+
+
+@app.post("/admin/run-gpt-relaxed-backtest")
+def admin_run_gpt_relaxed_backtest():
+    """Uruchamia backtest GPT-Relaxed (web search) w tle. Wyniki: arkusz 'GPT-Relaxed test'."""
+    import threading
+    import gpt_relaxed_backtest
+
+    def _run():
+        try:
+            gpt_relaxed_backtest.run_backtest()
+        except Exception as e:
+            logging.error(f"[gpt-relaxed-backtest] Błąd: {e}", exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return {"ok": True, "message": "Backtest GPT-Relaxed uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT-Relaxed test' (~60-90 min)."}
 
 
 # ── Uruchomienie ───────────────────────────────────────────────────────────────
