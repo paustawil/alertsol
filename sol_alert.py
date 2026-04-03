@@ -1618,8 +1618,12 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         swing_high = max(swing_high, current_price)
         log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
-        # trend_consolidation_short — konsolidacja przy dnie
-        consol = find_consolidation(candles_h1)
+        # trend_consolidation_short — WYŁĄCZONY (WR za niski podczas recovery)
+        # Wchodzi short gdy cena rośnie przez W → natychmiast SL.
+        # Do przeprojektowania: potrzeba filtra "czy cena jest przy resistance od góry".
+        consol = None
+        if False:  # noqa
+         consol = find_consolidation(candles_h1)
         if consol and current_price < consol["low"] - atr * 0.5:
             # Cena wybiła poniżej konsolidacji — setup już się rozegrał
             log_lines.append(f"  Consolidation: {consol['candles']}h ${consol['low']:.2f}-${consol['high']:.2f} → BROKEN (cena=${current_price:.2f} < dół-0.5ATR)")
