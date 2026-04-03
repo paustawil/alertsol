@@ -1,0 +1,34 @@
+name: GPT-Relaxed Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'Ile godzin wstecz'
+        type: number
+        default: 48
+
+jobs:
+  gpt-relaxed-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zaleznosci
+        run: pip install -r requirements.txt
+
+      - name: Uruchom GPT-Relaxed backtest
+        env:
+          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python gpt_relaxed_backtest.py
