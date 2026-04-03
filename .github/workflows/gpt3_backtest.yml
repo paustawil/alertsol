@@ -1,0 +1,37 @@
+name: GPT3 Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet_suffix:
+        description: 'Sufiks nazwy arkusza (np. "v2" → "GPT3 test v2"). Puste = "GPT3 test"'
+        type: string
+        default: ''
+
+jobs:
+  gpt3-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zaleznosci
+        run: pip install -r requirements.txt
+
+      - name: Uruchom GPT3 backtest
+        env:
+          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          ARGS=""
+          [ -n "${{ inputs.sheet_suffix }}" ] && ARGS="$ARGS --sheet-suffix '${{ inputs.sheet_suffix }}'"
+          eval python gpt3_backtest.py $ARGS

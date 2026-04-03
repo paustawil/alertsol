@@ -6,6 +6,7 @@ Uruchomienie:
     python gpt3_backtest.py
 """
 
+import argparse
 import json
 import math
 import os
@@ -649,7 +650,8 @@ def evaluate_outcome(
 
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
-def get_test_sheet() -> gspread.Worksheet:
+def get_test_sheet(sheet_suffix: str = "") -> gspread.Worksheet:
+    sheet_name = f"GPT3 test {sheet_suffix}".strip() if sheet_suffix else "GPT3 test"
     creds  = Credentials.from_service_account_info(
         json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
         scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -657,16 +659,16 @@ def get_test_sheet() -> gspread.Worksheet:
     client = gspread.authorize(creds)
     wb     = client.open_by_key(SHEET_ID)
     try:
-        sh = wb.worksheet("GPT3 test")
+        sh = wb.worksheet(sheet_name)
         sh.clear()
     except gspread.WorksheetNotFound:
-        sh = wb.add_worksheet("GPT3 test", rows=200, cols=len(SHEET_HEADER) + 2)
+        sh = wb.add_worksheet(sheet_name, rows=200, cols=len(SHEET_HEADER) + 2)
     sh.append_row(SHEET_HEADER)
     return sh
 
 
 # ── Główna logika backtestu ───────────────────────────────────────────────────
-def run_backtest() -> None:
+def run_backtest(sheet_suffix: str = "") -> None:
     print("=== GPT3 Backtest — start ===")
 
     # ── 1. Pobierz dane historyczne ───────────────────────────────────────────
@@ -690,7 +692,7 @@ def run_backtest() -> None:
 
     # ── 3. Przygotuj arkusz ───────────────────────────────────────────────────
     print("Łączenie z Google Sheets...")
-    sheet = get_test_sheet()
+    sheet = get_test_sheet(sheet_suffix)
     print("Gotowe.")
 
     # ── 4. Pętla testowa ──────────────────────────────────────────────────────
@@ -766,8 +768,9 @@ def run_backtest() -> None:
             delta_tp1_val,
         ])
 
+    sheet_name = f"GPT3 test {sheet_suffix}".strip() if sheet_suffix else "GPT3 test"
     print("\n=== Backtest zakończony ===")
-    print(f"Wyniki zapisane w arkuszu 'GPT3 test' (SHEET_ID={SHEET_ID})")
+    print(f"Wyniki zapisane w arkuszu '{sheet_name}' (SHEET_ID={SHEET_ID})")
 
 
 def _ts_fmt(ts: int) -> str:
@@ -775,4 +778,7 @@ def _ts_fmt(ts: int) -> str:
 
 
 if __name__ == "__main__":
-    run_backtest()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sheet-suffix", default="", help='Sufiks nazwy arkusza (np. "v2" → "GPT3 test v2")')
+    args = parser.parse_args()
+    run_backtest(sheet_suffix=args.sheet_suffix)
