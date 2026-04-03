@@ -1428,6 +1428,17 @@ def detect_market_regime(
     # TREND wymaga zmiany cenowej — sama struktura nie wystarczy
     has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
 
+    # Konflikt sygnałów 24h vs 48h — jeśli wskazują przeciwne kierunki i oba
+    # są istotne (>= 1.5%), rynek jest w fazie odreagowania, nie w trendzie.
+    # Podnosimy próg żeby nie deklarować trendu na podstawie sprzecznych danych.
+    signals_conflict = (
+        abs(change_24h) >= 1.5
+        and abs(change_48h) >= 1.5
+        and change_24h * change_48h < 0  # przeciwne znaki
+    )
+    if signals_conflict:
+        trend_score -= 2
+
     if trend_score >= 3 and has_price_change:
         # Kierunek: 48h ma priorytet nad 24h gdy się kłócą
         if abs(change_48h) >= 3.0:
@@ -1584,14 +1595,18 @@ def find_swing_points(candles_h1: list[dict], n: int = 12):
 
 
 def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles: int = 10):
-    """Szuka konsolidacji — wąski zakres w ostatnich świecach H1."""
-    for n in range(min_candles, min(max_candles + 1, len(candles_h1))):
+    """Szuka konsolidacji — wąski zakres w ostatnich świecach H1.
+    Iteruje od najszerszego okna do najwęższego, żeby uchwycić faktyczne granice
+    konsolidacji zamiast mini-konsolidacji wewnątrz szerszego range."""
+    atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
+    if atr <= 0:
+        return None
+    for n in range(min(max_candles, len(candles_h1) - 1), min_candles - 1, -1):
         recent = candles_h1[-n:]
         hi = max(c["high"] for c in recent)
         lo = min(c["low"] for c in recent)
         rng = hi - lo
-        atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
-        if atr > 0 and rng < atr * 2.5:
+        if rng < atr * 2.5:
             return {"high": hi, "low": lo, "range": rng, "candles": n}
     return None
 
@@ -1649,6 +1664,11 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         if consol and current_price < consol["low"] - atr * 0.5:
             # Cena wybiła poniżej konsolidacji — setup już się rozegrał
             log_lines.append(f"  Consolidation: {consol['candles']}h ${consol['low']:.2f}-${consol['high']:.2f} → BROKEN (cena=${current_price:.2f} < dół-0.5ATR)")
+            consol = None
+        elif consol and consol["high"] < swing_high * 0.97:
+            # Konsolidacja nie sięga blisko swing high — jest w środku range,
+            # nie przy resistance. W wylądowałby pośrodku, nie przy górnej granicy.
+            log_lines.append(f"  Consolidation: {consol['candles']}h ${consol['low']:.2f}-${consol['high']:.2f} → ODRZUCONA (high {consol['high']:.2f} < 97% swing_high {swing_high:.2f})")
             consol = None
         elif consol:
             log_lines.append(f"  Consolidation: {consol['candles']}h ${consol['low']:.2f}-${consol['high']:.2f} range=${consol['range']:.2f}")
