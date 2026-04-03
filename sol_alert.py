@@ -41,7 +41,7 @@ MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzuco
 ENABLE_CLAUDE        = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT           = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT3
-ENABLE_GPT3          = False  # aktywować po weryfikacji backtestem
+ENABLE_GPT3          = True   # zweryfikowany backtestem Mar 15-29 (+$19.76 vs Algo2 alone)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
 
 
