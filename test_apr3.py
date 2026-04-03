@@ -375,18 +375,9 @@ def main():
 
         swing_high = max(c["high"] for c in h1_snap[-12:])
 
-        # Stary setup (stary reżim + stara konsolidacja)
-        old_consol = find_consolidation_old(h1_snap)
-        old_setup  = None
-        if "DOWN" in old_regime.split()[0]:
-            old_setup = make_consol_short_old(old_consol, h1_snap, price, max_dist)
-        old_res = evaluate(old_setup, future)
-
-        # Nowy setup (nowy reżim + nowa konsolidacja + warunek swing_high)
-        new_consol = find_consolidation_new(h1_snap)
-        new_setup  = None
-        if "DOWN" in new_regime.split()[0]:
-            new_setup = make_consol_short(new_consol, h1_snap, swing_high, price, max_dist)
+        # trend_consolidation_short wyłączony — patrz sol_alert.py
+        old_setup = None
+        new_setup = None
         new_res = evaluate(new_setup, future)
 
         # Formatowanie setupu
