@@ -1,0 +1,34 @@
+name: Test Regime (stary vs nowy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dt_from:
+        description: 'Od kiedy UTC (np. "2026-04-01 00:00")'
+        type: string
+        default: '2026-04-01 00:00'
+      dt_to:
+        description: 'Do kiedy UTC (np. "2026-04-04 00:00")'
+        type: string
+        default: '2026-04-04 00:00'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zaleznosci
+        run: pip install requests
+
+      - name: Uruchom test
+        run: |
+          python test_apr3.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}'
