@@ -614,7 +614,7 @@ Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
 
 
-# ── GPT3 — nowy model (system/user split, regime-aware) ──────────────────────
+# ── GPT3 — nowy model (system/user split, samodzielna detekcja reżimu) ───────
 GPT3_SYSTEM_PROMPT = """Jesteś doświadczonym traderem kryptowalut specjalizującym się wyłącznie w SOL/USDT na interwałach H1 i M15.
 
 Twoim zadaniem jest wykrywanie sensownych setupów transakcyjnych i zwracanie wyniku w ściśle określonym formacie JSON.
@@ -625,27 +625,25 @@ Jeżeli istnieje choć jeden logiczny setup o jakości minimum 10/15, masz go ws
 
 Otrzymujesz:
 - aktualna cena SOL i jej pozycja w bieżącym H1 range (0% = support, 100% = resistance)
-- support i resistance H1 (z ostatnich 32 świec H1)
+- support i resistance H1 (obliczone z ostatnich 32 świec H1)
 - ATR (14-period) — bieżąca zmienność
 - volume_ratio — stosunek ostatnich 2 świec M15 do średniego wolumenu z 10 świec
-- regime_hint — klasyfikacja rynku przez algo (wskazówka, możesz ją potwierdzić lub nadpisać)
 - 100 świec M15 i 50 świec H1 (OHLCV)
 - sentyment: opcjonalny (BTC/ETH/SOL + Fear & Greed)
 
+Sam określasz reżim rynkowy na podstawie dostarczonych świec. Nie otrzymujesz żadnej klasyfikacji z zewnątrz.
 Nie zakładaj żadnych danych spoza wejścia. Nie odwołuj się do internetu.
 
-## Reżimy rynkowe
+## Reżimy rynkowe — Twoja klasyfikacja
 
-Algo klasyfikuje rynek jako jeden z:
-- IMPULSE_UP / IMPULSE_DOWN — gwałtowny ruch trwający 2-6h (impulse_strength ≥ 2, vol_ratio ≥ 1.5, zmiana 4h ≥ 1.5%)
+Określ reżim samodzielnie na podstawie świec H1 i M15:
+- IMPULSE_UP / IMPULSE_DOWN — gwałtowny ruch trwający 2-6h: duże świece kierunkowe, wyraźnie wyższy wolumen, zmiana ceny ≥ 1.5% w ciągu ostatnich 4-6h
   → Priorytet: setupy Z kierunkiem impulsu, nie przeciwko
-- TREND_UP / TREND_DOWN — kierunkowy ruch trwający 24-48h (zmiana 24h ≥ 1.5% lub 48h ≥ 3.0%, struktura HH/HL lub LH/LL)
+- TREND_UP / TREND_DOWN — kierunkowy ruch trwający 24-48h: struktura HH/HL lub LH/LL na H1, zmiana ceny ≥ 1.5% w ciągu 24h lub ≥ 3% w 48h
   → Priorytet: pullbacki z trendem, konsolidacje jako pauza przed kontynuacją
-- RANGE — brak kierunku
+  → UWAGA: Krótki lokalny odbić po dużym spadku to NIE jest TREND_UP — sprawdź ostatnie 24-48h świec H1
+- RANGE — brak kierunku: brak struktury HH/HL lub LH/LL, cena oscyluje między poziomami
   → Priorytet: long z supportu, short z resistance
-
-Otrzymujesz regime_hint jako wskazówkę. Masz prawo go nadpisać jeśli widzisz w danych wyraźną sprzeczność.
-Jeśli nadpisujesz, zwróć "regime_override_reason" z krótkim uzasadnieniem.
 
 ## Dozwolone typy setupów
 
@@ -704,7 +702,7 @@ Wynik ≥ 10/15 → send_alert = true.
 
 ## Zasady decyzyjne
 
-1. Zweryfikuj regime_hint na podstawie własnej analizy danych — potwierdź lub nadpisz
+1. Określ reżim samodzielnie z danych H1 i M15 — zapisz go w regime_confirmed
 2. Oceń kontekst H1: trend, wsparcia/opory, pozycja w range
 3. Oceń kontekst M15: bieżąca struktura, ostatni impuls, korekta/kontynuacja
 4. Wybierz maksymalnie 1 najlepszy setup (najwyższy score, przy remisie — najlepsze RR)
@@ -725,19 +723,18 @@ Zasady wykonawcze:
 Masz zwrócić WYŁĄCZNIE poprawny JSON. Bez markdownu. Bez bloków ```json.
 
 ### Gdy setup istnieje:
-{"send_alert":true,"regime_confirmed":"TREND_UP","regime_override_reason":null,"setup_type":"trend_consolidation_long","bias":"long","bias_proc":72,"tf_aligned":true,"sentyment":"BTC: $83k | ETH: $1.9k | F&G: 45 (Neutral)","analiza":"opis analizy H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie H1 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"opis akcji"}
+{"send_alert":true,"regime_confirmed":"TREND_UP","setup_type":"trend_consolidation_long","bias":"long","bias_proc":72,"tf_aligned":true,"sentyment":"BTC: $83k | ETH: $1.9k | F&G: 45 (Neutral)","analiza":"opis analizy H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie H1 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"opis akcji"}
 
 ### Gdy setup nie istnieje:
-{"send_alert":false,"regime_confirmed":"RANGE","regime_override_reason":null,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"...","analiza":"...","akcja":"..."}
+{"send_alert":false,"regime_confirmed":"RANGE","bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"...","analiza":"...","akcja":"..."}
 
 ## Ograniczenia pól
 
 - bias: "long", "short" lub "neutral"
-- regime_confirmed: jeden z: "IMPULSE_UP", "IMPULSE_DOWN", "TREND_UP", "TREND_DOWN", "RANGE"
-- regime_override_reason: null jeśli potwierdzasz hint, krótki string jeśli nadpisujesz
+- regime_confirmed: jeden z: "IMPULSE_UP", "IMPULSE_DOWN", "TREND_UP", "TREND_DOWN", "RANGE" — Twoja własna ocena
 - setup_type: tylko gdy send_alert = true, jeden z dozwolonych typów powyżej
 - wejscia, tp1, tp2, sl, sl_after_tp1, rr, setup_type: tylko gdy send_alert = true
-- jeśli send_alert = false: tylko send_alert, regime_confirmed, regime_override_reason, bias, bias_proc, tf_aligned, sentyment, analiza, akcja
+- jeśli send_alert = false: tylko send_alert, regime_confirmed, bias, bias_proc, tf_aligned, sentyment, analiza, akcja
 - sentyment: krótkie podsumowanie, jeśli brak danych wpisz "brak danych"
 - analiza i akcja: konkretne i praktyczne, bez ogólników"""
 
@@ -776,19 +773,6 @@ def build_gpt3_user_prompt(
         ctx_lines.append(f"volume_ratio (2M15/avg10): {volume_ratio:.2f}")
     ctx_lines.append(f"sentyment: {sentiment_line}")
 
-    # Regime hint
-    if regime_hint:
-        r = regime_hint
-        regime_str = (
-            f"regime_hint: {r.get('regime', '?')} "
-            f"(score={r.get('score', 0)}, direction={r.get('direction', '?')}, "
-            f"24h={r.get('change_24h', 0):+.1f}%, 48h={r.get('change_48h', 0):+.1f}%, "
-            f"vol_ratio={r.get('vol_ratio', 0):.2f})"
-        )
-        ctx_lines.append(regime_str)
-    else:
-        ctx_lines.append("regime_hint: brak (ustal samodzielnie)")
-
     ctx_block = "\n".join(f"- {l}" for l in ctx_lines)
 
     return (
@@ -799,7 +783,7 @@ def build_gpt3_user_prompt(
         f"H1 candles (50):\n{h1_csv}\n\n"
         f"M15 candles (100):\n{m15_csv}\n\n"
         "Wymagania:\n"
-        "- zweryfikuj regime_hint lub nadpisz z uzasadnieniem w regime_override_reason\n"
+        "- określ reżim rynkowy samodzielnie z danych H1 i M15, zapisz w regime_confirmed\n"
         "- oceń kontekst H1 i M15\n"
         "- wybierz 1 najlepszy setup lub brak setupu\n"
         "- setup < 10/15 → send_alert = false\n"
