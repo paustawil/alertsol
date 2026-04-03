@@ -1102,7 +1102,8 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
         print(f"[fetch] {granularity} {len(data)} candles: {oldest_ts} → {newest_ts} UTC | now={now_utc} | endpoint=candles")
     else:
         print(f"[fetch] {granularity} EMPTY response | endTime={end_time_ms} | raw={str(raw)[:200]}")
-    # Bitget zwraca [ts_ms, open, high, low, close, baseVol, quoteVol], newest first
+    # /candles zwraca oldest-first, /history-candles zwracał newest-first
+    # sort() zapewnia zawsze oldest-first niezależnie od endpointu
     candles = [
         {
             "time":   int(d[0]) // 1000,
@@ -1114,7 +1115,7 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
         }
         for d in data
     ]
-    candles.reverse()  # oldest first (jak CryptoCompare)
+    candles.sort(key=lambda c: c["time"])  # oldest first
     return candles
 
 
