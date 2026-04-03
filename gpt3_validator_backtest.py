@@ -552,7 +552,9 @@ def call_validator(setup, candles_m15, candles_h1, current_price,
 
 def make_stats():
     return {
-        "setups": 0, "entries": 0, "wins": 0, "losses": 0, "pnl": 0.0,
+        "setups": 0, "entries": 0, "wins": 0, "losses": 0,
+        "pnl_tp1": 0.0,      # TP1 alone (zamkniecie calej pozycji na TP1)
+        "pnl_combined": 0.0, # TP1+TP2 combined (polowa na TP1, polowa na TP2)
         "by_type": {},
         "results": {"TP1+TP2": 0, "TP1+BE": 0, "SL": 0, "no_entry": 0, "open": 0},
     }
@@ -562,8 +564,24 @@ def record_outcome(stats, setup_type, outcome):
     stats["setups"] += 1
     wynik = outcome["wynik"]
     stats["results"][wynik] = stats["results"].get(wynik, 0) + 1
-    pnl = outcome["pnl_tp1"]
-    stats["pnl"] += pnl
+
+    pnl_tp1 = outcome["pnl_tp1"]   # wynik gdyby zamknac na TP1 (lub SL)
+    pnl_tp2 = outcome["pnl_tp2"]   # dla TP1+TP2: dystans do TP2; dla SL: tez ujemny
+
+    # TP1 alone: zamkniecie pelnej pozycji na TP1
+    stats["pnl_tp1"] += pnl_tp1
+
+    # TP1+TP2 combined: polowa pozycji na TP1, polowa na TP2
+    if wynik == "TP1+TP2":
+        combined = (pnl_tp1 + pnl_tp2) / 2
+    elif wynik == "TP1+BE":
+        combined = pnl_tp1 / 2  # polowa na TP1, polowa na BE (0)
+    elif wynik == "SL":
+        combined = pnl_tp1      # pelna strata (pnl_tp1 jest ujemny)
+    else:
+        combined = 0.0
+    stats["pnl_combined"] += combined
+
     if wynik != "no_entry":
         stats["entries"] += 1
     if wynik in ("TP1+TP2", "TP1+BE"):
@@ -572,9 +590,10 @@ def record_outcome(stats, setup_type, outcome):
         stats["losses"] += 1
     t = stats["by_type"]
     if setup_type not in t:
-        t[setup_type] = {"count": 0, "wins": 0, "losses": 0, "pnl": 0.0}
+        t[setup_type] = {"count": 0, "wins": 0, "losses": 0, "pnl_tp1": 0.0, "pnl_combined": 0.0}
     t[setup_type]["count"] += 1
-    t[setup_type]["pnl"] += pnl
+    t[setup_type]["pnl_tp1"] += pnl_tp1
+    t[setup_type]["pnl_combined"] += combined
     if wynik in ("TP1+TP2", "TP1+BE"):
         t[setup_type]["wins"] += 1
     elif wynik == "SL":
@@ -594,14 +613,16 @@ def print_stats(label, stats):
     print(f"  Wins (TP1+TP2/BE)  : {wins}")
     print(f"  Losses (SL)        : {losses}")
     print(f"  Win rate           : {wins}/{total_decided} = {wr:.0f}%")
-    print(f"  PnL suma (raw $)   : ${stats['pnl']:+.2f}")
+    print(f"  PnL (TP1 alone)    : ${stats['pnl_tp1']:+.2f}")
+    print(f"  PnL (TP1+TP2 comb) : ${stats['pnl_combined']:+.2f}")
     print(f"  Wyniki             : {stats['results']}")
     if stats["by_type"]:
         print(f"\n  Per setup type:")
         for t, v in sorted(stats["by_type"].items()):
             twr = v["wins"] / (v["wins"] + v["losses"]) * 100 if (v["wins"] + v["losses"]) > 0 else 0
-            avg = v["pnl"] / v["count"] if v["count"] > 0 else 0
-            print(f"    {t:<34} count={v['count']:>3}  W={v['wins']}  L={v['losses']}  WR={twr:.0f}%  PnL=${v['pnl']:+.2f}  avg=${avg:+.2f}")
+            avg1 = v["pnl_tp1"] / v["count"] if v["count"] > 0 else 0
+            avg2 = v["pnl_combined"] / v["count"] if v["count"] > 0 else 0
+            print(f"    {t:<34} count={v['count']:>3}  W={v['wins']}  L={v['losses']}  WR={twr:.0f}%  TP1=${v['pnl_tp1']:+.2f}  Comb=${v['pnl_combined']:+.2f}  avg1=${avg1:+.2f}  avg2=${avg2:+.2f}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -726,17 +747,19 @@ def main():
     g_wr = gpt3_stats["wins"] / (gpt3_stats["wins"] + gpt3_stats["losses"]) * 100 \
         if (gpt3_stats["wins"] + gpt3_stats["losses"]) > 0 else 0
     delta_wr  = g_wr - a_wr
-    delta_pnl = gpt3_stats["pnl"] - algo2_stats["pnl"]
+    delta_pnl_tp1  = gpt3_stats["pnl_tp1"]      - algo2_stats["pnl_tp1"]
+    delta_pnl_comb = gpt3_stats["pnl_combined"] - algo2_stats["pnl_combined"]
 
     print(f"\n{'='*70}")
     print(f"POROWNANIE ALGO2 vs ALGO2+GPT3")
     print(f"{'='*70}")
-    print(f"  {'Metryka':<22} {'Algo2 alone':>14} {'Algo2+GPT3':>14} {'Delta':>10}")
-    print(f"  {'-'*60}")
-    print(f"  {'Setupy':<22} {algo2_stats['setups']:>14} {gpt3_stats['setups']:>14} {gpt3_stats['setups']-algo2_stats['setups']:>+10}")
-    print(f"  {'Wejscia':<22} {algo2_stats['entries']:>14} {gpt3_stats['entries']:>14} {gpt3_stats['entries']-algo2_stats['entries']:>+10}")
-    print(f"  {'Win rate':<22} {a_wr:>13.0f}% {g_wr:>13.0f}% {delta_wr:>+9.0f}%")
-    print(f"  {'PnL (raw $)':<22} ${algo2_stats['pnl']:>+12.2f} ${gpt3_stats['pnl']:>+12.2f} ${delta_pnl:>+9.2f}")
+    print(f"  {'Metryka':<26} {'Algo2 alone':>14} {'Algo2+GPT3':>14} {'Delta':>10}")
+    print(f"  {'-'*64}")
+    print(f"  {'Setupy':<26} {algo2_stats['setups']:>14} {gpt3_stats['setups']:>14} {gpt3_stats['setups']-algo2_stats['setups']:>+10}")
+    print(f"  {'Wejscia':<26} {algo2_stats['entries']:>14} {gpt3_stats['entries']:>14} {gpt3_stats['entries']-algo2_stats['entries']:>+10}")
+    print(f"  {'Win rate':<26} {a_wr:>13.0f}% {g_wr:>13.0f}% {delta_wr:>+9.0f}%")
+    print(f"  {'PnL TP1 alone ($)':<26} ${algo2_stats['pnl_tp1']:>+12.2f} ${gpt3_stats['pnl_tp1']:>+12.2f} ${delta_pnl_tp1:>+9.2f}")
+    print(f"  {'PnL TP1+TP2 combined ($)':<26} ${algo2_stats['pnl_combined']:>+12.2f} ${gpt3_stats['pnl_combined']:>+12.2f} ${delta_pnl_comb:>+9.2f}")
 
 
 if __name__ == "__main__":
