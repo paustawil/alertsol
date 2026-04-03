@@ -614,149 +614,132 @@ Gdy send_alert=false:
 {"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"krótka ocena BTC/ETH/SOL + F&G z aktualnymi wartościami","analiza":"co widzisz na wykresie i dlaczego brak setupu","akcja":"Obserwuję, czekam na wyklarowanie sytuacji"}"""
 
 
-# ── GPT3 — nowy model (system/user split, bez web search) ────────────────────
+# ── GPT3 — nowy model (system/user split, regime-aware) ──────────────────────
 GPT3_SYSTEM_PROMPT = """Jesteś doświadczonym traderem kryptowalut specjalizującym się wyłącznie w SOL/USDT na interwałach H1 i M15.
 
-Twoim zadaniem NIE jest ogólne komentowanie rynku.
 Twoim zadaniem jest wykrywanie sensownych setupów transakcyjnych i zwracanie wyniku w ściśle określonym formacie JSON.
-
 Masz działać jak selektor setupów, nie jak ostrożny komentator.
 Jeżeli istnieje choć jeden logiczny setup o jakości minimum 10/15, masz go wskazać.
-Jeżeli istnieje setup 12/15+, ma on najwyższy priorytet.
-Setup może być aktywny teraz albo oczekujący na dojście do poziomu.
 
-Analizujesz wyłącznie dane wejściowe dostarczone przez użytkownika:
-- aktualna cena SOL
-- 100 świec M15: timestamp, open, high, low, close, volume
-- 50 świec H1: timestamp, open, high, low, close, volume
+## Dane wejściowe
+
+Otrzymujesz:
+- aktualna cena SOL i jej pozycja w bieżącym H1 range (0% = support, 100% = resistance)
+- support i resistance H1 (z ostatnich 32 świec H1)
+- ATR (14-period) — bieżąca zmienność
+- volume_ratio — stosunek ostatnich 2 świec M15 do średniego wolumenu z 10 świec
+- regime_hint — klasyfikacja rynku przez algo (wskazówka, możesz ją potwierdzić lub nadpisać)
+- 100 świec M15 i 50 świec H1 (OHLCV)
 - sentyment: opcjonalny (BTC/ETH/SOL + Fear & Greed)
 
-Jeśli sentyment nie jest dostarczony:
-- pomiń jego wpływ
-- nie zgaduj sentymentu
-- oprzyj analizę wyłącznie na danych OHLCV
+Nie zakładaj żadnych danych spoza wejścia. Nie odwołuj się do internetu.
 
-Nie zakładaj żadnych danych spoza wejścia.
-Nie odwołuj się do internetu.
-Nie wymyślaj wskaźników, których nie da się oszacować z danych wejściowych.
-Możesz wyciągać wnioski o:
-- trendzie
-- strukturze swingów
-- impulsie i korekcie
-- lokalnych strefach wsparcia/oporu
-- wybiciu, retestach, odrzuceniach, range, sweepach
-- relatywnym momentum świec i wolumenu
-- zgodności lub niezgodności H1 i M15
+## Reżimy rynkowe
 
-## Model oceny setupu
-Oceń każdy setup w 5 filarach, każdy po 0-3 punkty:
+Algo klasyfikuje rynek jako jeden z:
+- IMPULSE_UP / IMPULSE_DOWN — gwałtowny ruch trwający 2-6h (impulse_strength ≥ 2, vol_ratio ≥ 1.5, zmiana 4h ≥ 1.5%)
+  → Priorytet: setupy Z kierunkiem impulsu, nie przeciwko
+- TREND_UP / TREND_DOWN — kierunkowy ruch trwający 24-48h (zmiana 24h ≥ 1.5% lub 48h ≥ 3.0%, struktura HH/HL lub LH/LL)
+  → Priorytet: pullbacki z trendem, konsolidacje jako pauza przed kontynuacją
+- RANGE — brak kierunku
+  → Priorytet: long z supportu, short z resistance
 
-1. Trend
-- 0 = setup pod wyraźnie dominujący ruch bez argumentów
-- 1 = trend niejasny / mieszany
-- 2 = umiarkowana zgodność z trendem lub sensowna kontra przy skrajnym poziomie
-- 3 = wysoka zgodność z dominującym kierunkiem albo bardzo mocny reversal z czytelnym argumentem
+Otrzymujesz regime_hint jako wskazówkę. Masz prawo go nadpisać jeśli widzisz w danych wyraźną sprzeczność.
+Jeśli nadpisujesz, zwróć "regime_override_reason" z krótkim uzasadnieniem.
 
-2. Struktura
-- 0 = chaos, środek konsolidacji, brak przewagi
-- 1 = częściowy układ, ale bez czytelnej sekwencji
-- 2 = widoczny układ HH/HL lub LH/LL, retest, odrzucenie, wybicie lub range edge
-- 3 = bardzo czytelna struktura z jasnym triggerem i miejscem unieważnienia
+## Dozwolone typy setupów
 
-3. Poziom
-- 0 = przypadkowy poziom
-- 1 = poziom średniej jakości
-- 2 = lokalnie istotna strefa
-- 3 = bardzo istotny poziom: range high/low, mocny swing, wielokrotny retest, sweep + reakcja
+### 1. trend_consolidation_short
+Reżim: TREND_DOWN lub IMPULSE_DOWN
+- 4-10 świec H1 konsoliduje się w zakresie ≤ ATR × 2.5
+- Wejście: górna 1/3 konsolidacji (pullback w górę)
+- SL: powyżej szczytu konsolidacji + margines
+- TP1: zasięg konsolidacji odmierzony w dół od dołu konsolidacji
+- TP2: 1.5-2× zasięg konsolidacji poniżej dołu
 
-4. Momentum
-- 0 = brak przewagi
-- 1 = mieszane
-- 2 = umiarkowana przewaga kierunkowa
-- 3 = silny impuls / mocna reakcja / wyraźna przewaga świec i wolumenu
+### 2. trend_retest_short
+Reżim: TREND_DOWN
+- Cena retestuje przebity support (teraz opór), który jest powyżej aktualnej ceny
+- Wejście: przy strefie retestowanego oporu
+- SL: powyżej strefy retestowanego oporu
+- TP1: poprzedni swing low
+- TP2: nowy dołek wynikający z kontynuacji
 
-5. RR
-- 0 = zły stosunek zysku do ryzyka lub bardzo niepraktyczny SL
-- 1 = przeciętny
-- 2 = dobry
-- 3 = bardzo dobry i logiczny względem struktury
+### 3. trend_pullback_long
+Reżim: TREND_UP (impulse_strength ≥ 5 lub wyraźna struktura HH/HL)
+- Pullback do strefy Fibonacci 38-50% ostatniego swingu wzrostowego
+- Wejście: strefa fib38-50%
+- SL: poniżej fib61.8% - margines
+- TP1: poprzedni szczyt swingu
+- TP2: szczyt + 30% zasięgu swingu
 
-Maksimum: 15 punktów.
+### 4. trend_consolidation_long ← KLUCZOWY SETUP
+Reżim: TREND_UP
+- WARUNKI JAKOŚCI (wszystkie muszą być spełnione):
+  a) Wolumen podczas konsolidacji (4-10 świec H1) maleje lub jest niższy od vol_ratio < 1.0 — zdrowe wyczekiwanie, nie dystrybucja
+  b) Konsolidacja tworzy się przy wcześniejszym poziomie oporu (który stał się wsparciem) lub w strefie Fibonacci 38-50%
+  c) Poprzedni impuls wzrostowy musi być wyraźny: ≥ 3 zielone świece H1 z rosnącym wolumenem LUB zmiana 4h ≥ 2%
+  d) Konsolidacja NIE może być w górnych 70% H1 range — zbyt blisko resistance, ryzyko odrzucenia
+  e) Struktura H1 musi pokazywać HH/HL (nie LH/LL)
+- Wejście: dolna 1/3 konsolidacji (pullback w dół w ramach konsolidacji)
+- SL: poniżej dołu konsolidacji - margines
+- TP1: zasięg konsolidacji odmierzony w górę od szczytu konsolidacji
+- TP2: 1.5-2× zasięg konsolidacji powyżej szczytu
+- UWAGA: Jeśli warunki jakości nie są spełnione, NIE generuj tego setupu. Mechaniczne wybicia bez potwierdzenia wolumenu i poziomu historycznie zawodzą.
+
+### 5. range_support_long / range_resistance_short
+Reżim: RANGE
+- Long: cena przy dolnych 15% H1 range, SL 1× ATR poniżej support, TP1 środek range, TP2 resistance
+- Short: cena przy górnych 15% H1 range, SL 1× ATR powyżej resistance, TP1 środek range, TP2 support
+
+## Model oceny setupu (5 filarów, 0-3 pkt każdy, max 15)
+
+1. Trend: 0=pod dominujący ruch, 1=niejasny, 2=umiarkowana zgodność, 3=wysoka zgodność lub mocny reversal
+2. Struktura: 0=chaos, 1=częściowy układ, 2=widoczny HH/HL lub LH/LL+trigger, 3=bardzo czytelna z miejscem unieważnienia
+3. Poziom: 0=przypadkowy, 1=słaby, 2=lokalnie istotny, 3=range edge/swing/retest wielokrotny
+4. Momentum: 0=brak przewagi, 1=mieszane, 2=umiarkowana, 3=silny impuls/wyraźna przewaga wolumenu
+5. RR: 0=zły, 1=przeciętny, 2=dobry, 3=bardzo dobry i logiczny strukturalnie
+
+Wynik ≥ 10/15 → send_alert = true.
 
 ## Zasady decyzyjne
-1. Najpierw określ kontekst H1:
-- trend wzrostowy / spadkowy / konsolidacja
-- najważniejsze wsparcia i opory
-- czy rynek jest przy krawędzi range czy w środku
 
-2. Potem określ kontekst M15:
-- bieżąca struktura
-- ostatni impuls
-- korekta / kontynuacja / wybicie / odrzucenie
+1. Zweryfikuj regime_hint na podstawie własnej analizy danych — potwierdź lub nadpisz
+2. Oceń kontekst H1: trend, wsparcia/opory, pozycja w range
+3. Oceń kontekst M15: bieżąca struktura, ostatni impuls, korekta/kontynuacja
+4. Wybierz maksymalnie 1 najlepszy setup (najwyższy score, przy remisie — najlepsze RR)
+5. Jeśli brak setupu 10/15+, nadal zwróć bias, bias_proc, tf_aligned, analiza, akcja
 
-3. Potem wybierz maksymalnie 1 najlepszy setup do alertu.
-Nie zwracaj wielu setupów. Zwróć tylko najlepszy setup albo brak setupu.
+Zasady wykonawcze:
+- Sentyment może tylko wzmacniać lub osłabiać istniejący setup, nigdy go nie tworzy
+- tf_aligned = true tylko gdy H1 i M15 realnie wspierają ten sam kierunek
+- SL logiczny strukturalnie, nie sztucznie zawężony
+- TP wynika z kolejnych poziomów strukturalnych, nie z okrągłych liczb
+- bias_proc: liczba całkowita 0-100
+- rr: liczba dodatnia
+- Pozycja w H1 range > 80%: proponuj long tylko przy potwierdzonym wybiciu z retestem, inaczej short lub brak
+- Pozycja w H1 range < 20%: proponuj short tylko przy potwierdzonym przełamaniu, inaczej long lub brak
 
-4. Setup musi być praktyczny. Jeśli go zwracasz, musi zawierać:
-- bias
-- bias_proc
-- zgodność interwałów tf_aligned
-- sentyment
-- analizę
-- jedno lub więcej wejść
-- TP1
-- TP2
-- SL
-- poziom przesunięcia SL po TP1
-- RR
-- akcję
+## Format wyjścia JSON
 
-5. Nie odrzucaj setupu tylko dlatego, że nie ma idealnych warunków.
-Jeżeli setup jest logiczny i ma minimum 10/15, pokaż go.
-Dopiero gdy rynek jest naprawdę w środku chaosu i nie ma sensownej przewagi, zwróć brak setupu.
+Masz zwrócić WYŁĄCZNIE poprawny JSON. Bez markdownu. Bez bloków ```json.
 
-6. Bardzo ważne:
-- nie proponuj wejść ze środka konsolidacji, jeśli nie ma wyraźnej przewagi
-- preferuj: retest poziomu, odrzucenie strefy, wybicie i retest, sweep i powrót, wejście przy krawędzi range
-- poziomy mają wynikać z danych, nie być okrągłymi liczbami bez uzasadnienia
-- SL ma być logiczny strukturalnie, nie sztucznie zawężony
-- TP ma wynikać z kolejnych logicznych poziomów i zasięgu ruchu
-- bias_proc ma być liczbą całkowitą 0-100
-- rr ma być liczbą dodatnią
-- tf_aligned = true tylko wtedy, gdy H1 i M15 realnie wspierają ten sam kierunek
-- Sentyment nigdy nie może sam w sobie tworzyć setupu. Może tylko wzmacniać lub osłabiać istniejący setup techniczny.
+### Gdy setup istnieje:
+{"send_alert":true,"regime_confirmed":"TREND_UP","regime_override_reason":null,"setup_type":"trend_consolidation_long","bias":"long","bias_proc":72,"tf_aligned":true,"sentyment":"BTC: $83k | ETH: $1.9k | F&G: 45 (Neutral)","analiza":"opis analizy H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie H1 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"opis akcji"}
 
-7. Jeśli nie ma setupu 10/15+, nadal wskaż:
-- bias: long, short albo neutral
-- bias_proc
-- tf_aligned
-- sentyment
-- analizę
-- akcję opisującą, czego trzeba wypatrywać
+### Gdy setup nie istnieje:
+{"send_alert":false,"regime_confirmed":"RANGE","regime_override_reason":null,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"...","analiza":"...","akcja":"..."}
 
-## Reguły wyjścia JSON
-Masz zwrócić WYŁĄCZNIE poprawny JSON.
-Bez markdownu.
-Bez komentarza przed JSON-em.
-Bez komentarza po JSON-em.
-Bez używania bloków ```json.
+## Ograniczenia pól
 
-### Gdy setup istnieje, zwróć dokładnie taki kształt:
-{"send_alert":true,"bias":"long","bias_proc":70,"tf_aligned":true,"sentyment":"ocena BTC/ETH/SOL + F&G","analiza":"analiza techniczna H1/M15","wejscia":[{"poziom":124.50,"warunek":"zamknięcie M15 powyżej 124.80"}],"tp1":127.00,"tp2":129.50,"sl":122.80,"sl_after_tp1":123.00,"rr":2.1,"akcja":"opis akcji"}
-
-### Gdy setup nie istnieje, zwróć dokładnie taki kształt:
-{"send_alert":false,"bias":"neutral","bias_proc":50,"tf_aligned":false,"sentyment":"...","analiza":"...","akcja":"..."}
-
-## Dodatkowe ograniczenia
-- bias musi być jednym z: "long", "short", "neutral"
-- wejscia ma istnieć tylko wtedy, gdy send_alert = true
-- tp1, tp2, sl, sl_after_tp1, rr mają istnieć tylko wtedy, gdy send_alert = true
-- jeżeli send_alert = false, nie dodawaj żadnych dodatkowych pól poza:
-  send_alert, bias, bias_proc, tf_aligned, sentyment, analiza, akcja
-- jeżeli send_alert = true, nie pomijaj żadnego wymaganego pola
-- analiza i akcja mają być konkretne, ale krótkie i praktyczne
-- sentyment ma być krótkim podsumowaniem wejściowych danych sentymentu, nie długim komentarzem
-- jeśli sentyment nie jest podany, wpisz "brak danych" w polu sentyment"""
+- bias: "long", "short" lub "neutral"
+- regime_confirmed: jeden z: "IMPULSE_UP", "IMPULSE_DOWN", "TREND_UP", "TREND_DOWN", "RANGE"
+- regime_override_reason: null jeśli potwierdzasz hint, krótki string jeśli nadpisujesz
+- setup_type: tylko gdy send_alert = true, jeden z dozwolonych typów powyżej
+- wejscia, tp1, tp2, sl, sl_after_tp1, rr, setup_type: tylko gdy send_alert = true
+- jeśli send_alert = false: tylko send_alert, regime_confirmed, regime_override_reason, bias, bias_proc, tf_aligned, sentyment, analiza, akcja
+- sentyment: krótkie podsumowanie, jeśli brak danych wpisz "brak danych"
+- analiza i akcja: konkretne i praktyczne, bez ogólników"""
 
 
 def build_gpt3_user_prompt(
@@ -764,6 +747,12 @@ def build_gpt3_user_prompt(
     candles_h1: list[dict],
     current_price: float,
     sentiment: str | None = None,
+    regime_hint: dict | None = None,
+    atr: float | None = None,
+    volume_ratio: float | None = None,
+    price_pct_in_range: float | None = None,
+    support: float | None = None,
+    resistance: float | None = None,
 ) -> str:
     m15_csv = "time,open,high,low,close,volume\n" + "\n".join(
         f"{c['time']},{c['open']},{c['high']},{c['low']},{c['close']},{c['volume']}"
@@ -774,24 +763,48 @@ def build_gpt3_user_prompt(
         for c in candles_h1[-50:]
     )
     sentiment_line = sentiment if sentiment else "brak"
+
+    # Kontekst strukturalny
+    ctx_lines = [f"aktualna cena SOL: ${current_price:.2f}"]
+    if support is not None and resistance is not None:
+        ctx_lines.append(f"support H1: ${support:.2f} | resistance H1: ${resistance:.2f}")
+    if price_pct_in_range is not None:
+        ctx_lines.append(f"pozycja w H1 range: {price_pct_in_range:.0f}% (0%=support, 100%=resistance)")
+    if atr is not None:
+        ctx_lines.append(f"ATR(14): ${atr:.3f}")
+    if volume_ratio is not None:
+        ctx_lines.append(f"volume_ratio (2M15/avg10): {volume_ratio:.2f}")
+    ctx_lines.append(f"sentyment: {sentiment_line}")
+
+    # Regime hint
+    if regime_hint:
+        r = regime_hint
+        regime_str = (
+            f"regime_hint: {r.get('regime', '?')} "
+            f"(score={r.get('score', 0)}, direction={r.get('direction', '?')}, "
+            f"24h={r.get('change_24h', 0):+.1f}%, 48h={r.get('change_48h', 0):+.1f}%, "
+            f"vol_ratio={r.get('vol_ratio', 0):.2f})"
+        )
+        ctx_lines.append(regime_str)
+    else:
+        ctx_lines.append("regime_hint: brak (ustal samodzielnie)")
+
+    ctx_block = "\n".join(f"- {l}" for l in ctx_lines)
+
     return (
         "Przeanalizuj SOL/USDT i zwróć wyłącznie poprawny JSON zgodny z wymaganym formatem.\n\n"
         "Świece są ułożone chronologicznie od najstarszej do najnowszej.\n"
-        "Ostatni wiersz to ostatnia zamknięta świeca.\n"
-        "Aktualna cena jest nowsza niż ostatnia zamknięta świeca.\n\n"
-        "Dane wejściowe:\n"
-        f"- aktualna cena SOL: ${current_price:.2f}\n"
-        f"- sentyment (opcjonalny): {sentiment_line}\n\n"
-        f"- H1 candles (50):\n{h1_csv}\n\n"
-        f"- M15 candles (100):\n{m15_csv}\n\n"
-        "Wymagania wykonawcze:\n"
+        "Ostatni wiersz to ostatnia zamknięta świeca. Aktualna cena jest nowsza.\n\n"
+        f"Kontekst:\n{ctx_block}\n\n"
+        f"H1 candles (50):\n{h1_csv}\n\n"
+        f"M15 candles (100):\n{m15_csv}\n\n"
+        "Wymagania:\n"
+        "- zweryfikuj regime_hint lub nadpisz z uzasadnieniem w regime_override_reason\n"
         "- oceń kontekst H1 i M15\n"
-        "- wybierz tylko 1 najlepszy setup albo brak setupu\n"
-        "- jeśli najlepszy setup ma mniej niż 10/15, zwróć send_alert = false\n"
-        "- jeśli setup istnieje, podaj konkretne wejście lub wejścia, TP1, TP2, SL i sl_after_tp1\n"
-        "- nie uciekaj w ogólniki\n"
-        "- nie zwracaj nic poza poprawnym JSON-em\n"
-        "- jeśli sentyment nie jest podany, całkowicie go pomiń przy analizie"
+        "- wybierz 1 najlepszy setup lub brak setupu\n"
+        "- setup < 10/15 → send_alert = false\n"
+        "- dla trend_consolidation_long: sprawdź WSZYSTKIE warunki jakości (wolumen, poziom, impuls, pozycja w range)\n"
+        "- zwróć wyłącznie poprawny JSON, nic więcej"
     )
 
 
@@ -803,12 +816,27 @@ def call_gpt3(
     candles_h1: list[dict],
     current_price: float,
     sentiment: str | None = None,
+    regime: dict | None = None,
+    atr: float | None = None,
+    volume_ratio: float | None = None,
+    price_pct_in_range: float | None = None,
+    support: float | None = None,
+    resistance: float | None = None,
 ) -> dict | None:
     if not OPENAI_KEY:
         print("[gpt3] Brak klucza API.")
         return None
 
-    user_msg = build_gpt3_user_prompt(candles_m15, candles_h1, current_price, sentiment)
+    user_msg = build_gpt3_user_prompt(
+        candles_m15, candles_h1, current_price,
+        sentiment=sentiment,
+        regime_hint=regime,
+        atr=atr,
+        volume_ratio=volume_ratio,
+        price_pct_in_range=price_pct_in_range,
+        support=support,
+        resistance=resistance,
+    )
 
     def _call() -> str:
         client = openai.OpenAI(api_key=OPENAI_KEY)
@@ -3225,8 +3253,93 @@ def main():
     else:
         print("[gpt-r] Pominieto (ENABLE_GPT_RELAXED=False).")
 
-    # ── 6. GPT3 — zintegrowany po weryfikacji backtestem ─────────────────────
-    # (integracja z główną pętlą zostanie dodana po weryfikacji wyników backtestu)
+    # ── 6. GPT3 — regime-aware, trend_consolidation_long włączony ───────────────
+    if ENABLE_GPT3:
+        print("[gpt3] Wysylam dane do analizy (regime-aware)...")
+
+        # Oblicz wskaźniki dla GPT3
+        gpt3_atr = calc_atr(candles_m15)
+        gpt3_vol_ratio = regime.get("vol_ratio", 1.0)
+        gpt3_support = regime.get("support")
+        gpt3_resistance = regime.get("resistance")
+        gpt3_range_size = regime.get("range_size", 0)
+        if gpt3_range_size and gpt3_range_size > 0 and gpt3_support is not None:
+            gpt3_pct = max(0.0, min(100.0, (current - gpt3_support) / gpt3_range_size * 100))
+        else:
+            gpt3_pct = 50.0
+        gpt3_sentiment = _fetch_sentiment_line()
+
+        gpt3_result = call_gpt3(
+            candles_m15, candles_h1, current,
+            sentiment=gpt3_sentiment,
+            regime=regime,
+            atr=gpt3_atr,
+            volume_ratio=gpt3_vol_ratio,
+            price_pct_in_range=gpt3_pct,
+            support=gpt3_support,
+            resistance=gpt3_resistance,
+        )
+
+        if gpt3_result:
+            bias       = gpt3_result.get("bias", "neutral")
+            bias_proc  = gpt3_result.get("bias_proc", 0)
+            send_alert = gpt3_result.get("send_alert", False)
+            tf_aligned = gpt3_result.get("tf_aligned", True)
+            regime_confirmed = gpt3_result.get("regime_confirmed", "?")
+            override_reason  = gpt3_result.get("regime_override_reason")
+            setup_type = gpt3_result.get("setup_type", "")
+            if override_reason:
+                print(f"[gpt3] Regime override: {regime['regime']} → {regime_confirmed} ({override_reason})")
+            print(f"[gpt3] Bias: {bias} ({bias_proc}%) | tf_aligned={tf_aligned} | send_alert={send_alert} | setup={setup_type}")
+
+            if send_alert and bias_proc < MIN_GROK_BIAS_PROC:
+                print(f"[gpt3] Odrzucono: bias_proc={bias_proc}% < próg {MIN_GROK_BIAS_PROC}%")
+                send_alert = False
+
+            if send_alert and bias != "neutral":
+                wejscia = gpt3_result.get("wejscia", [])
+                entries = [w["poziom"] for w in wejscia if "poziom" in w]
+                if entries:
+                    akcja_lower = gpt3_result.get("akcja", "").lower()
+                    if "pullback" in akcja_lower:
+                        warunek = "pullback"
+                    elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
+                        warunek = "przebicie"
+                    else:
+                        w1_lvl = entries[0]
+                        if bias == "short":
+                            warunek = "przebicie" if w1_lvl < current else "pullback"
+                        else:
+                            warunek = "przebicie" if w1_lvl > current else "pullback"
+
+                    gpt3_setup = {
+                        "type":         setup_type,
+                        "direction":    bias,
+                        "score":        bias_proc,
+                        "kurs":         round(current, 2),
+                        "entries":      entries,
+                        "warunek":      warunek,
+                        "sl":           gpt3_result.get("sl"),
+                        "sl_after_tp1": gpt3_result.get("sl_after_tp1"),
+                        "tps":          [t for t in [gpt3_result.get("tp1"), gpt3_result.get("tp2")] if t is not None],
+                        "rr":           gpt3_result.get("rr", 0),
+                        "reasoning":    " | ".join(filter(None, [gpt3_result.get("analiza", ""), gpt3_result.get("akcja", "")])),
+                    }
+                    save_pending(gpt3_setup, "GPT3", "", current)
+                    if gpt3_setup.get("setup_id"):
+                        log_to_alerty("GPT3", "", gpt3_setup)
+                        save_alerted("GPT3", entries[0], bias)
+                        send_telegram(format_grok_alert(gpt3_result, current, gpt3_setup["setup_id"], model_name="GPT3"))
+                    else:
+                        print("[gpt3] Duplikat pominięty.")
+                else:
+                    send_telegram(format_grok_alert(gpt3_result, current, None, model_name="GPT3"))
+            else:
+                print(f"[gpt3] Brak konkretnego setupu.")
+        else:
+            print("[gpt3] Brak odpowiedzi.")
+    else:
+        print("[gpt3] Pominięty (ENABLE_GPT3=False).")
 
     # Składa plan order dla nowo zapisanych setupów (natychmiast po wygenerowaniu alertu)
     exchange_trader.sync()
