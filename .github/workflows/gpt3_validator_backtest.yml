@@ -1,0 +1,46 @@
+name: GPT3 Validator Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      dt_from:
+        description: 'Od kiedy UTC (np. "2026-04-01 00:00")'
+        type: string
+        default: ''
+      dt_to:
+        description: 'Do kiedy UTC (np. "2026-04-03 00:00"). Puste = teraz'
+        type: string
+        default: ''
+      hours:
+        description: 'Ile godzin wstecz (tylko gdy brak --from)'
+        type: number
+        default: 48
+
+jobs:
+  gpt3-validator-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Ustaw Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Zainstaluj zaleznosci
+        run: pip install -r requirements.txt
+
+      - name: Uruchom GPT3 Validator Backtest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          ARGS=""
+          [ -n "${{ inputs.dt_from }}" ] && ARGS="$ARGS --from '${{ inputs.dt_from }}'"
+          [ -n "${{ inputs.dt_to }}" ]   && ARGS="$ARGS --to '${{ inputs.dt_to }}'"
+          [ -z "${{ inputs.dt_from }}" ] && ARGS="$ARGS --hours ${{ inputs.hours }}"
+          eval python gpt3_validator_backtest.py $ARGS
