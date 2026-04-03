@@ -1330,10 +1330,14 @@ def detect_market_regime(
     last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Zmiana cenowa 4h / 24h / 48h (informacyjnie, nie do detekcji trendu) ──
+    # ── Zmiana cenowa 4h / 24h / 48h ─────────────────────────────────────────
+    # 24h i 48h: średnia z 3 świec wokół punktu referencyjnego.
+    # Eliminuje niestabilność gdy pojedyncza świeca trafia na spike/dno impulsu.
     price_4h  = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
-    price_24h = candles_h1[-24]["close"]  if len(candles_h1) >= 24  else candles_h1[0]["close"]
-    price_48h = candles_h1[-48]["close"]  if len(candles_h1) >= 48  else candles_h1[0]["close"]
+    price_24h = (sum(c["close"] for c in candles_h1[-25:-22]) / 3
+                 if len(candles_h1) >= 25 else candles_h1[0]["close"])
+    price_48h = (sum(c["close"] for c in candles_h1[-49:-46]) / 3
+                 if len(candles_h1) >= 49 else candles_h1[0]["close"])
     change_4h  = (current_price - price_4h)  / price_4h  * 100
     change_24h = (current_price - price_24h) / price_24h * 100
     change_48h = (current_price - price_48h) / price_48h * 100
@@ -1381,45 +1385,39 @@ def detect_market_regime(
             "pct_outside": 0, "details": details,
         }
 
-    # ── TREND: kierunek MA20(H1) + pozycja ceny vs MA20 ─────────────────────
-    # Slope MA20: porównaj MA20 teraz vs MA20 sprzed 5 świec H1.
-    # MA20 zmienia się płynnie — nie da sprzecznych sygnałów co 15min.
-    ma20      = sum(c["close"] for c in candles_h1[-20:])   / 20 if len(candles_h1) >= 20 else current_price
-    ma20_prev = sum(c["close"] for c in candles_h1[-25:-5]) / 20 if len(candles_h1) >= 25 else ma20
-    ma5       = sum(c["close"] for c in candles_h1[-5:])    / 5  if len(candles_h1) >= 5  else current_price
+    # ── TREND: change_24h / change_48h (wygładzone) + lower_lows/higher_highs ──
+    h1_12 = candles_h1[-12:]
+    lower_lows   = sum(1 for i in range(1, len(h1_12)) if h1_12[i]["low"]  < h1_12[i-1]["low"])
+    higher_highs = sum(1 for i in range(1, len(h1_12)) if h1_12[i]["high"] > h1_12[i-1]["high"])
 
-    ma20_slope = (ma20 - ma20_prev) / ma20_prev * 100  # % zmiana MA20 w ciągu 5h
+    trend_score = 0
+    if abs(change_24h) >= 3.0: trend_score += 2
+    elif abs(change_24h) >= 1.5: trend_score += 1
+    if abs(change_48h) >= 5.0: trend_score += 2
+    elif abs(change_48h) >= 3.0: trend_score += 1
+    if lower_lows >= 5: trend_score += 1
+    if higher_highs >= 5: trend_score += 1
+    if trend != "neutral": trend_score += 1
 
-    price_below_ma20 = current_price < ma20
-    price_above_ma20 = current_price > ma20
+    has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
 
-    details = (f"MA20={ma20:.1f}(slope={ma20_slope:+.2f}%) MA5={ma5:.1f} "
-               f"cena={'<' if price_below_ma20 else '>'}MA20; "
-               f"24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}%")
+    details = f"24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}% trend_score:{trend_score} ll:{lower_lows} hh:{higher_highs}"
 
-    if ma20_slope < -0.3 and price_below_ma20:   # MA20 spada + cena poniżej → TREND_DOWN
-        strength = min(10, imp_str
-                       + (2 if ma20_slope < -0.8 else 1)
-                       + (1 if ma5 < ma20 else 0))          # MA5 też poniżej MA20 = wzmocnienie
+    if trend_score >= 3 and has_price_change:
+        if abs(change_48h) >= 3.0:
+            trend_dir = "down" if change_48h < 0 else "up"
+        elif abs(change_24h) >= 1.5:
+            trend_dir = "down" if change_24h < 0 else "up"
+        else:
+            trend_dir = "down" if lower_lows > higher_highs else "up"
         return {
             **base,
-            "regime": "TREND_DOWN",
-            "direction": "down", "score": strength,
+            "regime": f"TREND_{trend_dir.upper()}",
+            "direction": trend_dir, "score": trend_score,
             "pct_outside": 0, "details": details,
         }
 
-    if ma20_slope > 0.3 and price_above_ma20:    # MA20 rośnie + cena powyżej → TREND_UP
-        strength = min(10, imp_str
-                       + (2 if ma20_slope > 0.8 else 1)
-                       + (1 if ma5 > ma20 else 0))
-        return {
-            **base,
-            "regime": "TREND_UP",
-            "direction": "up", "score": strength,
-            "pct_outside": 0, "details": details,
-        }
-
-    # ── RANGE: MA20 płaska lub cena po przeciwnej stronie MA20 ───────────────
+    # ── RANGE ────────────────────────────────────────────────────────────────
     return {
         **base,
         "regime": "RANGE",
