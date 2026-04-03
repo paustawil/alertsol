@@ -1330,29 +1330,18 @@ def detect_market_regime(
     last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Zmiana cenowa 4h / 24h / 48h / 7d ───────────────────────────────────
-    price_4h = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
-    price_24h = candles_h1[-24]["close"] if len(candles_h1) >= 24 else candles_h1[0]["close"]
-    price_48h = candles_h1[-48]["close"] if len(candles_h1) >= 48 else candles_h1[0]["close"]
-    price_7d  = candles_h1[-168]["close"] if len(candles_h1) >= 168 else candles_h1[0]["close"]
+    # ── Zmiana cenowa 4h / 24h / 48h (informacyjnie, nie do detekcji trendu) ──
+    price_4h  = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
+    price_24h = candles_h1[-24]["close"]  if len(candles_h1) >= 24  else candles_h1[0]["close"]
+    price_48h = candles_h1[-48]["close"]  if len(candles_h1) >= 48  else candles_h1[0]["close"]
     change_4h  = (current_price - price_4h)  / price_4h  * 100
     change_24h = (current_price - price_24h) / price_24h * 100
     change_48h = (current_price - price_48h) / price_48h * 100
-    change_7d  = (current_price - price_7d)  / price_7d  * 100
 
-    # ── Kierunek ostatnich 4 M15 ─────────────────────────────────────────────
+    # ── Kierunek ostatnich 4 M15 (dla IMPULSE) ───────────────────────────────
     last4 = candles_m15[-4:]
     bearish_closes = sum(1 for c in last4 if c["close"] < c["open"])
     bullish_closes = sum(1 for c in last4 if c["close"] > c["open"])
-
-    # ── Struktura H1 (last 12h) ──────────────────────────────────────────────
-    h1_12 = candles_h1[-12:] if len(candles_h1) >= 12 else candles_h1
-    h1_lows = [c["low"] for c in h1_12]
-    h1_highs = [c["high"] for c in h1_12]
-    lower_lows = sum(1 for i in range(1, len(h1_lows)) if h1_lows[i] < h1_lows[i - 1])
-    higher_highs = sum(1 for i in range(1, len(h1_highs)) if h1_highs[i] > h1_highs[i - 1])
-    lower_highs = sum(1 for i in range(1, len(h1_highs)) if h1_highs[i] < h1_highs[i - 1])
-    higher_lows = sum(1 for i in range(1, len(h1_lows)) if h1_lows[i] > h1_lows[i - 1])
 
     # Bazowy dict zwracany przez każdy reżim
     base = {
@@ -1392,87 +1381,51 @@ def detect_market_regime(
             "pct_outside": 0, "details": details,
         }
 
-    # ── TREND: utrzymujący się ruch kierunkowy ────────────────────────────────
-    trend_score = 0
-    trend_details = []
+    # ── TREND: oparty na MA5 vs MA20 (H1) — stabilny, nie fluktuuje co 15min ──
+    # MA zmienia się płynnie — nie może dać sprzecznych sygnałów w ciągu godziny.
+    ma5  = sum(c["close"] for c in candles_h1[-5:])  / 5  if len(candles_h1) >= 5  else current_price
+    ma20 = sum(c["close"] for c in candles_h1[-20:]) / 20 if len(candles_h1) >= 20 else current_price
+    ma_diff_pct = (ma5 - ma20) / ma20 * 100  # ujemny = bearish, dodatni = bullish
 
-    if abs(change_24h) >= 3.0:
-        trend_score += 2
-        trend_details.append(f"24h:{change_24h:+.1f}%")
-    elif abs(change_24h) >= 1.5:
-        trend_score += 1
-        trend_details.append(f"24h:{change_24h:+.1f}%")
+    # Struktura H1 (24h): porównaj pierwszą i drugą połowę okresu
+    h1_24 = candles_h1[-24:] if len(candles_h1) >= 24 else candles_h1
+    mid = len(h1_24) // 2
+    fh, sh = h1_24[:mid], h1_24[mid:]
+    struct_bearish = max(c["high"] for c in sh) < max(c["high"] for c in fh)  # niższy szczyt
+    struct_bullish = min(c["low"]  for c in sh) > min(c["low"]  for c in fh)  # wyższy dołek
 
-    if abs(change_48h) >= 5.0:
-        trend_score += 2
-        trend_details.append(f"48h:{change_48h:+.1f}%")
-    elif abs(change_48h) >= 3.0:
-        trend_score += 1
-        trend_details.append(f"48h:{change_48h:+.1f}%")
+    details = f"MA5={ma5:.1f} MA20={ma20:.1f} diff={ma_diff_pct:+.2f}%; 24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}%"
 
-    if lower_lows >= 5:
-        trend_score += 1
-        trend_details.append(f"LL:{lower_lows}/{len(h1_12)-1}")
-    if higher_highs >= 5:
-        trend_score += 1
-        trend_details.append(f"HH:{higher_highs}/{len(h1_12)-1}")
-    if lower_highs >= 5:
-        trend_score += 1
-        trend_details.append(f"LH:{lower_highs}/{len(h1_12)-1}")
-    if higher_lows >= 5:
-        trend_score += 1
-        trend_details.append(f"HL:{higher_lows}/{len(h1_12)-1}")
-
-    if trend != "neutral":
-        trend_score += 1
-        trend_details.append(f"h1:{trend}")
-
-    # TREND wymaga zmiany cenowej — sama struktura nie wystarczy
-    has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
-
-    # Konflikt sygnałów 24h vs 48h — jeśli wskazują przeciwne kierunki i oba
-    # są istotne (>= 1.5%), rynek jest w fazie odreagowania, nie w trendzie.
-    # Podnosimy próg żeby nie deklarować trendu na podstawie sprzecznych danych.
-    signals_conflict = (
-        abs(change_24h) >= 1.5
-        and abs(change_48h) >= 1.5
-        and change_24h * change_48h < 0  # przeciwne znaki
-    )
-    if signals_conflict:
-        trend_score -= 2
-
-    if trend_score >= 3 and has_price_change:
-        # Kierunek: 48h ma priorytet nad 24h gdy się kłócą
-        if abs(change_48h) >= 3.0:
-            trend_dir = "down" if change_48h < 0 else "up"
-        elif abs(change_24h) >= 1.5:
-            trend_dir = "down" if change_24h < 0 else "up"
-        elif change_48h < -2.0:
-            trend_dir = "down"
-        elif change_48h > 2.0:
-            trend_dir = "up"
-        else:
-            trend_dir = "down" if lower_lows > higher_highs else "up"
-
-        # Blokada TREND_UP gdy kontekst 7d jest silnie niedźwiedzi (odbicie w trendzie,
-        # nie nowy trend wzrostowy). Próg -5% = wyraźny bear market w szerszym oknie.
-        if trend_dir == "up" and change_7d < -5.0:
-            trend_dir = "down"
-
-        strength = min(10, trend_score + imp_str)
+    if ma_diff_pct < -0.5:  # MA5 wyraźnie poniżej MA20 → TREND_DOWN
+        strength = min(10, imp_str
+                       + (2 if ma_diff_pct < -1.5 else 1)
+                       + (1 if current_price < ma20 else 0)
+                       + (1 if struct_bearish else 0))
         return {
             **base,
-            "regime": f"TREND_{trend_dir.upper()}",
-            "direction": trend_dir, "score": strength,
-            "pct_outside": 0, "details": "; ".join(trend_details),
+            "regime": "TREND_DOWN",
+            "direction": "down", "score": strength,
+            "pct_outside": 0, "details": details,
         }
 
-    # ── RANGE: domyślny ──────────────────────────────────────────────────────
+    if ma_diff_pct > 0.5:   # MA5 wyraźnie powyżej MA20 → TREND_UP
+        strength = min(10, imp_str
+                       + (2 if ma_diff_pct > 1.5 else 1)
+                       + (1 if current_price > ma20 else 0)
+                       + (1 if struct_bullish else 0))
+        return {
+            **base,
+            "regime": "TREND_UP",
+            "direction": "up", "score": strength,
+            "pct_outside": 0, "details": details,
+        }
+
+    # ── RANGE: domyślny (MA5 ≈ MA20, brak kierunku) ──────────────────────────
     return {
         **base,
         "regime": "RANGE",
         "direction": "none", "score": 0,
-        "pct_outside": 0, "details": f"24h:{change_24h:+.1f}%; 48h:{change_48h:+.1f}%",
+        "pct_outside": 0, "details": details,
     }
 
 
