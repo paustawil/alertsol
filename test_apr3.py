@@ -238,6 +238,81 @@ def find_consolidation_new(candles_h1):
     return None
 
 
+# ── Generowanie setupu trend_consolidation_short (stary vs nowy) ─────────────
+
+def make_consol_short(consol, h1_snap, swing_high, price, max_dist):
+    """Generuje parametry trend_consolidation_short. Zwraca dict lub None."""
+    if consol is None:
+        return None
+    # Nowy warunek: odrzuć jeśli konsolidacja nie sięga blisko swing_high
+    if consol["high"] < swing_high * 0.97:
+        return None
+    atr = calc_atr(h1_snap[-20:])
+    w   = consol["high"] - consol["range"] * 0.2
+    sl  = consol["high"] + atr * 1.0
+    tp1 = consol["low"]  - consol["range"]
+    tp2 = consol["low"]  - consol["range"] * 1.5
+    if not (sl > w and tp1 < w):
+        return None
+    rr = (w - tp1) / (sl - w)
+    if rr < 1.5:
+        return None
+    if abs(w - price) > max_dist:
+        return None
+    return {"w": round(w, 2), "sl": round(sl, 2), "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+            "rr": round(rr, 1)}
+
+def make_consol_short_old(consol, h1_snap, price, max_dist):
+    """Stara wersja — bez warunku swing_high."""
+    if consol is None:
+        return None
+    atr = calc_atr(h1_snap[-20:])
+    w   = consol["high"] - consol["range"] * 0.2
+    sl  = consol["high"] + atr * 1.0
+    tp1 = consol["low"]  - consol["range"]
+    tp2 = consol["low"]  - consol["range"] * 1.5
+    if not (sl > w and tp1 < w):
+        return None
+    rr = (w - tp1) / (sl - w)
+    if rr < 1.5:
+        return None
+    if abs(w - price) > max_dist:
+        return None
+    return {"w": round(w, 2), "sl": round(sl, 2), "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+            "rr": round(rr, 1)}
+
+
+# ── Ewaluacja setupu na przyszłych świecach M15 ───────────────────────────────
+
+def evaluate(setup: dict, future_m15: list[dict], window_h: int = 24) -> str:
+    """Sprawdza co trafione pierwsze: TP1, SL, brak wejścia."""
+    if not setup or not future_m15:
+        return "-"
+    w, sl, tp1 = setup["w"], setup["sl"], setup["tp1"]
+    window_s = window_h * 3600
+    t0 = future_m15[0]["time"]
+
+    entry_ts = None
+    for c in future_m15:
+        if c["time"] > t0 + window_s:
+            break
+        if c["high"] >= w:  # short — entry gdy cena dotyka W od dołu
+            entry_ts = c["time"]
+            break
+
+    if entry_ts is None:
+        return "no_entry"
+
+    for c in future_m15:
+        if c["time"] < entry_ts:
+            continue
+        if c["low"] <= tp1:
+            return "TP1 ✓"
+        if c["high"] >= sl:
+            return "SL ✗"
+    return "open"
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def _parse_dt(s: str) -> int:
@@ -253,55 +328,87 @@ def main():
     to_ts   = _parse_dt(args.dt_to)
     num_hours = (to_ts - from_ts) // 3600
 
-    print(f"Pobieranie danych: {args.dt_from} – {args.dt_to} ({num_hours}h)...")
+    # Pobieramy dane + 24h do przodu na ewaluację
+    fetch_end = to_ts + 24 * 3600
+    m15_needed = 100 + (fetch_end - from_ts) // 900
+    h1_needed  = 60  + (fetch_end - from_ts) // 3600
 
-    m15_needed = 100 + (to_ts - from_ts) // 900
-    h1_needed  = 60  + num_hours
+    print(f"Pobieranie danych: {args.dt_from} – {args.dt_to} (+24h ewaluacja)...")
+    m15_all = fetch_klines_okx("SOLUSDT", "15m", m15_needed, fetch_end)
+    h1_all  = fetch_klines_okx("SOLUSDT", "1h",  h1_needed,  fetch_end)
 
-    m15 = fetch_klines_okx("SOLUSDT", "15m", m15_needed, to_ts)
-    h1  = fetch_klines_okx("SOLUSDT", "1h",  h1_needed,  to_ts)
-
-    if not m15 or not h1:
+    if not m15_all or not h1_all:
         print("Brak danych — sprawdź połączenie z API")
         return
 
-    print(f"M15: {len(m15)} świec | H1: {len(h1)} świec")
+    print(f"M15: {len(m15_all)} świec | H1: {len(h1_all)} świec")
     print()
 
     test_hours = list(range(from_ts, to_ts, 3600))
 
-    print(f"{'Godz':>8}  {'Cena':>7}  {'STARY':>18}  {'NOWY':>18}  {'24h':>6}  {'48h':>6}  {'Konsolidacja STARA':>22}  {'Konsolidacja NOWA':>22}")
-    print("-" * 140)
+    hdr = f"{'Godz':>5}  {'Cena':>7}  {'STARY reżim':>16}  {'NOWY reżim':>16}  " \
+          f"{'STARY setup':>30}  {'wynik':>8}  {'NOWY setup':>30}  {'wynik':>8}"
+    print(hdr)
+    print("-" * len(hdr))
 
-    changed_hours = 0
+    stats = {"old_sl": 0, "old_tp": 0, "old_no": 0, "new_sl": 0, "new_tp": 0, "new_no": 0}
+
     for ts in test_hours:
-        # Dane dostępne do ts
-        m15_snap = [c for c in m15 if c["time"] < ts]
-        h1_snap  = [c for c in h1  if c["time"] < ts]
+        m15_snap = [c for c in m15_all if c["time"] < ts]
+        h1_snap  = [c for c in h1_all  if c["time"] < ts]
+        future   = [c for c in m15_all if c["time"] >= ts]
 
         if len(m15_snap) < 20 or len(h1_snap) < 12:
             continue
 
         price = m15_snap[-1]["close"]
-        dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M")
+        max_dist = price * 0.03
+        dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d.%m %H:%M")
 
         old_regime, c24, c48 = detect_regime_old(m15_snap, h1_snap, price)
         new_regime, _, _     = detect_regime_new(m15_snap, h1_snap, price)
 
-        # find_consolidation porównanie
-        co = find_consolidation_old(h1_snap)
-        cn = find_consolidation_new(h1_snap)
+        swing_high = max(c["high"] for c in h1_snap[-12:])
 
-        co_str = f"H={co['high']:.2f} n={co['candles']}" if co else "brak"
-        cn_str = f"H={cn['high']:.2f} n={cn['candles']}" if cn else "brak"
+        # Stary setup (stary reżim + stara konsolidacja)
+        old_consol = find_consolidation_old(h1_snap)
+        old_setup  = None
+        if "DOWN" in old_regime.split()[0]:
+            old_setup = make_consol_short_old(old_consol, h1_snap, price, max_dist)
+        old_res = evaluate(old_setup, future)
 
-        changed = " ◄" if old_regime.split()[0] != new_regime.split()[0] else ""
-        changed_hours += 1 if changed else 0
+        # Nowy setup (nowy reżim + nowa konsolidacja + warunek swing_high)
+        new_consol = find_consolidation_new(h1_snap)
+        new_setup  = None
+        if "DOWN" in new_regime.split()[0]:
+            new_setup = make_consol_short(new_consol, h1_snap, swing_high, price, max_dist)
+        new_res = evaluate(new_setup, future)
 
-        print(f"{dt_str:>8}  {price:>7.2f}  {old_regime:>18}  {new_regime:>18}  {c24:>+6.1f}%  {c48:>+6.1f}%  {co_str:>22}  {cn_str:>22}{changed}")
+        # Formatowanie setupu
+        def fmt(s):
+            if s is None: return f"{'brak':>30}"
+            return f"W={s['w']:.2f} SL={s['sl']:.2f} TP1={s['tp1']:.2f} RR={s['rr']:.1f}"
+
+        # Statystyki
+        if old_setup:
+            if "TP1" in old_res: stats["old_tp"] += 1
+            elif "SL"  in old_res: stats["old_sl"] += 1
+            else:                  stats["old_no"] += 1
+        if new_setup:
+            if "TP1" in new_res: stats["new_tp"] += 1
+            elif "SL"  in new_res: stats["new_sl"] += 1
+            else:                  stats["new_no"] += 1
+
+        regime_changed = " ◄" if old_regime.split()[0] != new_regime.split()[0] else ""
+        print(f"{dt_str}  {price:>7.2f}  {old_regime.split()[0]:>16}  {new_regime.split()[0]:>16}  "
+              f"{fmt(old_setup)}  {old_res:>8}  {fmt(new_setup)}  {new_res:>8}{regime_changed}")
 
     print()
-    print(f"Godziny gdzie reżim się zmienił: {changed_hours}/{len(test_hours)}")
+    print("=" * 80)
+    print(f"STARY: TP1={stats['old_tp']}  SL={stats['old_sl']}  no_entry/open={stats['old_no']}"
+          f"  (setupów: {stats['old_tp']+stats['old_sl']+stats['old_no']})")
+    print(f"NOWY:  TP1={stats['new_tp']}  SL={stats['new_sl']}  no_entry/open={stats['new_no']}"
+          f"  (setupów: {stats['new_tp']+stats['new_sl']+stats['new_no']})")
 
 
 if __name__ == "__main__":
