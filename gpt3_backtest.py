@@ -668,27 +668,38 @@ def get_test_sheet(sheet_suffix: str = "") -> gspread.Worksheet:
 
 
 # ── Główna logika backtestu ───────────────────────────────────────────────────
-def run_backtest(sheet_suffix: str = "") -> None:
+def run_backtest(from_ts: int, to_ts: int, sheet_suffix: str = "") -> None:
+    now_ts    = int(time.time())
+    num_hours = (to_ts - from_ts) // 3600
+
+    if num_hours <= 0:
+        print(f"[BŁĄD] Nieprawidłowy zakres: {_ts_fmt(from_ts)} – {_ts_fmt(to_ts)}")
+        return
+
     print("=== GPT3 Backtest — start ===")
+    print(f"Okres: {_ts_fmt(from_ts)} – {_ts_fmt(to_ts)} ({num_hours}h, {num_hours} punktów)")
 
     # ── 1. Pobierz dane historyczne ───────────────────────────────────────────
-    now_ts   = int(time.time())
-    # M15: potrzebujemy 100 kontekstu + 48*4 testowe + 24*4 outcome = 484 świec
-    # H1:  potrzebujemy 50 kontekstu + 48 testowe + 24 outcome = 122 świec
-    # Bierzemy z zapasem
-    print("Pobieranie świec M15 (550 szt)...")
-    all_m15 = fetch_klines_paginated(SYMBOL, "15m", total=550, end_ts_s=now_ts)
+    outcome_margin_s = ENTRY_WINDOW_S + OUTCOME_WINDOW_S  # 48h na outcome po ostatnim punkcie
+    data_end_ts = to_ts + outcome_margin_s
+    if data_end_ts > now_ts:
+        data_end_ts = now_ts
+        margin_h = (data_end_ts - to_ts) / 3600
+        print(f"  Outcome data ograniczona do {margin_h:.0f}h po ostatnim punkcie (brak przyszłych danych)")
+
+    m15_total = 100 + num_hours * 4 + (data_end_ts - to_ts) // 900 + 50
+    h1_total  = 50  + num_hours     + (data_end_ts - to_ts) // 3600 + 10
+
+    print(f"Pobieranie świec M15 ({m15_total} szt)...")
+    all_m15 = fetch_klines_paginated(SYMBOL, "15m", total=m15_total, end_ts_s=data_end_ts)
     print(f"  Pobrano {len(all_m15)} świec M15 ({_ts_fmt(all_m15[0]['time'])} – {_ts_fmt(all_m15[-1]['time'])})")
 
-    print("Pobieranie świec H1 (150 szt)...")
-    all_h1 = fetch_klines_paginated(SYMBOL, "1h",  total=150, end_ts_s=now_ts)
+    print(f"Pobieranie świec H1 ({h1_total} szt)...")
+    all_h1 = fetch_klines_paginated(SYMBOL, "1h", total=h1_total, end_ts_s=data_end_ts)
     print(f"  Pobrano {len(all_h1)} świec H1 ({_ts_fmt(all_h1[0]['time'])} – {_ts_fmt(all_h1[-1]['time'])})")
 
-    # ── 2. Wyznacz 48 punktów testowych (ostatnie 48 pełnych godzin) ──────────
-    # Pełna godzina = ts będący wielokrotnością 3600, zakończona przed now
-    latest_full_hour = (now_ts // 3600) * 3600  # obecna pełna godzina (może trwać)
-    test_hours = [latest_full_hour - i * 3600 for i in range(48, 0, -1)]
-    # test_hours[0] = 48h temu, test_hours[-1] = 1h temu
+    # ── 2. Wyznacz punkty testowe ─────────────────────────────────────────────
+    test_hours = [from_ts + i * 3600 for i in range(num_hours)]
 
     # ── 3. Przygotuj arkusz ───────────────────────────────────────────────────
     print("Łączenie z Google Sheets...")
@@ -698,7 +709,7 @@ def run_backtest(sheet_suffix: str = "") -> None:
     # ── 4. Pętla testowa ──────────────────────────────────────────────────────
     for i, signal_ts in enumerate(test_hours):
         label = _ts_fmt(signal_ts)
-        print(f"\n[{i+1}/48] {label}")
+        print(f"\n[{i+1}/{num_hours}] {label}")
 
         # Wytnij kontekst świec do momentu signal_ts (ostatnia zamknięta świeca)
         ctx_m15 = [c for c in all_m15 if c["time"] <= signal_ts - 900][-100:]
@@ -777,8 +788,39 @@ def _ts_fmt(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
+def _parse_dt(s: str) -> int:
+    """Parsuje datę 'YYYY-MM-DD HH:MM' (UTC) na unix timestamp."""
+    return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp())
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--from", dest="dt_from", type=str, default=None,
+                        help="Początek okresu UTC, np. '2026-03-25 00:00'")
+    parser.add_argument("--to", dest="dt_to", type=str, default=None,
+                        help="Koniec okresu UTC, np. '2026-03-28 00:00'. Puste = teraz")
+    parser.add_argument("--hours", type=int, default=None,
+                        help="Ile godzin wstecz od --to (lub od teraz). Ignorowane gdy podano --from.")
     parser.add_argument("--sheet-suffix", default="", help='Sufiks nazwy arkusza (np. "v2" → "GPT3 test v2")')
     args = parser.parse_args()
-    run_backtest(sheet_suffix=args.sheet_suffix)
+
+    now_ts = int(time.time())
+
+    if args.dt_from and args.dt_to:
+        from_ts = _parse_dt(args.dt_from)
+        to_ts   = _parse_dt(args.dt_to)
+    elif args.dt_from:
+        from_ts = _parse_dt(args.dt_from)
+        to_ts   = (now_ts // 3600) * 3600
+    elif args.dt_to:
+        to_ts   = _parse_dt(args.dt_to)
+        from_ts = to_ts - (args.hours or 48) * 3600
+    else:
+        to_ts   = (now_ts // 3600) * 3600
+        from_ts = to_ts - (args.hours or 48) * 3600
+
+    # Zaokrąglij do pełnych godzin
+    from_ts = ((from_ts + 3599) // 3600) * 3600
+    to_ts   = (to_ts // 3600) * 3600
+
+    run_backtest(from_ts=from_ts, to_ts=to_ts, sheet_suffix=args.sheet_suffix)
