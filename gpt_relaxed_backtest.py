@@ -1,6 +1,7 @@
 """
 GPT-Relaxed backtest — ostatnie 48 godzin, jedno zapytanie na każdą pełną godzinę.
-Używa modelu gpt-4o z web_search_preview (live sentiment BTC/ETH/SOL + F&G).
+Prompt GPT-Relaxed z sentymentem (BTC/ETH + Fear & Greed) dostarczanym
+z historycznych danych API zamiast web_search_preview.
 Wyniki zapisywane do arkusza 'GPT-Relaxed test'.
 
 Uruchomienie:
@@ -35,14 +36,11 @@ SHEET_HEADER = [
     "Wynik", "Czas do entry", "Delta (TP1+TP2)", "DeltaTP1",
 ]
 
-# ── Prompt GPT-Relaxed (z sol_alert.py) ──────────────────────────────────────
+# ── Prompt GPT-Relaxed (dostosowany do backtestu — sentyment dostarczany) ────
 GPT_RELAXED_PROMPT = """Jesteś doświadczonym traderem kryptowalut, specjalizującym się w SOL/USDT na interwałach M15 i H1.
 
-Masz dostęp do internetu — użyj go, żeby pobrać:
-- Aktualne ceny BTC, ETH, SOL (USD)
-- Aktualny Fear & Greed Index (wartość 0–100 + etykieta)
-
-Otrzymasz też dane OHLCV: M15 (ostatnie 60 świec) i H1 (ostatnie 24 świece) dla SOL.
+Otrzymasz dane OHLCV: M15 (ostatnie 60 świec) i H1 (ostatnie 24 świece) dla SOL.
+Otrzymasz też dane sentymentu: ceny BTC i ETH oraz Fear & Greed Index.
 
 Twoje zadanie:
 1. Krótko oceń sentyment: BTC/ETH/SOL (24h zmiana, relatywna siła SOL), Fear & Greed.
@@ -135,8 +133,51 @@ def fetch_klines_paginated(symbol: str, interval: str, total: int, end_ts_s: int
     return deduped[-total:] if len(deduped) > total else deduped
 
 
-# ── GPT-Relaxed call (Responses API z web_search_preview) ────────────────────
-def call_gpt_relaxed_raw(candles_m15: list[dict], candles_h1: list[dict], current_price: float) -> dict | None:
+# ── Historyczny sentyment ────────────────────────────────────────────────────
+def fetch_fear_greed_history(days: int = 5) -> dict[str, dict]:
+    """Pobiera Fear & Greed Index z alternative.me. Zwraca {date_str: {value, classification}}."""
+    result: dict[str, dict] = {}
+    try:
+        r = requests.get(f"https://api.alternative.me/fng/?limit={days}&format=json", timeout=10)
+        r.raise_for_status()
+        for entry in r.json().get("data", []):
+            date_str = datetime.fromtimestamp(int(entry["timestamp"]), tz=timezone.utc).strftime("%Y-%m-%d")
+            result[date_str] = {
+                "value": int(entry["value"]),
+                "classification": entry["value_classification"],
+            }
+    except Exception as e:
+        print(f"[fng] Błąd: {e}")
+    return result
+
+
+def build_sentiment_line(signal_ts: int, btc_h1: list[dict], eth_h1: list[dict],
+                         fng_history: dict[str, dict]) -> str:
+    """Buduje linię sentymentu z historycznych danych dla danego timestamp."""
+    parts = []
+
+    # BTC cena w momencie sygnału
+    btc_at_signal = [c for c in btc_h1 if c["time"] <= signal_ts]
+    if btc_at_signal:
+        parts.append(f"BTC ${btc_at_signal[-1]['close']:,.0f}")
+
+    # ETH cena w momencie sygnału
+    eth_at_signal = [c for c in eth_h1 if c["time"] <= signal_ts]
+    if eth_at_signal:
+        parts.append(f"ETH ${eth_at_signal[-1]['close']:,.0f}")
+
+    # Fear & Greed dla dnia sygnału
+    signal_date = datetime.fromtimestamp(signal_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    fng = fng_history.get(signal_date)
+    if fng:
+        parts.append(f"Fear & Greed: {fng['value']}/100 ({fng['classification']})")
+
+    return " | ".join(parts) if parts else "brak danych sentymentu"
+
+
+# ── GPT-Relaxed call (chat.completions z dostarczonym sentymentem) ───────────
+def call_gpt_relaxed_raw(candles_m15: list[dict], candles_h1: list[dict],
+                         current_price: float, sentiment: str) -> dict | None:
     if not OPENAI_KEY:
         print("[gpt-r] Brak klucza OPENAI_API_KEY.")
         return None
@@ -150,21 +191,24 @@ def call_gpt_relaxed_raw(candles_m15: list[dict], candles_h1: list[dict], curren
         for c in candles_h1[-24:]
     )
     user_msg = (
-        f"Aktualna cena SOL z moich danych: ${current_price:.2f}\n\n"
+        f"Aktualna cena SOL z moich danych: ${current_price:.2f}\n"
+        f"Sentyment: {sentiment}\n\n"
         f"SOL M15 (ostatnie 60 swiec):\n{m15_csv}\n\n"
         f"SOL H1 (ostatnie 24 swiece):\n{h1_csv}"
     )
 
     try:
         client = openai.OpenAI(api_key=OPENAI_KEY)
-        response = client.responses.create(
+        response = client.chat.completions.create(
             model=GPT_MODEL,
-            tools=[{"type": "web_search_preview"}],
-            instructions=GPT_RELAXED_PROMPT,
-            input=user_msg,
-            max_output_tokens=2048,
+            max_tokens=2048,
+            timeout=GPT_TIMEOUT_S,
+            messages=[
+                {"role": "system", "content": GPT_RELAXED_PROMPT},
+                {"role": "user",   "content": user_msg},
+            ],
         )
-        text = response.output_text.strip()
+        text = response.choices[0].message.content.strip()
     except Exception as e:
         print(f"[gpt-r] Błąd API: {e}")
         return None
@@ -360,26 +404,41 @@ def run_backtest() -> None:
     print("=== GPT-Relaxed Backtest — start ===")
 
     now_ts = int(time.time())
-    # M15: 60 kontekst + 48*4 testowe + 24*4 outcome = 444 świec
-    # H1:  24 kontekst + 48 testowe + 24 outcome = 96 świec
-    print("Pobieranie świec M15 (450 szt)...")
+
+    # ── 1. Pobierz świece SOL ─────────────────────────────────────────────────
+    print("Pobieranie świec SOL M15 (450 szt)...")
     all_m15 = fetch_klines_paginated(SYMBOL, "15m", total=450, end_ts_s=now_ts)
     print(f"  Pobrano {len(all_m15)} świec M15 ({_ts_fmt(all_m15[0]['time'])} – {_ts_fmt(all_m15[-1]['time'])})")
 
-    print("Pobieranie świec H1 (120 szt)...")
+    print("Pobieranie świec SOL H1 (120 szt)...")
     all_h1 = fetch_klines_paginated(SYMBOL, "1h", total=120, end_ts_s=now_ts)
     print(f"  Pobrano {len(all_h1)} świec H1 ({_ts_fmt(all_h1[0]['time'])} – {_ts_fmt(all_h1[-1]['time'])})")
 
+    # ── 2. Pobierz dane sentymentu ───────────────────────────────────────────
+    print("Pobieranie świec BTC H1 (72 szt)...")
+    btc_h1 = fetch_klines_paginated("BTCUSDT", "1h", total=72, end_ts_s=now_ts)
+    print(f"  Pobrano {len(btc_h1)} świec BTC")
+
+    print("Pobieranie świec ETH H1 (72 szt)...")
+    eth_h1 = fetch_klines_paginated("ETHUSDT", "1h", total=72, end_ts_s=now_ts)
+    print(f"  Pobrano {len(eth_h1)} świec ETH")
+
+    print("Pobieranie Fear & Greed Index (5 dni)...")
+    fng_history = fetch_fear_greed_history(days=5)
+    print(f"  Pobrano F&G dla {len(fng_history)} dni: {list(fng_history.keys())}")
+
+    # ── 3. Wyznacz 48 punktów testowych ──────────────────────────────────────
     latest_full_hour = (now_ts // 3600) * 3600
     test_hours = [latest_full_hour - i * 3600 for i in range(48, 0, -1)]
 
     print("Łączenie z Google Sheets...")
     sheet = get_test_sheet()
-    print("Gotowe.")
+    print("Gotowe.\n")
 
+    # ── 4. Pętla testowa ─────────────────────────────────────────────────────
     for i, signal_ts in enumerate(test_hours):
         label = _ts_fmt(signal_ts)
-        print(f"\n[{i+1}/48] {label}")
+        print(f"[{i+1}/48] {label}")
 
         ctx_m15 = [c for c in all_m15 if c["time"] <= signal_ts - 900][-60:]
         ctx_h1  = [c for c in all_h1  if c["time"] <= signal_ts - 3600][-24:]
@@ -390,9 +449,10 @@ def run_backtest() -> None:
             continue
 
         current_price = ctx_m15[-1]["close"]
+        sentiment = build_sentiment_line(signal_ts, btc_h1, eth_h1, fng_history)
 
-        gpt_result = call_gpt_relaxed_raw(ctx_m15, ctx_h1, current_price)
-        time.sleep(2)  # web_search_preview jest wolniejszy
+        gpt_result = call_gpt_relaxed_raw(ctx_m15, ctx_h1, current_price, sentiment)
+        time.sleep(1)
 
         if gpt_result is None:
             print("  Brak odpowiedzi GPT-Relaxed.")
@@ -403,7 +463,7 @@ def run_backtest() -> None:
         bias       = gpt_result.get("bias", "neutral")
         bias_proc  = gpt_result.get("bias_proc", 0)
 
-        print(f"  send_alert={send_alert} | bias={bias} ({bias_proc}%)")
+        print(f"  send_alert={send_alert} | bias={bias} ({bias_proc}%) | sentiment: {sentiment}")
 
         if not send_alert or bias == "neutral":
             sheet.append_row([label, "null", bias_proc, "", "", "", "", "no entry", "", ""])
