@@ -1381,26 +1381,26 @@ def detect_market_regime(
             "pct_outside": 0, "details": details,
         }
 
-    # ── TREND: oparty na MA5 vs MA20 (H1) — stabilny, nie fluktuuje co 15min ──
-    # MA zmienia się płynnie — nie może dać sprzecznych sygnałów w ciągu godziny.
-    ma5  = sum(c["close"] for c in candles_h1[-5:])  / 5  if len(candles_h1) >= 5  else current_price
-    ma20 = sum(c["close"] for c in candles_h1[-20:]) / 20 if len(candles_h1) >= 20 else current_price
-    ma_diff_pct = (ma5 - ma20) / ma20 * 100  # ujemny = bearish, dodatni = bullish
+    # ── TREND: kierunek MA20(H1) + pozycja ceny vs MA20 ─────────────────────
+    # Slope MA20: porównaj MA20 teraz vs MA20 sprzed 5 świec H1.
+    # MA20 zmienia się płynnie — nie da sprzecznych sygnałów co 15min.
+    ma20      = sum(c["close"] for c in candles_h1[-20:])   / 20 if len(candles_h1) >= 20 else current_price
+    ma20_prev = sum(c["close"] for c in candles_h1[-25:-5]) / 20 if len(candles_h1) >= 25 else ma20
+    ma5       = sum(c["close"] for c in candles_h1[-5:])    / 5  if len(candles_h1) >= 5  else current_price
 
-    # Struktura H1 (24h): porównaj pierwszą i drugą połowę okresu
-    h1_24 = candles_h1[-24:] if len(candles_h1) >= 24 else candles_h1
-    mid = len(h1_24) // 2
-    fh, sh = h1_24[:mid], h1_24[mid:]
-    struct_bearish = max(c["high"] for c in sh) < max(c["high"] for c in fh)  # niższy szczyt
-    struct_bullish = min(c["low"]  for c in sh) > min(c["low"]  for c in fh)  # wyższy dołek
+    ma20_slope = (ma20 - ma20_prev) / ma20_prev * 100  # % zmiana MA20 w ciągu 5h
 
-    details = f"MA5={ma5:.1f} MA20={ma20:.1f} diff={ma_diff_pct:+.2f}%; 24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}%"
+    price_below_ma20 = current_price < ma20
+    price_above_ma20 = current_price > ma20
 
-    if ma_diff_pct < -0.5:  # MA5 wyraźnie poniżej MA20 → TREND_DOWN
+    details = (f"MA20={ma20:.1f}(slope={ma20_slope:+.2f}%) MA5={ma5:.1f} "
+               f"cena={'<' if price_below_ma20 else '>'}MA20; "
+               f"24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}%")
+
+    if ma20_slope < -0.3 and price_below_ma20:   # MA20 spada + cena poniżej → TREND_DOWN
         strength = min(10, imp_str
-                       + (2 if ma_diff_pct < -1.5 else 1)
-                       + (1 if current_price < ma20 else 0)
-                       + (1 if struct_bearish else 0))
+                       + (2 if ma20_slope < -0.8 else 1)
+                       + (1 if ma5 < ma20 else 0))          # MA5 też poniżej MA20 = wzmocnienie
         return {
             **base,
             "regime": "TREND_DOWN",
@@ -1408,11 +1408,10 @@ def detect_market_regime(
             "pct_outside": 0, "details": details,
         }
 
-    if ma_diff_pct > 0.5:   # MA5 wyraźnie powyżej MA20 → TREND_UP
+    if ma20_slope > 0.3 and price_above_ma20:    # MA20 rośnie + cena powyżej → TREND_UP
         strength = min(10, imp_str
-                       + (2 if ma_diff_pct > 1.5 else 1)
-                       + (1 if current_price > ma20 else 0)
-                       + (1 if struct_bullish else 0))
+                       + (2 if ma20_slope > 0.8 else 1)
+                       + (1 if ma5 > ma20 else 0))
         return {
             **base,
             "regime": "TREND_UP",
@@ -1420,7 +1419,7 @@ def detect_market_regime(
             "pct_outside": 0, "details": details,
         }
 
-    # ── RANGE: domyślny (MA5 ≈ MA20, brak kierunku) ──────────────────────────
+    # ── RANGE: MA20 płaska lub cena po przeciwnej stronie MA20 ───────────────
     return {
         **base,
         "regime": "RANGE",
