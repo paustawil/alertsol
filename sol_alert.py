@@ -2278,6 +2278,222 @@ def log_to_anulowane_grok(s: dict, result: str, entry_ts, exit_ts,
         return False
 
 
+KALKULATOR_HEADER = [
+    "ID", "Data alertu", "Model", "Typ", "Kierunek", "Score",
+    "W1", "SL", "TP1", "TP2", "RR",
+    "Entry faktyczne", "Wynik faktyczny", "PnL faktyczny($)",
+    "TP1only PnL($)", "TP1only PnL(%)",
+    "TP1+TP2 PnL($)", "TP1+TP2 PnL(%)",
+]
+
+
+def calc_pnl_scenarios(setup: dict, trade_usdt: float = 100.0, leverage: int = 20) -> dict | None:
+    """Oblicza PnL dla dwóch wariantów przy założeniu $trade_usdt * leverage dźwignia.
+
+    Wariant TP1only: całość pozycji zamykana na TP1.
+    Wariant TP1+TP2: połowa na TP1, połowa na TP2 (lub SL po TP1 gdy TP2 nie trafiony).
+
+    Zwraca słownik {tp1only_pnl, tp1only_pct, tp1tp2_pnl, tp1tp2_pct} lub None gdy brak danych.
+    """
+    result    = setup.get("result", "")
+    direction = setup.get("direction", "long")
+    entries   = setup.get("entries") or []
+    tps       = setup.get("tps") or []
+    sl        = setup.get("sl")
+    sl_after_tp1 = setup.get("sl_after_tp1")
+
+    if result in ("nie weszlo", "nieokreslone", "") or not result:
+        return None
+
+    tp1 = float(tps[0]) if tps else None
+    tp2 = float(tps[1]) if len(tps) > 1 else None
+
+    # Cena wejścia: preferuj faktyczną avg_entry, fallback na W1
+    avg_entry = setup.get("avg_entry")
+    if avg_entry is not None:
+        entry = float(avg_entry)
+    elif entries:
+        entry = float(entries[0])
+    else:
+        return None
+
+    if entry <= 0 or tp1 is None or sl is None:
+        return None
+
+    sign     = 1 if direction == "long" else -1
+    sl_f     = float(sl)
+    sl_tp1_f = float(sl_after_tp1) if sl_after_tp1 is not None else entry
+
+    # Qty zaokrąglone do 0.1 SOL (standard Bitget)
+    full_qty = max(math.floor((trade_usdt * leverage / entry) / 0.1) * 0.1, 0.1)
+    half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+
+    tp1_reached = result in ("TP1", "TP2", "TP1+BE", "TP1+SL")
+
+    # ── TP1only ──────────────────────────────────────────────────────────────
+    if tp1_reached:
+        tp1only_pnl = round(sign * full_qty * (tp1 - entry), 2)
+    else:  # SL
+        tp1only_pnl = round(sign * full_qty * (sl_f - entry), 2)
+    tp1only_pct = round(tp1only_pnl / trade_usdt * 100, 1)
+
+    # ── TP1+TP2 ──────────────────────────────────────────────────────────────
+    if result == "TP2" and tp2 is not None:
+        # Połowa na TP1, połowa na TP2
+        tp1tp2_pnl = round(
+            sign * half_qty * (tp1 - entry) + sign * half_qty * (tp2 - entry), 2
+        )
+    elif result in ("TP1+BE", "TP1+SL"):
+        # Połowa na TP1, połowa na sl_after_tp1
+        tp1tp2_pnl = round(
+            sign * half_qty * (tp1 - entry) + sign * half_qty * (sl_tp1_f - entry), 2
+        )
+    elif result == "TP1":
+        # Brak TP2 w setupie → całość na TP1 (identycznie jak TP1only)
+        tp1tp2_pnl = round(sign * full_qty * (tp1 - entry), 2)
+    else:  # SL przed TP1
+        tp1tp2_pnl = round(sign * full_qty * (sl_f - entry), 2)
+    tp1tp2_pct = round(tp1tp2_pnl / trade_usdt * 100, 1)
+
+    return {
+        "tp1only_pnl": tp1only_pnl,
+        "tp1only_pct": tp1only_pct,
+        "tp1tp2_pnl":  tp1tp2_pnl,
+        "tp1tp2_pct":  tp1tp2_pct,
+    }
+
+
+def export_profit_calculator_to_sheets(trade_usdt: float = 100.0, leverage: int = 20) -> bool:
+    """Eksportuje kalkulator zysku/straty do nowego arkusza w Google Sheets.
+
+    Nazwa arkusza tworzona automatycznie z zakresu dat alertów:
+    'Kalkulator_YYYY-MM-DD_YYYY-MM-DD'
+
+    Dla każdego zamkniętego setupu oblicza oba warianty:
+    - TP1only: całość pozycji zamykana na TP1
+    - TP1+TP2: połowa na TP1, połowa na TP2
+    """
+    try:
+        setups = db.get_all_resolved_for_calc()
+        if not setups:
+            print("[kalkulator] Brak zamkniętych setupów do eksportu.")
+            return False
+
+        # Wyznacz zakres dat z alert_time
+        dates = []
+        for s in setups:
+            at = s.get("alert_time")
+            if at:
+                if isinstance(at, str):
+                    at = datetime.fromisoformat(at)
+                dates.append(at)
+        if dates:
+            date_from = min(dates).astimezone(TZ).strftime("%Y-%m-%d")
+            date_to   = max(dates).astimezone(TZ).strftime("%Y-%m-%d")
+        else:
+            today = datetime.now(TZ).strftime("%Y-%m-%d")
+            date_from = date_to = today
+
+        sheet_name = f"Kalkulator_{date_from}_{date_to}"
+
+        # Połącz z Google Sheets
+        creds  = Credentials.from_service_account_info(
+            json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        client = gspread.authorize(creds)
+        wb     = client.open_by_key(SHEET_ID)
+
+        # Utwórz lub nadpisz arkusz kalkulatora
+        try:
+            sh = wb.worksheet(sheet_name)
+            sh.clear()
+        except gspread.WorksheetNotFound:
+            sh = wb.add_worksheet(sheet_name, rows=len(setups) + 10, cols=len(KALKULATOR_HEADER) + 2)
+
+        sh.append_row(KALKULATOR_HEADER)
+
+        # Akumulatory sum
+        sum_faktyczny = 0.0
+        sum_tp1only   = 0.0
+        sum_tp1tp2    = 0.0
+        n_calc        = 0
+
+        rows = []
+        for s in setups:
+            at = s.get("alert_time")
+            if isinstance(at, str):
+                at = datetime.fromisoformat(at)
+            alert_dt  = at.astimezone(TZ).strftime("%Y-%m-%d %H:%M") if at else ""
+            entries   = s.get("entries") or []
+            tps       = s.get("tps") or []
+            avg_entry = s.get("avg_entry")
+            pnl_real  = s.get("pnl_usd")
+
+            scenarios = calc_pnl_scenarios(s, trade_usdt=trade_usdt, leverage=leverage)
+
+            if scenarios:
+                n_calc       += 1
+                sum_tp1only  += scenarios["tp1only_pnl"]
+                sum_tp1tp2   += scenarios["tp1tp2_pnl"]
+                tp1only_pnl_v = f"{scenarios['tp1only_pnl']:+.2f}"
+                tp1only_pct_v = f"{scenarios['tp1only_pct']:+.1f}%"
+                tp1tp2_pnl_v  = f"{scenarios['tp1tp2_pnl']:+.2f}"
+                tp1tp2_pct_v  = f"{scenarios['tp1tp2_pct']:+.1f}%"
+            else:
+                tp1only_pnl_v = tp1only_pct_v = tp1tp2_pnl_v = tp1tp2_pct_v = ""
+
+            if pnl_real is not None:
+                sum_faktyczny += float(pnl_real)
+                pnl_real_v = f"{float(pnl_real):+.2f}"
+            else:
+                pnl_real_v = ""
+
+            rows.append([
+                s.get("setup_id", ""),
+                alert_dt,
+                s.get("model", ""),
+                s.get("type", ""),
+                s.get("direction", ""),
+                s.get("score", ""),
+                entries[0] if entries else "",
+                s.get("sl", ""),
+                tps[0] if tps else "",
+                tps[1] if len(tps) > 1 else "",
+                s.get("rr", ""),
+                round(float(avg_entry), 2) if avg_entry else "",
+                s.get("result", ""),
+                pnl_real_v,
+                tp1only_pnl_v, tp1only_pct_v,
+                tp1tp2_pnl_v,  tp1tp2_pct_v,
+            ])
+
+        # Zapisz wszystkie wiersze naraz (batch)
+        if rows:
+            sh.append_rows(rows, value_input_option="USER_ENTERED")
+
+        # Wiersz podsumowania
+        summary = [
+            "", "", "", "", "SUMA", f"n={n_calc}",
+            "", "", "", "", "",
+            "", "",
+            f"{sum_faktyczny:+.2f}",
+            f"{sum_tp1only:+.2f}", "",
+            f"{sum_tp1tp2:+.2f}", "",
+        ]
+        sh.append_row(summary, value_input_option="USER_ENTERED")
+
+        print(
+            f"[kalkulator] Eksport OK → '{sheet_name}' | {n_calc} setupów | "
+            f"TP1only: {sum_tp1only:+.2f}$ | TP1+TP2: {sum_tp1tp2:+.2f}$"
+        )
+        return True
+
+    except Exception as e:
+        print(f"[kalkulator] Błąd eksportu: {e}")
+        return False
+
+
 # ── Walidacja setupu ─────────────────────────────────────────────────────────
 MIN_TP1_DISTANCE = 0.50   # minimalna odleglosc W1-TP1 w USD
 

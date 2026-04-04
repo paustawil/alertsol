@@ -98,6 +98,15 @@ def run_sheets_export():
         log.exception("[sheets-export] Błąd ogólny")
 
 
+def run_profit_calculator_export():
+    """Odświeża arkusz kalkulatora zysku/straty w Google Sheets."""
+    try:
+        import sol_alert
+        sol_alert.export_profit_calculator_to_sheets()
+    except Exception:
+        log.exception("[kalkulator] Błąd eksportu kalkulatora")
+
+
 # ── FastAPI dashboard ──────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -146,8 +155,18 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
 
+    # Kalkulator zysku/straty — co godzinę (nadpisuje arkusz aktualnymi danymi)
+    scheduler.add_job(
+        run_profit_calculator_export,
+        "interval",
+        hours=1,
+        id="profit_calculator",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
-    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 15min | sheets: co 5min")
+    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 15min | sheets: co 5min | kalkulator: co 1h")
 
     yield
 
@@ -1257,6 +1276,14 @@ def admin_run_sheets_export():
         "failed": exported_fail,
         "errors": errors,
     }
+
+
+@app.post("/admin/run-profit-calculator")
+def admin_run_profit_calculator():
+    """Uruchamia kalkulator zysku/straty i eksportuje wyniki do Google Sheets."""
+    import sol_alert
+    ok = sol_alert.export_profit_calculator_to_sheets()
+    return {"ok": ok}
 
 
 @app.get("/admin/test-candles")
