@@ -701,8 +701,10 @@ def _sync_inner():
                     continue
 
                 if sl_status == "cancelled":
-                    # SL anulowany ręcznie — pozycja zamknięta manualnie
-                    log.warning(f"[exchange] {label}: SL anulowany ręcznie — zwalniam slot i zamykam setup")
+                    # SL anulowany — może przez api_cancel_setup (ręczna anulacja z panelu)
+                    # lub przez użytkownika bezpośrednio na Bitget.
+                    # Sprawdź czy setup jest już resolved w DB żeby nie nadpisać wyniku.
+                    log.warning(f"[exchange] {label}: SL anulowany — sprawdzam czy setup już zamknięty w DB")
                     if tp1_oid:
                         _cancel_order(client, tp1_oid, "profit_plan")
                     s["exchange_sl_oid"]  = None
@@ -711,7 +713,12 @@ def _sync_inner():
                     s["exchange_done"]    = True
                     modified = True
                     if sid and sid != "?":
-                        db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
+                        # Odczytaj aktualny stan z DB — może być już "anulowany" przez panel
+                        current = db.get_setup_by_id(int(sid))
+                        if not (current and current.get("resolved")):
+                            db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
+                        else:
+                            log.info(f"[exchange] {label}: setup już resolved={current.get('result')} — pomijam resolve")
                     continue
 
             # Sprawdź TP1 (zamyka 100% pozycji)

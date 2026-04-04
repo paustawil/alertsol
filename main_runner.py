@@ -1715,123 +1715,147 @@ def api_cancel_setup(setup_id: int):
     """Anuluje setup:
     - czekający na wejście → anuluje plan order
     - w pozycji → anuluje TP1/TP2/SL i zamyka część pozycji tego setupu (market)
-    Zawsze zamyka setup w DB jako 'anulowany'."""
+    Zawsze zamyka setup w DB jako 'anulowany'.
+
+    Blokuje sync() przez _sync_lock żeby uniknąć wyścigu wątków:
+    sync() mógłby w tym samym czasie próbować obsłużyć ten setup i nadpisać wynik.
+    """
     import exchange_trader as et
 
-    with db._conn() as conn:
-        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
-            row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
-
-    s = db._row_to_dict(row)
-    if s.get("resolved"):
-        raise HTTPException(status_code=400, detail="Setup jest już zamknięty")
-
-    client = et._client()
-    cancelled_on_bitget = []
-    failed_on_bitget = []
-
-    plan_oid  = s.get("exchange_plan_oid")
-    tp1_oid   = s.get("exchange_tp1_oid")
-    tp2_oid   = s.get("exchange_tp2_oid")
-    sl_oid    = s.get("exchange_sl_oid")
-    pos_open  = s.get("exchange_position_opened", False)
-    tp1_done  = s.get("exchange_tp1_done", False)
-    direction = s.get("direction", "long")
-
-    # Qty do zamknięcia: jeśli TP1 już trafiony — połowa (SL jest już na half_qty),
-    # w przeciwnym razie — pełna pozycja setupu.
+    # ── Blokada mutex — czekamy aż sync() skończy bieżący cykl ───────────────
+    lock_acquired = et._sync_lock.acquire(blocking=True, timeout=10)
     try:
-        full_qty = float(s["exchange_qty_full"]) if s.get("exchange_qty_full") else None
-        half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
-    except (ValueError, TypeError):
-        full_qty = half_qty = None
-    close_qty = (half_qty if tp1_done and half_qty else full_qty) if pos_open else None
+        with db._conn() as conn:
+            with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+                row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
 
-    close_price = None  # przybliżona cena wyjścia do PnL
+        s = db._row_to_dict(row)
+        if s.get("resolved"):
+            raise HTTPException(status_code=400, detail="Setup jest już zamknięty")
 
-    if client:
-        # ── Setup czekający na wejście — anuluj plan order ─────────────────────
-        if plan_oid and not pos_open:
-            try:
-                resp = client.post("/api/v2/mix/order/cancel-plan-order", {
-                    "symbol":      et.SYMBOL,
-                    "productType": et.PRODUCT_TYPE,
-                    "orderId":     plan_oid,
-                    "planType":    "normal_plan",
-                })
-                if resp.get("code") == "00000":
-                    cancelled_on_bitget.append("plan_order")
-                else:
-                    failed_on_bitget.append(f"plan_order:{resp.get('msg')}")
-            except Exception as e:
-                failed_on_bitget.append(f"plan_order:{e}")
+        client = et._client()
+        cancelled_on_bitget = []
+        failed_on_bitget = []
 
-        # ── Pozycja otwarta — anuluj TPSL, potem zamknij rynkowo ──────────────
-        if pos_open:
-            for label, oid, plan_type in [
-                ("TP1", tp1_oid, "profit_plan"),
-                ("TP2", tp2_oid, "profit_plan"),
-                ("SL",  sl_oid,  "loss_plan"),
-            ]:
-                if oid:
-                    try:
-                        resp = client.post("/api/v2/mix/order/cancel-plan-order", {
-                            "symbol":      et.SYMBOL,
-                            "productType": et.PRODUCT_TYPE,
-                            "orderId":     oid,
-                            "planType":    plan_type,
-                        })
-                        if resp.get("code") == "00000":
-                            cancelled_on_bitget.append(label)
-                        else:
-                            failed_on_bitget.append(f"{label}:{resp.get('msg')}")
-                    except Exception as e:
-                        failed_on_bitget.append(f"{label}:{e}")
+        plan_oid  = s.get("exchange_plan_oid")
+        tp1_oid   = s.get("exchange_tp1_oid")
+        tp2_oid   = s.get("exchange_tp2_oid")
+        sl_oid    = s.get("exchange_sl_oid")
+        pos_open  = s.get("exchange_position_opened", False)
+        tp1_done  = s.get("exchange_tp1_done", False)
+        direction = s.get("direction", "long")
 
-            # Pobierz bieżącą cenę mark przed market close (do szacowania PnL)
-            try:
-                ticker = client.get("/api/v2/mix/market/ticker", {
-                    "symbol":      et.SYMBOL,
-                    "productType": et.PRODUCT_TYPE,
-                })
-                if ticker.get("code") == "00000":
-                    close_price = float((ticker.get("data") or [{}])[0].get("markPrice") or 0) or None
-            except Exception:
-                pass
+        # Qty do zamknięcia: jeśli TP1 już trafiony — połowa (SL jest już na half_qty),
+        # w przeciwnym razie — pełna pozycja setupu.
+        try:
+            full_qty = float(s["exchange_qty_full"]) if s.get("exchange_qty_full") else None
+            half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
+        except (ValueError, TypeError):
+            full_qty = half_qty = None
+        close_qty = (half_qty if tp1_done and half_qty else full_qty) if pos_open else None
 
-            # Market close order — zmniejsza pozycję o qty tego setupu
-            if close_qty and close_qty > 0:
-                close_side = "sell" if direction == "long" else "buy"
+        close_price = None  # przybliżona cena wyjścia do PnL
+
+        if client:
+            # ── Anuluj plan order jeśli istnieje (niezależnie od pos_open) ─────
+            if plan_oid and plan_oid != "PENDING":
                 try:
-                    resp = client.post("/api/v2/mix/order/place-order", {
+                    resp = client.post("/api/v2/mix/order/cancel-plan-order", {
                         "symbol":      et.SYMBOL,
                         "productType": et.PRODUCT_TYPE,
-                        "marginCoin":  et.MARGIN_COIN,
-                        "side":        close_side,
-                        "tradeSide":   "close",
-                        "posSide":     direction,
-                        "orderType":   "market",
-                        "size":        et._fmt_qty(close_qty),
+                        "orderId":     plan_oid,
+                        "planType":    "normal_plan",
                     })
                     if resp.get("code") == "00000":
-                        cancelled_on_bitget.append(f"market_close({et._fmt_qty(close_qty)} SOL)")
+                        cancelled_on_bitget.append("plan_order")
                     else:
-                        failed_on_bitget.append(f"market_close:{resp.get('msg')}")
+                        # Może być już wykonany — nie traktuj tego jako błąd krytyczny
+                        failed_on_bitget.append(f"plan_order:{resp.get('msg')}")
                 except Exception as e:
-                    failed_on_bitget.append(f"market_close:{e}")
+                    failed_on_bitget.append(f"plan_order:{e}")
 
-    # Oblicz przybliżone PnL jeśli mamy cenę zamknięcia
-    pnl_usd = None
-    avg_entry = float(s["avg_entry"]) if s.get("avg_entry") else None
-    if close_price and avg_entry and close_qty:
-        sign    = 1 if direction == "long" else -1
-        pnl_usd = round(sign * close_qty * (close_price - avg_entry), 2)
+            # ── Weryfikacja faktycznej pozycji na Bitget ───────────────────────
+            # DB może nie mieć aktualnego stanu jeśli sync() nie zdążył zaktualizować
+            # (np. plan order właśnie się wykonał między cyklami sync).
+            if not pos_open:
+                actual_qty = et._get_open_position_size(client, direction)
+                if actual_qty > 0:
+                    # Pozycja istnieje na Bitget mimo że DB mówi że nie — nadpisujemy
+                    pos_open  = True
+                    close_qty = actual_qty  # użyj rzeczywistej wielkości
+                    failed_on_bitget.append(f"DB_mismatch:pos_open=False ale Bitget={actual_qty}SOL")
 
-    db.resolve_setup(setup_id, "anulowany", avg_entry, close_price, pnl_usd, None)
-    db.update_setup(setup_id, exchange_done=True, cancel_reason="manual")
+            # ── Pozycja otwarta — anuluj TPSL, potem zamknij rynkowo ──────────
+            if pos_open:
+                # Anuluj znane TPSL order IDs z DB
+                for label, oid, plan_type in [
+                    ("TP1", tp1_oid, "profit_plan"),
+                    ("TP2", tp2_oid, "profit_plan"),
+                    ("SL",  sl_oid,  "loss_plan"),
+                ]:
+                    if oid:
+                        try:
+                            resp = client.post("/api/v2/mix/order/cancel-plan-order", {
+                                "symbol":      et.SYMBOL,
+                                "productType": et.PRODUCT_TYPE,
+                                "orderId":     oid,
+                                "planType":    plan_type,
+                            })
+                            if resp.get("code") == "00000":
+                                cancelled_on_bitget.append(label)
+                            else:
+                                failed_on_bitget.append(f"{label}:{resp.get('msg')}")
+                        except Exception as e:
+                            failed_on_bitget.append(f"{label}:{e}")
+
+                # Pobierz bieżącą cenę mark przed market close (do szacowania PnL)
+                try:
+                    ticker = client.get("/api/v2/mix/market/ticker", {
+                        "symbol":      et.SYMBOL,
+                        "productType": et.PRODUCT_TYPE,
+                    })
+                    if ticker.get("code") == "00000":
+                        close_price = float((ticker.get("data") or [{}])[0].get("markPrice") or 0) or None
+                except Exception:
+                    pass
+
+                # Market close order — zmniejsza pozycję o qty tego setupu
+                if close_qty and close_qty > 0:
+                    close_side = "sell" if direction == "long" else "buy"
+                    try:
+                        resp = client.post("/api/v2/mix/order/place-order", {
+                            "symbol":      et.SYMBOL,
+                            "productType": et.PRODUCT_TYPE,
+                            "marginCoin":  et.MARGIN_COIN,
+                            "side":        close_side,
+                            "tradeSide":   "close",
+                            "posSide":     direction,
+                            "orderType":   "market",
+                            "size":        et._fmt_qty(close_qty),
+                        })
+                        if resp.get("code") == "00000":
+                            cancelled_on_bitget.append(f"market_close({et._fmt_qty(close_qty)} SOL)")
+                        else:
+                            failed_on_bitget.append(f"market_close:{resp.get('msg')}")
+                    except Exception as e:
+                        failed_on_bitget.append(f"market_close:{e}")
+
+        # Oblicz przybliżone PnL jeśli mamy cenę zamknięcia
+        pnl_usd = None
+        avg_entry = float(s["avg_entry"]) if s.get("avg_entry") else None
+        if close_price and avg_entry and close_qty:
+            sign    = 1 if direction == "long" else -1
+            pnl_usd = round(sign * close_qty * (close_price - avg_entry), 2)
+
+        db.resolve_setup(setup_id, "anulowany", avg_entry, close_price, pnl_usd, None)
+        db.update_setup(setup_id, exchange_done=True, cancel_reason="manual")
+
+    finally:
+        if lock_acquired:
+            et._sync_lock.release()
 
     return {
         "ok":                  True,

@@ -112,6 +112,15 @@ def get_active_setups() -> list[dict]:
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
+def get_setup_by_id(setup_id: int) -> dict | None:
+    """Zwraca pojedynczy setup po ID (resolved lub nie). None jeśli nie istnieje."""
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT setup_id, resolved, result FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
 def insert_setup(row: dict) -> int | None:
     """
     Wstawia nowy setup do bazy. Zwraca nowo nadany setup_id (SERIAL).
