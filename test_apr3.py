@@ -323,7 +323,7 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
 
 # ── Ewaluacja setupu na przyszłych świecach M15 ───────────────────────────────
 
-ENTRY_WINDOW_H = 4   # max czas oczekiwania na wejście (jak w produkcji)
+ENTRY_WINDOW_H = 24  # max czas oczekiwania na wejście
 TRADE_WINDOW_H = 24  # max czas trwania pozycji
 
 # Próg duplikatu (jak w produkcji: ABS(W_nowy - W_aktywny) < 0.5)
