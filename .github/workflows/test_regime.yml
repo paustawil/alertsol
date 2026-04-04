@@ -15,6 +15,10 @@ on:
         description: 'Deduplikacja setupów (pomiń jeśli aktywny podobny)'
         type: boolean
         default: false
+      dedup_threshold:
+        description: 'Próg deduplikacji w $ (domyślnie 0.5)'
+        type: string
+        default: '0.5'
 
 jobs:
   test:
@@ -38,5 +42,5 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
           DEDUP=""
-          [ "${{ inputs.dedup }}" = "true" ] && DEDUP="--dedup"
+          [ "${{ inputs.dedup }}" = "true" ] && DEDUP="--dedup --dedup-threshold ${{ inputs.dedup_threshold }}"
           python test_apr3.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}' $DEDUP

@@ -465,8 +465,11 @@ def main():
     parser.add_argument("--from",  dest="dt_from", default="2026-03-01 00:00")
     parser.add_argument("--to",    dest="dt_to",   default="2026-04-04 00:00")
     parser.add_argument("--dedup", action="store_true",
-                        help=f"Pomiń setup jeśli aktywny setup tego samego kierunku "
-                             f"i W w odległości <${DEDUP_THRESHOLD} już istnieje")
+                        help="Pomiń setup jeśli aktywny setup tego samego kierunku "
+                             "i W w odległości < progu już istnieje")
+    parser.add_argument("--dedup-threshold", dest="dedup_threshold", type=float,
+                        default=DEDUP_THRESHOLD,
+                        help=f"Próg deduplikacji w $ (domyślnie {DEDUP_THRESHOLD})")
     args = parser.parse_args()
 
     from_ts = _parse_dt(args.dt_from)
@@ -533,7 +536,7 @@ def main():
         for s in new_setups:
             # Dedup: pomiń jeśli aktywny setup tego samego kierunku i bliskiego W
             if args.dedup and any(
-                a["direction"] == s["direction"] and abs(a["w"] - s["w"]) < DEDUP_THRESHOLD
+                a["direction"] == s["direction"] and abs(a["w"] - s["w"]) < args.dedup_threshold
                 for a in active_for_dedup
             ):
                 continue
