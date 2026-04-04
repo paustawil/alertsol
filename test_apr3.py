@@ -460,8 +460,8 @@ def export_to_sheets(sheet_name: str, rows: list[list], stats: dict) -> None:
             "SUMA", "", "", "", f"n={n}",
             "", "", "", "", "", "", "",
             f"TP1={tot['tp1']} TP2={tot['tp2']} SL={tot['sl']} brak={tot['no']}",
-            f"{tot['pnl_tp1only']:+.2f}", "",
-            f"{tot['pnl_tp1tp2']:+.2f}", "",
+            round(tot["pnl_tp1only"], 2), "",
+            round(tot["pnl_tp1tp2"],  2), "",
         ]
         sh.append_row(summary, value_input_option="USER_ENTERED")
 
@@ -545,10 +545,9 @@ def main():
             st["pnl_tp1only"] += pnl_tp1only
             st["pnl_tp1tp2"]  += pnl_tp1tp2
 
-            tp1only_str = f"{pnl_tp1only:+.2f}" if res not in ("no_entry", "open") else "—"
-            tp1tp2_str  = f"{pnl_tp1tp2:+.2f}"  if res not in ("no_entry", "open") else "—"
-            tp1only_pct = f"{pnl_tp1only / TRADE_USDT * 100:+.1f}%" if res not in ("no_entry", "open") else "—"
-            tp1tp2_pct  = f"{pnl_tp1tp2  / TRADE_USDT * 100:+.1f}%" if res not in ("no_entry", "open") else "—"
+            has_result = res not in ("no_entry", "open")
+            tp1only_str = f"{pnl_tp1only:+.2f}" if has_result else "—"
+            tp1tp2_str  = f"{pnl_tp1tp2:+.2f}"  if has_result else "—"
 
             short_type = (s["type"]
                           .replace("trend_", "t_").replace("impulse_", "imp_").replace("range_", "r_")
@@ -571,8 +570,10 @@ def main():
                 s.get("tp2", ""),
                 s.get("rr", ""),
                 res,
-                tp1only_str, tp1only_pct,
-                tp1tp2_str,  tp1tp2_pct,
+                round(pnl_tp1only, 2) if has_result else "",
+                round(pnl_tp1only / TRADE_USDT * 100, 1) if has_result else "",
+                round(pnl_tp1tp2,  2) if has_result else "",
+                round(pnl_tp1tp2  / TRADE_USDT * 100, 1) if has_result else "",
             ])
 
     # Uzupełnij RAZEM
