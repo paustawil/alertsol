@@ -433,6 +433,31 @@ def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24):
     return "TP1+open", round(pnl_half1, 2)
 
 
+def calc_pnl(setup: dict, result: str):
+    """Zwraca (pnl_tp1, pnl_split) dla danego wyniku.
+    pnl_tp1:   zamknięcie całości na TP1
+    pnl_split: 50% na TP1, SL na BE, 50% na TP2 (lub BE jeśli TP2 nie trafiony)
+    """
+    w   = setup["w"]
+    sl  = setup["sl"]
+    tp1 = setup["tp1"]
+    tp2 = setup["tp2"]
+
+    if result == "SL":
+        loss = -abs(sl - w)
+        return round(loss, 2), round(loss, 2)
+
+    if result in ("TP1+TP2", "TP1+BE", "TP1+open", "TP1 ✓"):
+        pnl_tp1   = round(abs(w - tp1), 2)
+        if result == "TP1+TP2":
+            pnl_split = round(0.5 * abs(w - tp1) + 0.5 * abs(w - tp2), 2)
+        else:  # TP1+BE lub TP1+open — druga połowa wychodzi na BE
+            pnl_split = round(0.5 * abs(w - tp1), 2)
+        return pnl_tp1, pnl_split
+
+    return 0.0, 0.0
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def _parse_dt(s: str) -> int:
@@ -517,19 +542,21 @@ def main():
             else:             st["no"] += 1
             st["pnl"] += p
             # Extended ewaluacja dla Sheets
-            ext_res, ext_pnl = evaluate_extended(s, future)
+            ext_res, _ = evaluate_extended(s, future)
+            pnl_tp1, pnl_split = calc_pnl(s, ext_res)
             sheet_rows.append({
-                "ts":      datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
-                "type":    s["type"],
-                "dir":     s["direction"],
-                "regime":  new_r,
-                "w":       s["w"],
-                "sl":      s["sl"],
-                "tp1":     s["tp1"],
-                "tp2":     s["tp2"],
-                "rr":      s["rr"],
-                "wynik":   ext_res,
-                "pnl":     ext_pnl,
+                "ts":        datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "type":      s["type"],
+                "dir":       s["direction"],
+                "regime":    new_r,
+                "w":         s["w"],
+                "sl":        s["sl"],
+                "tp1":       s["tp1"],
+                "tp2":       s["tp2"],
+                "rr":        s["rr"],
+                "wynik":     ext_res,
+                "pnl_tp1":   pnl_tp1,
+                "pnl_split": pnl_split,
             })
 
         # Skrócone nazwy setupów do wyświetlenia
@@ -599,20 +626,20 @@ def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict]):
         HEADER = [
             "Timestamp", "Typ setupu", "Kierunek", "Reżim",
             "W", "SL", "TP1", "TP2", "RR",
-            "Wynik", "P&L pkt",
+            "Wynik", "P&L TP1", "P&L TP1+TP2",
         ]
 
         try:
             sh = wb.worksheet(sheet_name)
             sh.clear()
         except gspread.WorksheetNotFound:
-            sh = wb.add_worksheet(sheet_name, rows=len(rows) + 10, cols=12)
+            sh = wb.add_worksheet(sheet_name, rows=len(rows) + 10, cols=13)
 
         # Batch update — szybciej niż append_row w pętli
         data = [HEADER] + [
             [r["ts"], r["type"], r["dir"], r["regime"],
              r["w"], r["sl"], r["tp1"], r["tp2"], r["rr"],
-             r["wynik"], r["pnl"]]
+             r["wynik"], r["pnl_tp1"], r["pnl_split"]]
             for r in rows
         ]
         sh.update("A1", data)
