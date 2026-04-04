@@ -9,6 +9,8 @@ Uruchomienie:
 """
 
 import argparse
+import json
+import os
 import requests
 from datetime import datetime, timezone
 
@@ -481,6 +483,70 @@ def main():
     n_n = tot_new["tp"] + tot_new["sl"] + tot_new["no"]
     print(f"{'RAZEM':<30}  {tot_old['tp']:>4} {tot_old['sl']:>4} {tot_old['no']:>4} {n_o:>6} {tot_old['pnl']:>+8.2f}  "
           f"{tot_new['tp']:>4} {tot_new['sl']:>4} {tot_new['no']:>4} {n_n:>6} {tot_new['pnl']:>+8.2f}")
+
+    # ── Zapis do Google Sheets ────────────────────────────────────────────────
+    _write_to_sheets(args.dt_from, args.dt_to, stats, tot_old, tot_new)
+
+
+def _write_to_sheets(dt_from: str, dt_to: str, stats: dict, tot_old: dict, tot_new: dict):
+    creds_json = os.getenv("GOOGLE_CREDENTIALS", "")
+    if not creds_json:
+        print("Brak GOOGLE_CREDENTIALS — pomijam zapis do Sheets")
+        return
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        creds  = Credentials.from_service_account_info(
+            json.loads(creds_json),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        client = gspread.authorize(creds)
+        SHEET_ID = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
+        wb = client.open_by_key(SHEET_ID)
+
+        # Nazwa arkusza: "Backtest_Regime 2026-03-01–2026-04-04"
+        d_from = dt_from[:10]
+        d_to   = dt_to[:10]
+        sheet_name = f"Backtest_Regime {d_from}–{d_to}"
+
+        HEADER = [
+            "Typ setupu",
+            "STARY TP1", "STARY SL", "STARY brak", "STARY setupy", "STARY P&L",
+            "NOWY TP1",  "NOWY SL",  "NOWY brak",  "NOWY setupy",  "NOWY P&L",
+        ]
+
+        try:
+            sh = wb.worksheet(sheet_name)
+            sh.clear()
+        except gspread.WorksheetNotFound:
+            sh = wb.add_worksheet(sheet_name, rows=20, cols=12)
+
+        sh.append_row(HEADER)
+
+        for t in ALL_TYPES:
+            o = stats[t]["old"]
+            n = stats[t]["new"]
+            n_o = o["tp"] + o["sl"] + o["no"]
+            n_n = n["tp"] + n["sl"] + n["no"]
+            sh.append_row([
+                t,
+                o["tp"], o["sl"], o["no"], n_o, round(o["pnl"], 2),
+                n["tp"], n["sl"], n["no"], n_n, round(n["pnl"], 2),
+            ])
+
+        n_o = tot_old["tp"] + tot_old["sl"] + tot_old["no"]
+        n_n = tot_new["tp"] + tot_new["sl"] + tot_new["no"]
+        sh.append_row([
+            "RAZEM",
+            tot_old["tp"], tot_old["sl"], tot_old["no"], n_o, round(tot_old["pnl"], 2),
+            tot_new["tp"], tot_new["sl"], tot_new["no"], n_n, round(tot_new["pnl"], 2),
+        ])
+
+        print(f"\nZapisano do Sheets: '{sheet_name}'")
+
+    except Exception as e:
+        print(f"Błąd zapisu do Sheets: {e}")
 
 
 if __name__ == "__main__":
