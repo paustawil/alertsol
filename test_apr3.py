@@ -323,53 +323,88 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
 
 # ── Ewaluacja setupu na przyszłych świecach M15 ───────────────────────────────
 
-def evaluate(setup: dict, future_m15: list[dict], window_h: int = 24) -> str:
-    """Zwraca: 'TP2', 'TP1', 'SL', 'no_entry' lub 'open'."""
+ENTRY_WINDOW_H = 4   # max czas oczekiwania na wejście (jak w produkcji)
+TRADE_WINDOW_H = 24  # max czas trwania pozycji
+
+# Próg duplikatu (jak w produkcji: ABS(W_nowy - W_aktywny) < 0.5)
+DEDUP_THRESHOLD = 0.5
+
+
+def evaluate(setup: dict, future_m15: list[dict]) -> tuple[str, int | None]:
+    """Ewaluuje setup na przyszłych świecach.
+
+    Symuluje zachowanie produkcyjne:
+    - Szuka wejścia przez max ENTRY_WINDOW_H
+    - Po TP1: przesuwa SL do W (breakeven) — symulacja sl_after_tp1
+    - Monitoruje przez max TRADE_WINDOW_H
+
+    Wyniki:
+      'TP2'    — TP1 potem TP2
+      'TP1+W'  — TP1 potem SL trafił W (breakeven)
+      'TP1'    — TP1 trafiony, brak TP2 w setupie
+      'SL'     — SL przed TP1
+      'no_entry' — brak wejścia w oknie ENTRY_WINDOW_H
+      'open'   — nie rozwiązany w oknie TRADE_WINDOW_H
+
+    Zwraca (wynik, timestamp_rozwiązania).
+    """
     if not setup or not future_m15:
-        return "-"
+        return "-", None
+
     w, sl, tp1 = setup["w"], setup["sl"], setup["tp1"]
     tp2 = setup.get("tp2")
-    direction = setup.get("direction", "short")
-    window_s = window_h * 3600
-    t0 = future_m15[0]["time"]
+    d   = setup.get("direction", "short")
+    t0  = future_m15[0]["time"]
+    entry_window_end = t0 + ENTRY_WINDOW_H * 3600
+    trade_window_end = t0 + (ENTRY_WINDOW_H + TRADE_WINDOW_H) * 3600
 
+    # Szukaj wejścia
     entry_ts = None
     for c in future_m15:
-        if c["time"] > t0 + window_s:
+        if c["time"] > entry_window_end:
             break
-        if direction == "short" and c["high"] >= w:
+        if d == "short" and c["high"] >= w:
             entry_ts = c["time"]; break
-        if direction == "long" and c["low"] <= w:
+        if d == "long"  and c["low"]  <= w:
             entry_ts = c["time"]; break
 
     if entry_ts is None:
-        return "no_entry"
+        return "no_entry", None
 
-    tp1_hit_at = None
+    # Monitoruj pozycję; po TP1 przesuń SL do W (breakeven)
+    effective_sl = sl
+    tp1_hit_at   = None
+
     for c in future_m15:
         if c["time"] < entry_ts:
             continue
-        if direction == "short":
+        if c["time"] > trade_window_end:
+            break
+
+        if d == "short":
             tp1_now = c["low"]  <= tp1
             tp2_now = tp2 is not None and c["low"]  <= tp2
-            sl_now  = c["high"] >= sl
+            sl_now  = c["high"] >= effective_sl
         else:
             tp1_now = c["high"] >= tp1
             tp2_now = tp2 is not None and c["high"] >= tp2
-            sl_now  = c["low"]  <= sl
+            sl_now  = c["low"]  <= effective_sl
 
         if tp2_now:
-            return "TP2"
+            return "TP2", c["time"]
         if tp1_now and sl_now and tp1_hit_at is None:
-            return "SL"
+            return "SL", c["time"]
         if tp1_now and tp1_hit_at is None:
             if tp2 is None:
-                return "TP1"
-            tp1_hit_at = c["time"]
+                return "TP1", c["time"]
+            tp1_hit_at   = c["time"]
+            effective_sl = w   # przesuń SL do W po TP1
             continue
         if sl_now:
-            return "TP1" if tp1_hit_at is not None else "SL"
-    return "open"
+            result = "TP1+W" if tp1_hit_at is not None else "SL"
+            return result, c["time"]
+
+    return "open", None
 
 
 TRADE_USDT = 100.0
@@ -379,38 +414,45 @@ LEVERAGE   = 20
 def calc_pnl_scenarios(setup: dict, result: str) -> tuple[float, float]:
     """Zwraca (pnl_tp1only, pnl_tp1tp2) w USD dla $100 @ 20x dźwigni.
 
-    TP1only: całość pozycji wychodzi na TP1.
-    TP1+TP2: połowa na TP1, połowa na TP2.
-    Zwraca (0, 0) gdy brak wejścia lub wynik nieznany.
+    Scenariusze:
+      SL      → obie strategie: cała pozycja wychodzi na SL
+      TP1     → obie strategie: cała pozycja wychodzi na TP1 (brak TP2 w setupie)
+      TP2     → TP1only: cała na TP1 | TP1+TP2: połowa na TP1, połowa na TP2
+      TP1+W   → TP1only: cała na TP1 | TP1+TP2: połowa na TP1, połowa na W (BE, zysk=0)
     """
-    import math
     if result in ("no_entry", "open", "-"):
         return 0.0, 0.0
-    w   = setup["w"]
-    sl  = setup["sl"]
-    tp1 = setup["tp1"]
-    tp2 = setup.get("tp2")
-    d   = setup.get("direction", "short")
-    sign = 1 if d == "long" else -1
+
+    w    = setup["w"]
+    sl   = setup["sl"]
+    tp1  = setup["tp1"]
+    tp2  = setup.get("tp2")
+    sign = 1 if setup.get("direction", "short") == "long" else -1
 
     full_qty = max(math.floor((TRADE_USDT * LEVERAGE / w) / 0.1) * 0.1, 0.1)
     half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
 
-    # TP1only
-    if result in ("TP1", "TP2"):
+    # ── TP1only ──────────────────────────────────────────────────────────────
+    if result in ("TP1", "TP2", "TP1+W"):
         pnl_tp1only = round(sign * full_qty * (tp1 - w), 2)
     else:  # SL
         pnl_tp1only = round(sign * full_qty * (sl - w), 2)
 
-    # TP1+TP2
+    # ── TP1+TP2 ──────────────────────────────────────────────────────────────
     if result == "TP2" and tp2 is not None:
+        # Połowa na TP1, połowa na TP2
         pnl_tp1tp2 = round(sign * half_qty * (tp1 - w) + sign * half_qty * (tp2 - w), 2)
+    elif result == "TP1+W":
+        # Połowa na TP1, połowa na W (breakeven — zysk 0 na drugiej połowie)
+        pnl_tp1tp2 = round(sign * half_qty * (tp1 - w), 2)
     elif result == "TP1":
-        pnl_tp1tp2 = round(sign * full_qty * (tp1 - w), 2)  # bez TP2 = jak TP1only
+        # Brak TP2 w setupie → cała pozycja na TP1 (jak TP1only)
+        pnl_tp1tp2 = round(sign * full_qty * (tp1 - w), 2)
     else:  # SL
         pnl_tp1tp2 = round(sign * full_qty * (sl - w), 2)
 
     return pnl_tp1only, pnl_tp1tp2
+
 
 
 # ── Google Sheets export ──────────────────────────────────────────────────────
@@ -455,11 +497,11 @@ def export_to_sheets(sheet_name: str, rows: list[list], stats: dict) -> None:
 
         # Wiersz podsumowania
         tot = stats["RAZEM"]
-        n   = tot["tp1"] + tot["tp2"] + tot["sl"] + tot["no"]
+        n   = tot["tp1"] + tot["tp2"] + tot["tp1w"] + tot["sl"] + tot["no"]
         summary = [
             "SUMA", "", "", "", f"n={n}",
             "", "", "", "", "", "", "",
-            f"TP1={tot['tp1']} TP2={tot['tp2']} SL={tot['sl']} brak={tot['no']}",
+            f"TP1={tot['tp1']} TP2={tot['tp2']} TP1+W={tot['tp1w']} SL={tot['sl']} brak={tot['no']}",
             round(tot["pnl_tp1only"], 2), "",
             round(tot["pnl_tp1tp2"],  2), "",
         ]
@@ -486,18 +528,22 @@ ALL_TYPES = [
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--from", dest="dt_from", default="2026-03-01 00:00")
-    parser.add_argument("--to",   dest="dt_to",   default="2026-04-04 00:00")
+    parser.add_argument("--from",  dest="dt_from", default="2026-03-01 00:00")
+    parser.add_argument("--to",    dest="dt_to",   default="2026-04-04 00:00")
+    parser.add_argument("--dedup", action="store_true",
+                        help="Pomijaj setup jeśli aktywny setup z tym samym kierunkiem "
+                             f"i W w odległości <${DEDUP_THRESHOLD} już istnieje (jak na produkcji)")
     args = parser.parse_args()
 
     from_ts = _parse_dt(args.dt_from)
     to_ts   = _parse_dt(args.dt_to)
 
-    fetch_end  = to_ts + 24 * 3600
+    fetch_end  = to_ts + (ENTRY_WINDOW_H + TRADE_WINDOW_H) * 3600
     m15_needed = 100 + (fetch_end - from_ts) // 900
     h1_needed  = 200 + (fetch_end - from_ts) // 3600
 
-    print(f"Pobieranie danych: {args.dt_from} – {args.dt_to} (+24h ewaluacja)...")
+    dedup_label = " [--dedup]" if args.dedup else ""
+    print(f"Pobieranie danych: {args.dt_from} – {args.dt_to}{dedup_label}...")
     m15_all = fetch_klines_okx("SOLUSDT", "15m", m15_needed, fetch_end)
     h1_all  = fetch_klines_okx("SOLUSDT", "1h",  h1_needed,  fetch_end)
 
@@ -508,12 +554,16 @@ def main():
     print(f"M15: {len(m15_all)} świec | H1: {len(h1_all)} świec")
     print()
 
-    # Statystyki per typ setupu
-    stats = {t: {"tp1": 0, "tp2": 0, "sl": 0, "no": 0,
+    # Statystyki per typ setupu (tp1 = "TP1" bez TP2, tp1w = "TP1+W")
+    stats = {t: {"tp1": 0, "tp2": 0, "tp1w": 0, "sl": 0, "no": 0,
                  "pnl_tp1only": 0.0, "pnl_tp1tp2": 0.0}
              for t in ALL_TYPES + ["RAZEM"]}
 
-    # Wiersze do Sheets: jedna linia = jeden setup
+    # Aktywne setupy dla dedup: {direction, w, expires_ts}
+    # expires_ts = resolve_ts jeśli znany, inaczej ts_generacji + max_okno
+    active_for_dedup: list[dict] = []
+
+    # Wiersze do Sheets
     sheet_rows: list[list] = []
 
     hdr = f"{'Godz':>11}  {'Cena':>7}  {'c24':>7}  {'Reżim':>16}  {'Typ setupu':>28}  {'Wynik':>8}  {'TP1only':>9}  {'TP1+TP2':>9}"
@@ -528,6 +578,10 @@ def main():
         if len(m15_snap) < 20 or len(h1_snap) < 25:
             continue
 
+        # Usuń wygasłe aktywne setupy
+        if args.dedup:
+            active_for_dedup = [a for a in active_for_dedup if a["expires_ts"] > ts]
+
         price = m15_snap[-1]["close"]
         dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d.%m %H:%M")
 
@@ -535,13 +589,33 @@ def main():
         new_setups = generate_setups(new_r, new_dir, new_score, m15_snap, h1_snap, price)
 
         for s in new_setups:
-            res                     = evaluate(s, future)
-            pnl_tp1only, pnl_tp1tp2 = calc_pnl_scenarios(s, res)
+            # Dedup: pomiń jeśli aktywny setup z podobnym W w tym samym kierunku
+            if args.dedup:
+                is_dup = any(
+                    a["direction"] == s["direction"] and abs(a["w"] - s["w"]) < DEDUP_THRESHOLD
+                    for a in active_for_dedup
+                )
+                if is_dup:
+                    continue
+
+            res, resolve_ts          = evaluate(s, future)
+            pnl_tp1only, pnl_tp1tp2  = calc_pnl_scenarios(s, res)
+
+            # Dodaj do aktywnych (dla kolejnych iteracji dedup)
+            if args.dedup:
+                max_expire = ts + (ENTRY_WINDOW_H + TRADE_WINDOW_H) * 3600
+                active_for_dedup.append({
+                    "direction":  s["direction"],
+                    "w":          s["w"],
+                    "expires_ts": resolve_ts if resolve_ts else max_expire,
+                })
+
             st = stats[s["type"]]
-            if res == "TP2":      st["tp2"] += 1
-            elif res == "TP1":    st["tp1"] += 1
-            elif res == "SL":     st["sl"]  += 1
-            else:                 st["no"]  += 1
+            if res == "TP2":    st["tp2"]  += 1
+            elif res == "TP1":  st["tp1"]  += 1
+            elif res == "TP1+W": st["tp1w"] += 1
+            elif res == "SL":   st["sl"]   += 1
+            else:               st["no"]   += 1
             st["pnl_tp1only"] += pnl_tp1only
             st["pnl_tp1tp2"]  += pnl_tp1tp2
 
@@ -578,35 +652,36 @@ def main():
 
     # Uzupełnij RAZEM
     for t in ALL_TYPES:
-        for k in ("tp1", "tp2", "sl", "no", "pnl_tp1only", "pnl_tp1tp2"):
+        for k in ("tp1", "tp2", "tp1w", "sl", "no", "pnl_tp1only", "pnl_tp1tp2"):
             stats["RAZEM"][k] += stats[t][k]
 
     # ── Podsumowanie per typ ──────────────────────────────────────────────────
     print()
-    print("=" * 90)
-    print(f"{'Typ setupu':<30}  {'TP1':>4} {'TP2':>4} {'SL':>4} {'brak':>4} {'setupy':>6}  "
+    print("=" * 100)
+    print(f"{'Typ setupu':<30}  {'TP1':>4} {'TP2':>4} {'T1+W':>4} {'SL':>4} {'brak':>4} {'n':>5}  "
           f"{'TP1only$':>10}  {'TP1+TP2$':>10}")
-    print("-" * 90)
+    print("-" * 100)
 
     for t in ALL_TYPES:
         st = stats[t]
-        n  = st["tp1"] + st["tp2"] + st["sl"] + st["no"]
-        print(f"{t:<30}  {st['tp1']:>4} {st['tp2']:>4} {st['sl']:>4} {st['no']:>4} {n:>6}  "
+        n  = st["tp1"] + st["tp2"] + st["tp1w"] + st["sl"] + st["no"]
+        print(f"{t:<30}  {st['tp1']:>4} {st['tp2']:>4} {st['tp1w']:>4} {st['sl']:>4} {st['no']:>4} {n:>5}  "
               f"{st['pnl_tp1only']:>+10.2f}  {st['pnl_tp1tp2']:>+10.2f}")
 
-    print("-" * 90)
+    print("-" * 100)
     tot = stats["RAZEM"]
-    n   = tot["tp1"] + tot["tp2"] + tot["sl"] + tot["no"]
-    print(f"{'RAZEM':<30}  {tot['tp1']:>4} {tot['tp2']:>4} {tot['sl']:>4} {tot['no']:>4} {n:>6}  "
+    n   = tot["tp1"] + tot["tp2"] + tot["tp1w"] + tot["sl"] + tot["no"]
+    print(f"{'RAZEM':<30}  {tot['tp1']:>4} {tot['tp2']:>4} {tot['tp1w']:>4} {tot['sl']:>4} {tot['no']:>4} {n:>5}  "
           f"{tot['pnl_tp1only']:>+10.2f}  {tot['pnl_tp1tp2']:>+10.2f}")
     print()
     print(f"TP1only: {tot['pnl_tp1only']:+.2f}$ ({tot['pnl_tp1only'] / TRADE_USDT * 100:+.1f}% na $100)")
     print(f"TP1+TP2: {tot['pnl_tp1tp2']:+.2f}$ ({tot['pnl_tp1tp2'] / TRADE_USDT * 100:+.1f}% na $100)")
 
     # ── Eksport do Sheets ─────────────────────────────────────────────────────
-    date_from = datetime.fromtimestamp(from_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-    date_to   = datetime.fromtimestamp(to_ts,   tz=timezone.utc).strftime("%Y-%m-%d")
-    sheet_name = f"TestRegime_{date_from}_{date_to}"
+    date_from  = datetime.fromtimestamp(from_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    date_to    = datetime.fromtimestamp(to_ts,   tz=timezone.utc).strftime("%Y-%m-%d")
+    dedup_sfx  = "_dedup" if args.dedup else ""
+    sheet_name = f"TestRegime_{date_from}_{date_to}{dedup_sfx}"
     export_to_sheets(sheet_name, sheet_rows, stats)
 
 
