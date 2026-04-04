@@ -360,11 +360,18 @@ def pnl_pts(setup: dict, res: str) -> float:
     return 0.0
 
 
-def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24):
+def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24,
+                      regime_timeline: dict | None = None):
     """
     Ewaluuje setup z podziałem na 3 scenariusze zamknięcia.
     Zwraca (wynik, resolve_ts) gdzie resolve_ts to timestamp zamknięcia (lub None).
-      wynik: "no_entry" | "SL" | "TP1+TP2" | "TP1+BE" | "TP1+open" | "open"
+      wynik: "no_entry" | "anulowany" | "SL" | "TP1+TP2" | "TP1+BE" | "TP1+open" | "open"
+
+    Warunki unieważnienia przed wejściem (A1–A4, aktywne gdy regime_timeline podane):
+      A1. SL przekroczony przed wejściem (close > SL dla short, < SL dla long)
+      A2. Cena uciekła >5% od W
+      A3. Reżim zmienił kierunek na przeciwny do setupu
+      A4. 24h bez wejścia (fallback, zawsze aktywny)
     """
     if not setup or not future_m15:
         return "no_entry", None
@@ -378,11 +385,35 @@ def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24):
     window_s  = window_h * 3600
     t0        = future_m15[0]["time"]
 
-    # Faza 1: szukaj entry
+    # Faza 1: szukaj entry + sprawdzaj warunki unieważnienia
     entry_ts = None
     for c in future_m15:
         if c["time"] > t0 + window_s:
-            break
+            break  # A4: 24h bez wejścia
+
+        if regime_timeline is not None:
+            price = c["close"]
+
+            # A1: SL przekroczony zanim cena doszła do W
+            if direction == "short" and price > sl:
+                return "anulowany", c["time"]
+            if direction == "long"  and price < sl:
+                return "anulowany", c["time"]
+
+            # A2: cena uciekła >5% od W
+            if abs(price - w) / price > 0.05:
+                return "anulowany", c["time"]
+
+            # A3: reżim zmienił kierunek na przeciwny
+            hour_ts = (c["time"] // 3600) * 3600
+            reg = regime_timeline.get(hour_ts)
+            if reg:
+                reg_str = reg[0]
+                if direction == "short" and reg_str in ("IMPULSE_UP", "TREND_UP"):
+                    return "anulowany", c["time"]
+                if direction == "long"  and reg_str in ("IMPULSE_DOWN", "TREND_DOWN"):
+                    return "anulowany", c["time"]
+
         if direction == "short" and c["high"] >= w:
             entry_ts = c["time"]; break
         if direction == "long"  and c["low"]  <= w:
@@ -430,9 +461,12 @@ def calc_pnl(setup: dict, result: str):
     tp1 = setup["tp1"]
     tp2 = setup["tp2"]
 
-    if result == "SL":
+    if result in ("SL",):
         loss = -abs(sl - w)
         return round(loss, 2), round(loss, 2)
+
+    if result == "anulowany":
+        return 0.0, 0.0
 
     if result in ("TP1+TP2", "TP1+BE", "TP1+open", "TP1 ✓"):
         pnl_tp1   = round(abs(w - tp1), 2)
@@ -464,6 +498,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--from",  dest="dt_from", default="2026-03-01 00:00")
     parser.add_argument("--to",    dest="dt_to",   default="2026-04-04 00:00")
+    parser.add_argument("--invalidate", action="store_true",
+                        help="Unieważniaj nieotwarte setupy (A1: SL przed wejściem, "
+                             "A2: cena >5%% od W, A3: zmiana reżimu na przeciwny)")
     parser.add_argument("--dedup", action="store_true",
                         help="Pomiń setup jeśli aktywny setup tego samego kierunku "
                              "i W w odległości < progu już istnieje")
@@ -489,6 +526,21 @@ def main():
 
     print(f"M15: {len(m15_all)} świec | H1: {len(h1_all)} świec")
     print()
+
+    # Pre-oblicz reżimy dla całego zakresu +24h (potrzebne do unieważniania)
+    regime_timeline: dict = {}
+    if args.invalidate:
+        print("Obliczanie regime_timeline (+24h)...")
+        for rts in range(from_ts, to_ts + 25 * 3600, 3600):
+            rm15 = [c for c in m15_all if c["time"] < rts]
+            rh1  = [c for c in h1_all  if c["time"] < rts]
+            if len(rm15) < 20 or len(rh1) < 25:
+                continue
+            rp = rm15[-1]["close"]
+            rr, rd, rs, _ = detect_regime_new(rm15, rh1, rp)
+            regime_timeline[rts] = (rr, rd)
+        print(f"  → {len(regime_timeline)} godzin zaindeksowanych")
+        print()
 
     # stats[type]["old"/"new"] = {tp, sl, no, pnl}
     stats = {t: {"old": {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0},
@@ -549,7 +601,8 @@ def main():
             else:             st["no"] += 1
             st["pnl"] += p
             # Extended ewaluacja dla Sheets
-            ext_res, resolve_ts = evaluate_extended(s, future)
+            rt = regime_timeline if args.invalidate else None
+            ext_res, resolve_ts = evaluate_extended(s, future, regime_timeline=rt)
             pnl_tp1, pnl_split = calc_pnl(s, ext_res)
 
             # Dedup: zarejestruj jako aktywny; wygasa gdy pozycja się zamknie

@@ -19,6 +19,10 @@ on:
         description: 'Próg deduplikacji w $ (domyślnie 0.5)'
         type: string
         default: '0.5'
+      invalidate:
+        description: 'Unieważniaj nieotwarte setupy (A1: SL przed wejściem, A2: cena >5% od W, A3: zmiana reżimu)'
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -43,4 +47,6 @@ jobs:
         run: |
           DEDUP=""
           [ "${{ inputs.dedup }}" = "true" ] && DEDUP="--dedup --dedup-threshold ${{ inputs.dedup_threshold }}"
-          python test_apr3.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}' $DEDUP
+          INVALIDATE=""
+          [ "${{ inputs.invalidate }}" = "true" ] && INVALIDATE="--invalidate"
+          python test_apr3.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}' $DEDUP $INVALIDATE
