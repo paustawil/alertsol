@@ -392,9 +392,8 @@ def evaluate(setup: dict, future_m15: list[dict]) -> tuple[str, int | None]:
 
         if tp2_now:
             return "TP2", c["time"]
-        if tp1_now and sl_now and tp1_hit_at is None:
-            return "SL", c["time"]
         if tp1_now and tp1_hit_at is None:
+            # TP1 ma priorytet nad SL w tej samej świecy (jak w starym kodzie)
             if tp2 is None:
                 return "TP1", c["time"]
             tp1_hit_at   = c["time"]
