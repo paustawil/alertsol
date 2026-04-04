@@ -41,6 +41,7 @@ MARGIN_COIN  = "USDT"
 MARGIN_MODE  = "crossed"
 LEVERAGE     = 20
 TRADE_USDT    = float(os.getenv("BITGET_TRADE_USDT") or "100.0")
+TRADE_SOL     = float(os.getenv("BITGET_TRADE_SOL") or "0")    # 0 = przelicz z TRADE_USDT
 MAX_POSITIONS = int(os.getenv("BITGET_MAX_POSITIONS") or "5")
 QTY_STEP     = 0.1
 PRICE_DEC    = 2
@@ -164,7 +165,10 @@ def _client() -> BitgetClient | None:
         print("[exchange] Brak BITGET_API_KEY/BITGET_API_SECRET/BITGET_PASSPHRASE — pomijam.")
         return None
     demo = os.getenv("BITGET_DEMO", "true").lower() != "false"
-    print(f"[exchange] Sesja Bitget {'DEMO' if demo else 'PRODUKCJA'} | {SYMBOL} | {LEVERAGE}x | {TRADE_USDT} USDT/trade")
+    if TRADE_SOL > 0:
+        print(f"[exchange] Sesja Bitget {'DEMO' if demo else 'PRODUKCJA'} | {SYMBOL} | {LEVERAGE}x | {TRADE_SOL} SOL/trade")
+    else:
+        print(f"[exchange] Sesja Bitget {'DEMO' if demo else 'PRODUKCJA'} | {SYMBOL} | {LEVERAGE}x | {TRADE_USDT} USDT/trade")
     return BitgetClient(key, secret, passphrase, demo=demo)
 
 
@@ -416,7 +420,7 @@ def _cancel_order(client: BitgetClient, order_id: str, plan_type: str):
 def _find_preset_tpsl(client: BitgetClient, hold_side: str) -> tuple[str | None, str | None]:
     """
     Szuka aktywnych TPSL orderów (z presetu plan order) dla danej strony pozycji.
-    Zwraca (tp_order_id, sl_order_id) lub (None, None).
+    Zwraca (tp_order_id, sl_order_id) — każde może być None jeśli nie znalezione.
     """
     tp_id = sl_id = None
     try:
@@ -427,12 +431,17 @@ def _find_preset_tpsl(client: BitgetClient, hold_side: str) -> tuple[str | None,
         })
         if resp.get("code") == "00000":
             for o in (resp["data"].get("entrustedList") or []):
-                if o.get("posSide", o.get("holdSide", "")) == hold_side:
-                    plan_type = o.get("planType", "")
-                    if plan_type == "profit_plan" and tp_id is None:
-                        tp_id = o["orderId"]
-                    elif plan_type == "loss_plan" and sl_id is None:
-                        sl_id = o["orderId"]
+                # Sprawdzamy oba pola niezależnie — Bitget używa holdSide lub posSide
+                # zależnie od wersji API / typu zlecenia
+                o_hold = o.get("holdSide", "")
+                o_pos  = o.get("posSide",  "")
+                if o_hold != hold_side and o_pos != hold_side:
+                    continue
+                plan_type = o.get("planType", "")
+                if plan_type == "profit_plan" and tp_id is None:
+                    tp_id = o["orderId"]
+                elif plan_type == "loss_plan" and sl_id is None:
+                    sl_id = o["orderId"]
     except Exception as e:
         log.warning(f"[exchange] _find_preset_tpsl: {e}")
     return tp_id, sl_id
@@ -563,7 +572,7 @@ def _sync_inner():
                 print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
                 continue
             w1       = entries[0]
-            full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+            full_qty = _round_qty(TRADE_SOL) if TRADE_SOL > 0 else _round_qty((TRADE_USDT * LEVERAGE) / w1)
             oid      = _place_entry_plan_order(client, s, full_qty)
             if oid:
                 s["exchange_plan_oid"]        = oid
@@ -599,7 +608,7 @@ def _sync_inner():
                 calc_qty   = float(s.get("exchange_qty_full", "0").replace(",", ".") or "0")
                 if calc_qty <= 0:
                     w1       = entries[0]
-                    calc_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+                    calc_qty = _round_qty(TRADE_SOL) if TRADE_SOL > 0 else _round_qty((TRADE_USDT * LEVERAGE) / w1)
 
                 if actual_qty <= 0:
                     # Plan order "executed" ale pozycja = 0 — częściowe wypełnienie
@@ -625,15 +634,14 @@ def _sync_inner():
                 full_qty = _round_qty(calc_qty)
                 half_qty = _round_qty(full_qty / 2)
 
-                # Sprawdź czy preset TP/SL z plan order już istnieją
-                preset_tp, preset_sl = _find_preset_tpsl(client, direction)
-                if preset_tp and preset_sl:
-                    tp1_id, sl_id = preset_tp, preset_sl
+                # Szukaj presetów TP/SL stworzonych przez Bitget z plan ordera.
+                # Jeśli jeszcze nie widoczne (race condition) — zostają null i
+                # zostaną znalezione w kolejnym sync przez blok retry poniżej.
+                tp1_id, sl_id = _find_preset_tpsl(client, direction)
+                if tp1_id or sl_id:
                     print(f"[exchange] {label}: preset TPSL znalezione (TP1={tp1_id} SL={sl_id})")
                 else:
-                    # Fallback — złóż TPSL ręcznie
-                    print(f"[exchange] {label}: brak preset TPSL, składam ręcznie...")
-                    tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
+                    print(f"[exchange] {label}: brak preset TPSL — kolejny sync spróbuje ponownie")
 
                 s["exchange_position_opened"] = True
                 s["exchange_qty_full"]        = _fmt_qty(full_qty)
@@ -642,31 +650,23 @@ def _sync_inner():
                 s["exchange_tp2_oid"]         = None
                 s["exchange_sl_oid"]          = sl_id
                 modified = True
-                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL), TPSL aktywne "
-                      f"(TP1={tp1_id} SL={sl_id})")
+                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL), TPSL: "
+                      f"TP1={tp1_id} SL={sl_id}")
             continue
 
-        # ── Pozycja otwarta, SL jest ale brak TP — re-place tylko TP ─────────
-        if pos_open and not ex_done and sl_oid and not tp1_oid and not tp1_done:
-            full_qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
-            half_qty = full_qty  # unused, kept for API compat
-            if full_qty > 0:
-                log.warning(f"[exchange] {label}: brakuje TP przy istniejącym SL — re-place TP")
-                tp1_id, _, _ = _place_tpsl_orders(client, s, full_qty, half_qty, skip_sl=True)
-                s["exchange_tp1_oid"] = tp1_id
+        # ── Pozycja otwarta, brakuje TP lub SL — szukaj presetów ponownie ───────
+        if pos_open and not ex_done and not tp1_done and (not tp1_oid or not sl_oid):
+            tp1_id, sl_id = _find_preset_tpsl(client, direction)
+            # Uzupełnij tylko brakujące IDs — nie nadpisuj już znanych
+            new_tp1 = tp1_id if (tp1_id and not tp1_oid) else tp1_oid
+            new_sl  = sl_id  if (sl_id  and not sl_oid)  else sl_oid
+            if new_tp1 != tp1_oid or new_sl != sl_oid:
+                log.warning(f"[exchange] {label}: uzupełniono TPSL z presetu: TP1={new_tp1} SL={new_sl}")
+                s["exchange_tp1_oid"] = new_tp1
+                s["exchange_sl_oid"]  = new_sl
                 modified = True
-            continue
-
-        # ── Pozycja otwarta, brak TPSL — retry składania zleceń ──────────────
-        if pos_open and not ex_done and not tp1_oid and not sl_oid:
-            full_qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
-            half_qty = full_qty  # unused, kept for API compat
-            if full_qty > 0:
-                log.warning(f"[exchange] {label}: pozycja otwarta bez TPSL — retry składania zleceń")
-                tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
-                s["exchange_tp1_oid"] = tp1_id
-                s["exchange_sl_oid"]  = sl_id
-                modified = True
+            else:
+                log.warning(f"[exchange] {label}: TPSL nadal niedostępne (TP1={tp1_oid} SL={sl_oid}) — kolejny sync")
             continue
 
         # ── Pozycja otwarta — monitoruj TPSL ─────────────────────────────────
