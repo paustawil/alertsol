@@ -403,7 +403,7 @@ def evaluate(setup: dict, future_m15: list[dict]) -> tuple[str, int | None]:
             result = "TP1+W" if tp1_hit_at is not None else "SL"
             return result, c["time"]
 
-    return "open", None
+    return "TP1+W" if tp1_hit_at is not None else "open", tp1_hit_at
 
 
 TRADE_USDT = 100.0
