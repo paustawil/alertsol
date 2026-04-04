@@ -363,25 +363,20 @@ def pnl_pts(setup: dict, res: str) -> float:
 def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24):
     """
     Ewaluuje setup z podziałem na 3 scenariusze zamknięcia.
-    Zwraca (wynik, pnl) gdzie:
+    Zwraca (wynik, resolve_ts) gdzie resolve_ts to timestamp zamknięcia (lub None).
       wynik: "no_entry" | "SL" | "TP1+TP2" | "TP1+BE" | "TP1+open" | "open"
-      pnl:   P&L w punktach (50/50 split przy TP1)
-        SL        → -(sl - w)             [pełna strata]
-        TP1+TP2   → 0.5*(w-tp1)+0.5*(w-tp2)  [połowa na TP1, połowa na TP2]
-        TP1+BE    → 0.5*(w-tp1)           [połowa na TP1, połowa na BE=0]
-        TP1+open  → 0.5*(w-tp1)           [TP1 trafiony, druga połowa otwarta]
     """
     if not setup or not future_m15:
-        return "no_entry", 0.0
+        return "no_entry", None
 
-    w        = setup["w"]
-    sl       = setup["sl"]
-    tp1      = setup["tp1"]
-    tp2      = setup["tp2"]
-    sl_be    = setup.get("sl_after_tp1", w)  # BE = punkt wejścia
+    w         = setup["w"]
+    sl        = setup["sl"]
+    tp1       = setup["tp1"]
+    tp2       = setup["tp2"]
+    sl_be     = setup.get("sl_after_tp1", w)
     direction = setup.get("direction", "short")
-    window_s = window_h * 3600
-    t0       = future_m15[0]["time"]
+    window_s  = window_h * 3600
+    t0        = future_m15[0]["time"]
 
     # Faza 1: szukaj entry
     entry_ts = None
@@ -394,7 +389,7 @@ def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24):
             entry_ts = c["time"]; break
 
     if entry_ts is None:
-        return "no_entry", 0.0
+        return "no_entry", None
 
     # Faza 2: czekaj na TP1 lub SL
     tp1_ts = None
@@ -403,34 +398,26 @@ def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24):
             continue
         if direction == "short":
             if c["low"]  <= tp1: tp1_ts = c["time"]; break
-            if c["high"] >= sl:
-                return "SL", round(-(sl - w), 2)
+            if c["high"] >= sl:  return "SL", c["time"]
         else:
             if c["high"] >= tp1: tp1_ts = c["time"]; break
-            if c["low"]  <= sl:
-                return "SL", round(-(w - sl), 2)
+            if c["low"]  <= sl:  return "SL", c["time"]
 
     if tp1_ts is None:
-        return "open", 0.0
-
-    pnl_half1 = abs(w - tp1) * 0.5  # zysk z pierwszej połowy
+        return "open", None
 
     # Faza 3: po TP1 — czekaj na TP2 lub SL@BE
     for c in future_m15:
         if c["time"] < tp1_ts:
             continue
         if direction == "short":
-            if c["low"]  <= tp2:
-                return "TP1+TP2", round(pnl_half1 + abs(w - tp2) * 0.5, 2)
-            if c["high"] >= sl_be:
-                return "TP1+BE",  round(pnl_half1, 2)
+            if c["low"]  <= tp2:  return "TP1+TP2", c["time"]
+            if c["high"] >= sl_be: return "TP1+BE",  c["time"]
         else:
-            if c["high"] >= tp2:
-                return "TP1+TP2", round(pnl_half1 + abs(tp2 - w) * 0.5, 2)
-            if c["low"]  <= sl_be:
-                return "TP1+BE",  round(pnl_half1, 2)
+            if c["high"] >= tp2:  return "TP1+TP2", c["time"]
+            if c["low"]  <= sl_be: return "TP1+BE",  c["time"]
 
-    return "TP1+open", round(pnl_half1, 2)
+    return "TP1+open", None
 
 
 def calc_pnl(setup: dict, result: str):
@@ -460,6 +447,8 @@ def calc_pnl(setup: dict, result: str):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+DEDUP_THRESHOLD = 0.5   # $0.50 — dwa setupy bliżej niż próg = duplikat
+
 def _parse_dt(s: str) -> int:
     return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp())
 
@@ -473,8 +462,11 @@ ALL_TYPES = [
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--from", dest="dt_from", default="2026-03-01 00:00")
-    parser.add_argument("--to",   dest="dt_to",   default="2026-04-04 00:00")
+    parser.add_argument("--from",  dest="dt_from", default="2026-03-01 00:00")
+    parser.add_argument("--to",    dest="dt_to",   default="2026-04-04 00:00")
+    parser.add_argument("--dedup", action="store_true",
+                        help=f"Pomiń setup jeśli aktywny setup tego samego kierunku "
+                             f"i W w odległości <${DEDUP_THRESHOLD} już istnieje")
     args = parser.parse_args()
 
     from_ts = _parse_dt(args.dt_from)
@@ -500,6 +492,7 @@ def main():
                  "new": {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0}}
              for t in ALL_TYPES}
     sheet_rows: list[dict] = []
+    active_for_dedup: list[dict] = []  # {direction, w, expires_ts}
 
     # Per-hour tabela: tylko reżimy
     hdr = f"{'Godz':>11}  {'Cena':>7}  {'slope':>7}  {'STARY':>14}  {'NOWY':>14}  {'setup old':>28}  {'setup new':>28}"
@@ -513,6 +506,10 @@ def main():
 
         if len(m15_snap) < 20 or len(h1_snap) < 25:
             continue
+
+        # Dedup: usuń wygasłe aktywne setupy
+        if args.dedup:
+            active_for_dedup = [a for a in active_for_dedup if a["expires_ts"] > ts]
 
         price = m15_snap[-1]["close"]
         dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d.%m %H:%M")
@@ -534,6 +531,13 @@ def main():
             st["pnl"] += p
 
         for s in new_setups:
+            # Dedup: pomiń jeśli aktywny setup tego samego kierunku i bliskiego W
+            if args.dedup and any(
+                a["direction"] == s["direction"] and abs(a["w"] - s["w"]) < DEDUP_THRESHOLD
+                for a in active_for_dedup
+            ):
+                continue
+
             res = evaluate(s, future)
             p   = pnl_pts(s, res)
             st  = stats[s["type"]]["new"]
@@ -542,8 +546,17 @@ def main():
             else:             st["no"] += 1
             st["pnl"] += p
             # Extended ewaluacja dla Sheets
-            ext_res, _ = evaluate_extended(s, future)
+            ext_res, resolve_ts = evaluate_extended(s, future)
             pnl_tp1, pnl_split = calc_pnl(s, ext_res)
+
+            # Dedup: zarejestruj jako aktywny; wygasa gdy pozycja się zamknie
+            if args.dedup:
+                active_for_dedup.append({
+                    "direction":  s["direction"],
+                    "w":          s["w"],
+                    "expires_ts": resolve_ts if resolve_ts else ts + 48 * 3600,
+                })
+
             sheet_rows.append({
                 "ts":        datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
                 "type":      s["type"],
@@ -601,10 +614,10 @@ def main():
           f"{tot_new['tp']:>4} {tot_new['sl']:>4} {tot_new['no']:>4} {n_n:>6} {tot_new['pnl']:>+8.2f}")
 
     # ── Zapis do Google Sheets ────────────────────────────────────────────────
-    _write_to_sheets(args.dt_from, args.dt_to, sheet_rows)
+    _write_to_sheets(args.dt_from, args.dt_to, sheet_rows, dedup=args.dedup)
 
 
-def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict]):
+def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict], dedup: bool = False):
     creds_json = os.getenv("GOOGLE_CREDENTIALS", "")
     if not creds_json:
         print("Brak GOOGLE_CREDENTIALS — pomijam zapis do Sheets")
@@ -621,7 +634,8 @@ def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict]):
         SHEET_ID = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
         wb = client.open_by_key(SHEET_ID)
 
-        sheet_name = f"Backtest_Regime {dt_from[:10]}–{dt_to[:10]}"
+        dedup_sfx  = "_dedup" if dedup else ""
+        sheet_name = f"Backtest_Regime {dt_from[:10]}–{dt_to[:10]}{dedup_sfx}"
 
         HEADER = [
             "Timestamp", "Typ setupu", "Kierunek", "Reżim",

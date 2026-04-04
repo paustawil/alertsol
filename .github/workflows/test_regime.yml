@@ -11,6 +11,10 @@ on:
         description: 'Do kiedy UTC (np. "2026-04-04 00:00")'
         type: string
         default: '2026-04-04 00:00'
+      dedup:
+        description: 'Deduplikacja setupów (pomiń jeśli aktywny podobny)'
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -33,4 +37,6 @@ jobs:
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          python test_apr3.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}'
+          DEDUP=""
+          [ "${{ inputs.dedup }}" = "true" ] && DEDUP="--dedup"
+          python test_apr3.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}' $DEDUP
