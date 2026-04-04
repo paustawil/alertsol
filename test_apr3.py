@@ -253,7 +253,7 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
             rr_val = (w - tp1) / (sl - w) if sl > w else 0
             if sl > w and tp1 < w and rr_val >= 1.5 and w > current_price * 1.003 and (w - current_price) <= max_dist:
                 setups.append({"type": "trend_pullback_short", "direction": "short",
-                                "w": w, "sl": sl, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
+                                "w": w, "sl": sl, "sl_after_tp1": w, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
 
         # impulse_continuation_short — tylko przy IMPULSE
         if regime_str.startswith("IMPULSE_"):
@@ -268,7 +268,7 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
                 rr_val = (w - tp1) / (sl - w) if sl > w else 0
                 if sl > w and tp1 < w and rr_val >= 1.5 and abs(w - current_price) <= max_dist:
                     setups.append({"type": "impulse_continuation_short", "direction": "short",
-                                   "w": w, "sl": sl, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
+                                   "w": w, "sl": sl, "sl_after_tp1": w, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
 
     elif direction == "up":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
@@ -290,7 +290,7 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
             rr_val = (tp1 - w) / (w - sl) if w > sl else 0
             if sl < w and tp1 > w and rr_val >= 1.5 and w < current_price * 0.997 and (current_price - w) <= max_dist:
                 setups.append({"type": "trend_pullback_long", "direction": "long",
-                                "w": w, "sl": sl, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
+                                "w": w, "sl": sl, "sl_after_tp1": w, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
 
     elif regime_str == "RANGE":
         rng = detect_range(candles_h1)
@@ -305,7 +305,7 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
             rr_val = (w - tp1) / (sl - w) if sl > w else 0
             if rr_val >= 1.5 and abs(w - current_price) <= max_dist:
                 setups.append({"type": "range_resistance_short", "direction": "short",
-                                "w": w, "sl": sl, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
+                                "w": w, "sl": sl, "sl_after_tp1": w, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
             # range_support_long
             w   = round(sup + rng_size * 0.1, 2)
             sl  = round(sup - atr * 1.0, 2)
@@ -314,7 +314,7 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
             rr_val = (tp1 - w) / (w - sl) if w > sl else 0
             if rr_val >= 1.5 and abs(w - current_price) <= max_dist:
                 setups.append({"type": "range_support_long", "direction": "long",
-                                "w": w, "sl": sl, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
+                                "w": w, "sl": sl, "sl_after_tp1": w, "tp1": tp1, "tp2": tp2, "rr": round(rr_val, 1)})
 
     return setups
 
@@ -360,6 +360,79 @@ def pnl_pts(setup: dict, res: str) -> float:
     return 0.0
 
 
+def evaluate_extended(setup: dict, future_m15: list[dict], window_h: int = 24):
+    """
+    Ewaluuje setup z podziałem na 3 scenariusze zamknięcia.
+    Zwraca (wynik, pnl) gdzie:
+      wynik: "no_entry" | "SL" | "TP1+TP2" | "TP1+BE" | "TP1+open" | "open"
+      pnl:   P&L w punktach (50/50 split przy TP1)
+        SL        → -(sl - w)             [pełna strata]
+        TP1+TP2   → 0.5*(w-tp1)+0.5*(w-tp2)  [połowa na TP1, połowa na TP2]
+        TP1+BE    → 0.5*(w-tp1)           [połowa na TP1, połowa na BE=0]
+        TP1+open  → 0.5*(w-tp1)           [TP1 trafiony, druga połowa otwarta]
+    """
+    if not setup or not future_m15:
+        return "no_entry", 0.0
+
+    w        = setup["w"]
+    sl       = setup["sl"]
+    tp1      = setup["tp1"]
+    tp2      = setup["tp2"]
+    sl_be    = setup.get("sl_after_tp1", w)  # BE = punkt wejścia
+    direction = setup.get("direction", "short")
+    window_s = window_h * 3600
+    t0       = future_m15[0]["time"]
+
+    # Faza 1: szukaj entry
+    entry_ts = None
+    for c in future_m15:
+        if c["time"] > t0 + window_s:
+            break
+        if direction == "short" and c["high"] >= w:
+            entry_ts = c["time"]; break
+        if direction == "long"  and c["low"]  <= w:
+            entry_ts = c["time"]; break
+
+    if entry_ts is None:
+        return "no_entry", 0.0
+
+    # Faza 2: czekaj na TP1 lub SL
+    tp1_ts = None
+    for c in future_m15:
+        if c["time"] < entry_ts:
+            continue
+        if direction == "short":
+            if c["low"]  <= tp1: tp1_ts = c["time"]; break
+            if c["high"] >= sl:
+                return "SL", round(-(sl - w), 2)
+        else:
+            if c["high"] >= tp1: tp1_ts = c["time"]; break
+            if c["low"]  <= sl:
+                return "SL", round(-(w - sl), 2)
+
+    if tp1_ts is None:
+        return "open", 0.0
+
+    pnl_half1 = abs(w - tp1) * 0.5  # zysk z pierwszej połowy
+
+    # Faza 3: po TP1 — czekaj na TP2 lub SL@BE
+    for c in future_m15:
+        if c["time"] < tp1_ts:
+            continue
+        if direction == "short":
+            if c["low"]  <= tp2:
+                return "TP1+TP2", round(pnl_half1 + abs(w - tp2) * 0.5, 2)
+            if c["high"] >= sl_be:
+                return "TP1+BE",  round(pnl_half1, 2)
+        else:
+            if c["high"] >= tp2:
+                return "TP1+TP2", round(pnl_half1 + abs(tp2 - w) * 0.5, 2)
+            if c["low"]  <= sl_be:
+                return "TP1+BE",  round(pnl_half1, 2)
+
+    return "TP1+open", round(pnl_half1, 2)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def _parse_dt(s: str) -> int:
@@ -401,6 +474,7 @@ def main():
     stats = {t: {"old": {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0},
                  "new": {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0}}
              for t in ALL_TYPES}
+    sheet_rows: list[dict] = []
 
     # Per-hour tabela: tylko reżimy
     hdr = f"{'Godz':>11}  {'Cena':>7}  {'slope':>7}  {'STARY':>14}  {'NOWY':>14}  {'setup old':>28}  {'setup new':>28}"
@@ -424,7 +498,7 @@ def main():
         old_setups = generate_setups(old_r, old_dir, old_score, m15_snap, h1_snap, price)
         new_setups = generate_setups(new_r, new_dir, new_score, m15_snap, h1_snap, price)
 
-        # Akumuluj statystyki
+        # Akumuluj statystyki + zbieraj wiersze dla Sheets (tylko nowy algo)
         for s in old_setups:
             res = evaluate(s, future)
             p   = pnl_pts(s, res)
@@ -442,6 +516,21 @@ def main():
             elif "SL" in res: st["sl"] += 1
             else:             st["no"] += 1
             st["pnl"] += p
+            # Extended ewaluacja dla Sheets
+            ext_res, ext_pnl = evaluate_extended(s, future)
+            sheet_rows.append({
+                "ts":      datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "type":    s["type"],
+                "dir":     s["direction"],
+                "regime":  new_r,
+                "w":       s["w"],
+                "sl":      s["sl"],
+                "tp1":     s["tp1"],
+                "tp2":     s["tp2"],
+                "rr":      s["rr"],
+                "wynik":   ext_res,
+                "pnl":     ext_pnl,
+            })
 
         # Skrócone nazwy setupów do wyświetlenia
         def fmt_setups(sl):
@@ -485,10 +574,10 @@ def main():
           f"{tot_new['tp']:>4} {tot_new['sl']:>4} {tot_new['no']:>4} {n_n:>6} {tot_new['pnl']:>+8.2f}")
 
     # ── Zapis do Google Sheets ────────────────────────────────────────────────
-    _write_to_sheets(args.dt_from, args.dt_to, stats, tot_old, tot_new)
+    _write_to_sheets(args.dt_from, args.dt_to, sheet_rows)
 
 
-def _write_to_sheets(dt_from: str, dt_to: str, stats: dict, tot_old: dict, tot_new: dict):
+def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict]):
     creds_json = os.getenv("GOOGLE_CREDENTIALS", "")
     if not creds_json:
         print("Brak GOOGLE_CREDENTIALS — pomijam zapis do Sheets")
@@ -505,45 +594,30 @@ def _write_to_sheets(dt_from: str, dt_to: str, stats: dict, tot_old: dict, tot_n
         SHEET_ID = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
         wb = client.open_by_key(SHEET_ID)
 
-        # Nazwa arkusza: "Backtest_Regime 2026-03-01–2026-04-04"
-        d_from = dt_from[:10]
-        d_to   = dt_to[:10]
-        sheet_name = f"Backtest_Regime {d_from}–{d_to}"
+        sheet_name = f"Backtest_Regime {dt_from[:10]}–{dt_to[:10]}"
 
         HEADER = [
-            "Typ setupu",
-            "STARY TP1", "STARY SL", "STARY brak", "STARY setupy", "STARY P&L",
-            "NOWY TP1",  "NOWY SL",  "NOWY brak",  "NOWY setupy",  "NOWY P&L",
+            "Timestamp", "Typ setupu", "Kierunek", "Reżim",
+            "W", "SL", "TP1", "TP2", "RR",
+            "Wynik", "P&L pkt",
         ]
 
         try:
             sh = wb.worksheet(sheet_name)
             sh.clear()
         except gspread.WorksheetNotFound:
-            sh = wb.add_worksheet(sheet_name, rows=20, cols=12)
+            sh = wb.add_worksheet(sheet_name, rows=len(rows) + 10, cols=12)
 
-        sh.append_row(HEADER)
+        # Batch update — szybciej niż append_row w pętli
+        data = [HEADER] + [
+            [r["ts"], r["type"], r["dir"], r["regime"],
+             r["w"], r["sl"], r["tp1"], r["tp2"], r["rr"],
+             r["wynik"], r["pnl"]]
+            for r in rows
+        ]
+        sh.update("A1", data)
 
-        for t in ALL_TYPES:
-            o = stats[t]["old"]
-            n = stats[t]["new"]
-            n_o = o["tp"] + o["sl"] + o["no"]
-            n_n = n["tp"] + n["sl"] + n["no"]
-            sh.append_row([
-                t,
-                o["tp"], o["sl"], o["no"], n_o, round(o["pnl"], 2),
-                n["tp"], n["sl"], n["no"], n_n, round(n["pnl"], 2),
-            ])
-
-        n_o = tot_old["tp"] + tot_old["sl"] + tot_old["no"]
-        n_n = tot_new["tp"] + tot_new["sl"] + tot_new["no"]
-        sh.append_row([
-            "RAZEM",
-            tot_old["tp"], tot_old["sl"], tot_old["no"], n_o, round(tot_old["pnl"], 2),
-            tot_new["tp"], tot_new["sl"], tot_new["no"], n_n, round(tot_new["pnl"], 2),
-        ])
-
-        print(f"\nZapisano do Sheets: '{sheet_name}'")
+        print(f"\nZapisano {len(rows)} setupów do Sheets: '{sheet_name}'")
 
     except Exception as e:
         print(f"Błąd zapisu do Sheets: {e}")
