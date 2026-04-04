@@ -724,6 +724,25 @@ def get_resolved_filtered(
     return {"total": total, "rows": rows}
 
 
+def get_all_resolved_for_calc() -> list[dict]:
+    """Zwraca wszystkie zamknięte setupy z polami potrzebnymi do kalkulatora zysku."""
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT setup_id, alert_time, model, type, direction, score,
+                       entries, tps, sl, sl_after_tp1, rr,
+                       result, avg_entry, avg_exit, pnl_usd, pnl_pct,
+                       entries_hit, exit_time,
+                       hypo_result, hypo_pnl_usd
+                FROM setups
+                WHERE resolved = TRUE
+                ORDER BY resolved_at ASC
+                """
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
 def save_hypo_result(setup_id: int, hypo_result: str, hypo_pnl_usd: float | None) -> None:
     """Zapisuje hipotetyczny wynik dla setupu który nie weszął."""
     with _conn() as conn:

@@ -1,4 +1,4 @@
-name: Test Regime (stary vs nowy)
+name: Test Regime (nowy algorytm)
 
 on:
   workflow_dispatch:
@@ -27,8 +27,10 @@ jobs:
           python-version: '3.12'
 
       - name: Zainstaluj zaleznosci
-        run: pip install requests
+        run: pip install requests gspread google-auth
 
       - name: Uruchom test
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
           python test_apr3.py --from '${{ inputs.dt_from }}' --to '${{ inputs.dt_to }}'
