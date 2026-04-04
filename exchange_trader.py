@@ -4,18 +4,19 @@ Exchange Trader — Bitget USDT-M Futures (SOLUSDT Perpetual)
 
 Flow dla każdego setupu:
   1. Nowy setup → 1 plan order przy W1 (pełna pozycja, bez presetów TP/SL)
-  2. Plan order wykonany → 2 TPSL ordery (składane ręcznie, bez presetów):
-       TP1: profit_plan, full_qty SOL, trigger=TP1  (zamyka całość)
+  2. Plan order wykonany → 3 TPSL ordery:
+       TP1: profit_plan, half_qty SOL, trigger=TP1
+       TP2: profit_plan, half_qty SOL, trigger=TP2
        SL:  loss_plan,   full_qty SOL, trigger=SL
   3. Monitoring TPSL:
-       SL wykonany  → anuluj TP1
-       TP1 wykonany → anuluj SL, zamknij setup
+       SL wykonany  → anuluj TP1 i TP2
+       TP1 wykonany → zmodyfikuj SL: size=half_qty, trigger=SLpoTP1
+       TP2 wykonany → anuluj SL
 
 Wymagane zmienne środowiskowe:
   BITGET_API_KEY, BITGET_API_SECRET, BITGET_PASSPHRASE
   BITGET_DEMO       — "true" = demo (domyślnie true)
-  BITGET_TRADE_SOL  — rozmiar pozycji w SOL (np. 2.4); jeśli nie ustawiony —
-  BITGET_TRADE_USDT — rozmiar pozycji w USDT (domyślnie 100), przeliczany na SOL
+  BITGET_TRADE_USDT — rozmiar pozycji w USDT (domyślnie 100)
 """
 
 import os
@@ -40,7 +41,6 @@ MARGIN_COIN  = "USDT"
 MARGIN_MODE  = "crossed"
 LEVERAGE     = 20
 TRADE_USDT    = float(os.getenv("BITGET_TRADE_USDT") or "100.0")
-TRADE_SOL     = float(os.getenv("BITGET_TRADE_SOL") or "0")    # 0 = przelicz z TRADE_USDT
 MAX_POSITIONS = int(os.getenv("BITGET_MAX_POSITIONS") or "5")
 QTY_STEP     = 0.1
 PRICE_DEC    = 2
@@ -164,10 +164,7 @@ def _client() -> BitgetClient | None:
         print("[exchange] Brak BITGET_API_KEY/BITGET_API_SECRET/BITGET_PASSPHRASE — pomijam.")
         return None
     demo = os.getenv("BITGET_DEMO", "true").lower() != "false"
-    if TRADE_SOL > 0:
-        print(f"[exchange] Sesja Bitget {'DEMO' if demo else 'PRODUKCJA'} | {SYMBOL} | {LEVERAGE}x | {TRADE_SOL} SOL/trade")
-    else:
-        print(f"[exchange] Sesja Bitget {'DEMO' if demo else 'PRODUKCJA'} | {SYMBOL} | {LEVERAGE}x | {TRADE_USDT} USDT/trade (przelicz na SOL)")
+    print(f"[exchange] Sesja Bitget {'DEMO' if demo else 'PRODUKCJA'} | {SYMBOL} | {LEVERAGE}x | {TRADE_USDT} USDT/trade")
     return BitgetClient(key, secret, passphrase, demo=demo)
 
 
@@ -207,13 +204,16 @@ def _set_leverage(client: BitgetClient):
 
 def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> str | None:
     """
-    Składa plan order przy W1 BEZ presetów TP/SL.
-    TPSL ordery są składane osobno po wejściu w pozycję przez _place_tpsl_orders().
+    Składa plan order przy W1 z preset TP1 i SL (jeśli dostępne).
+    Po triggerze plan order, preset TP/SL stają się osobnymi TPSL orderami na Bitget.
     Zwraca orderId lub None.
     """
     direction = s["direction"]
     w1        = s["entries"][0]
     side      = "buy" if direction == "long" else "sell"
+    tps       = s.get("tps", [])
+    tp1       = tps[0] if len(tps) > 0 else None
+    sl        = s.get("sl")
 
     params = {
         "symbol":       SYMBOL,
@@ -230,11 +230,22 @@ def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> s
         "orderType":    "market",
     }
 
+    # Preset TP/SL — aktywują się automatycznie po wejściu w pozycję
+    if tp1 is not None:
+        params["stopSurplusTriggerPrice"] = _fmt_price(tp1)
+        params["stopSurplusTriggerType"]  = "mark_price"
+    if sl is not None:
+        params["stopLossTriggerPrice"] = _fmt_price(sl)
+        params["stopLossTriggerType"]  = "mark_price"
+
     try:
         resp = client.post("/api/v2/mix/order/place-plan-order", params)
         if resp.get("code") == "00000":
             oid = resp["data"]["orderId"]
-            print(f"[exchange] Plan order złożony: {oid} | {side} {_fmt_qty(full_qty)} SOL @ trigger {w1}")
+            tp_sl_info = f"TP1={tp1}" if tp1 else ""
+            if sl:
+                tp_sl_info += f" SL={sl}"
+            print(f"[exchange] Plan order złożony: {oid} | {side} {_fmt_qty(full_qty)} SOL @ trigger {w1} | {tp_sl_info}")
             return oid
         log.error(f"[exchange] place_entry_plan_order: code={resp.get('code')} msg={resp.get('msg')}")
     except Exception as e:
@@ -552,7 +563,7 @@ def _sync_inner():
                 print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
                 continue
             w1       = entries[0]
-            full_qty = _round_qty(TRADE_SOL) if TRADE_SOL > 0 else _round_qty((TRADE_USDT * LEVERAGE) / w1)
+            full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
             oid      = _place_entry_plan_order(client, s, full_qty)
             if oid:
                 s["exchange_plan_oid"]        = oid
@@ -588,7 +599,7 @@ def _sync_inner():
                 calc_qty   = float(s.get("exchange_qty_full", "0").replace(",", ".") or "0")
                 if calc_qty <= 0:
                     w1       = entries[0]
-                    calc_qty = _round_qty(TRADE_SOL) if TRADE_SOL > 0 else _round_qty((TRADE_USDT * LEVERAGE) / w1)
+                    calc_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
 
                 if actual_qty <= 0:
                     # Plan order "executed" ale pozycja = 0 — częściowe wypełnienie
@@ -614,11 +625,15 @@ def _sync_inner():
                 full_qty = _round_qty(calc_qty)
                 half_qty = _round_qty(full_qty / 2)
 
-                # Zawsze składaj TPSL ręcznie — presety w plan orderze były źródłem
-                # race condition (duplikaty lub zgubione IDs), więc plan order
-                # nie zawiera presetów TP/SL, a TPSL są zawsze składane tutaj.
-                print(f"[exchange] {label}: składam TPSL po wejściu w pozycję...")
-                tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
+                # Sprawdź czy preset TP/SL z plan order już istnieją
+                preset_tp, preset_sl = _find_preset_tpsl(client, direction)
+                if preset_tp and preset_sl:
+                    tp1_id, sl_id = preset_tp, preset_sl
+                    print(f"[exchange] {label}: preset TPSL znalezione (TP1={tp1_id} SL={sl_id})")
+                else:
+                    # Fallback — złóż TPSL ręcznie
+                    print(f"[exchange] {label}: brak preset TPSL, składam ręcznie...")
+                    tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
 
                 s["exchange_position_opened"] = True
                 s["exchange_qty_full"]        = _fmt_qty(full_qty)
