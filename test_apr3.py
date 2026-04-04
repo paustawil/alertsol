@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-test_apr3.py — Porównanie starego vs nowego algorytmu detekcji reżimu.
+test_apr3.py — Test nowego algorytmu detekcji reżimu.
 Testuje wszystkie aktywne typy setupów (trend_consolidation_short/long wyłączone jak w produkcji).
-Pokazuje statystyki per typ setupu.
+Oblicza PnL $100 @ 20x dla wariantów TP1only i TP1+TP2.
+Eksportuje wyniki do Google Sheets.
 
 Uruchomienie:
     python test_apr3.py --from "2026-03-01 00:00" --to "2026-04-04 00:00"
 """
 
 import argparse
+import json
+import math
+import os
 import requests
 from datetime import datetime, timezone
 
@@ -320,9 +324,11 @@ def generate_setups(regime_str, direction, score, candles_m15, candles_h1, curre
 # ── Ewaluacja setupu na przyszłych świecach M15 ───────────────────────────────
 
 def evaluate(setup: dict, future_m15: list[dict], window_h: int = 24) -> str:
+    """Zwraca: 'TP2', 'TP1', 'SL', 'no_entry' lub 'open'."""
     if not setup or not future_m15:
         return "-"
     w, sl, tp1 = setup["w"], setup["sl"], setup["tp1"]
+    tp2 = setup.get("tp2")
     direction = setup.get("direction", "short")
     window_s = window_h * 3600
     t0 = future_m15[0]["time"]
@@ -339,23 +345,129 @@ def evaluate(setup: dict, future_m15: list[dict], window_h: int = 24) -> str:
     if entry_ts is None:
         return "no_entry"
 
+    tp1_hit_at = None
     for c in future_m15:
         if c["time"] < entry_ts:
             continue
         if direction == "short":
-            if c["low"]  <= tp1: return "TP1 ✓"
-            if c["high"] >= sl:  return "SL ✗"
+            tp1_now = c["low"]  <= tp1
+            tp2_now = tp2 is not None and c["low"]  <= tp2
+            sl_now  = c["high"] >= sl
         else:
-            if c["high"] >= tp1: return "TP1 ✓"
-            if c["low"]  <= sl:  return "SL ✗"
+            tp1_now = c["high"] >= tp1
+            tp2_now = tp2 is not None and c["high"] >= tp2
+            sl_now  = c["low"]  <= sl
+
+        if tp2_now:
+            return "TP2"
+        if tp1_now and sl_now and tp1_hit_at is None:
+            return "SL"
+        if tp1_now and tp1_hit_at is None:
+            if tp2 is None:
+                return "TP1"
+            tp1_hit_at = c["time"]
+            continue
+        if sl_now:
+            return "TP1" if tp1_hit_at is not None else "SL"
     return "open"
 
 
-def pnl_pts(setup: dict, res: str) -> float:
-    if not setup: return 0.0
-    if "TP1" in res: return round(abs(setup["w"] - setup["tp1"]), 2)
-    if "SL"  in res: return round(abs(setup["sl"] - setup["w"]),  2) * -1
-    return 0.0
+TRADE_USDT = 100.0
+LEVERAGE   = 20
+
+
+def calc_pnl_scenarios(setup: dict, result: str) -> tuple[float, float]:
+    """Zwraca (pnl_tp1only, pnl_tp1tp2) w USD dla $100 @ 20x dźwigni.
+
+    TP1only: całość pozycji wychodzi na TP1.
+    TP1+TP2: połowa na TP1, połowa na TP2.
+    Zwraca (0, 0) gdy brak wejścia lub wynik nieznany.
+    """
+    import math
+    if result in ("no_entry", "open", "-"):
+        return 0.0, 0.0
+    w   = setup["w"]
+    sl  = setup["sl"]
+    tp1 = setup["tp1"]
+    tp2 = setup.get("tp2")
+    d   = setup.get("direction", "short")
+    sign = 1 if d == "long" else -1
+
+    full_qty = max(math.floor((TRADE_USDT * LEVERAGE / w) / 0.1) * 0.1, 0.1)
+    half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+
+    # TP1only
+    if result in ("TP1", "TP2"):
+        pnl_tp1only = round(sign * full_qty * (tp1 - w), 2)
+    else:  # SL
+        pnl_tp1only = round(sign * full_qty * (sl - w), 2)
+
+    # TP1+TP2
+    if result == "TP2" and tp2 is not None:
+        pnl_tp1tp2 = round(sign * half_qty * (tp1 - w) + sign * half_qty * (tp2 - w), 2)
+    elif result == "TP1":
+        pnl_tp1tp2 = round(sign * full_qty * (tp1 - w), 2)  # bez TP2 = jak TP1only
+    else:  # SL
+        pnl_tp1tp2 = round(sign * full_qty * (sl - w), 2)
+
+    return pnl_tp1only, pnl_tp1tp2
+
+
+# ── Google Sheets export ──────────────────────────────────────────────────────
+
+SHEETS_HEADER = [
+    "Godz (UTC)", "Cena", "Reżim", "c24%", "Score",
+    "Typ setupu", "Kierunek", "W", "SL", "TP1", "TP2", "RR",
+    "Wynik",
+    f"TP1only PnL($100@{LEVERAGE}x)", "TP1only PnL%",
+    f"TP1+TP2 PnL($100@{LEVERAGE}x)", "TP1+TP2 PnL%",
+]
+
+
+def export_to_sheets(sheet_name: str, rows: list[list], stats: dict) -> None:
+    """Eksportuje wyniki testu do Google Sheets. Wymaga GOOGLE_CREDENTIALS w env."""
+    creds_json = os.getenv("GOOGLE_CREDENTIALS", "")
+    sheet_id   = os.getenv("SHEET_ID", "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE")
+    if not creds_json:
+        print("[sheets] Brak GOOGLE_CREDENTIALS — pomijam eksport.")
+        return
+
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        creds  = Credentials.from_service_account_info(
+            json.loads(creds_json),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        client = gspread.authorize(creds)
+        wb     = client.open_by_key(sheet_id)
+
+        try:
+            sh = wb.worksheet(sheet_name)
+            sh.clear()
+        except Exception:
+            sh = wb.add_worksheet(sheet_name, rows=len(rows) + 20, cols=len(SHEETS_HEADER) + 2)
+
+        sh.append_row(SHEETS_HEADER)
+        if rows:
+            sh.append_rows(rows, value_input_option="USER_ENTERED")
+
+        # Wiersz podsumowania
+        tot = stats["RAZEM"]
+        n   = tot["tp1"] + tot["tp2"] + tot["sl"] + tot["no"]
+        summary = [
+            "SUMA", "", "", "", f"n={n}",
+            "", "", "", "", "", "", "",
+            f"TP1={tot['tp1']} TP2={tot['tp2']} SL={tot['sl']} brak={tot['no']}",
+            f"{tot['pnl_tp1only']:+.2f}", "",
+            f"{tot['pnl_tp1tp2']:+.2f}", "",
+        ]
+        sh.append_row(summary, value_input_option="USER_ENTERED")
+
+        print(f"[sheets] Eksport OK → '{sheet_name}' ({len(rows)} setupów)")
+    except Exception as e:
+        print(f"[sheets] Błąd eksportu: {e}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -371,6 +483,7 @@ ALL_TYPES = [
     "range_support_long",
 ]
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--from", dest="dt_from", default="2026-03-01 00:00")
@@ -380,9 +493,9 @@ def main():
     from_ts = _parse_dt(args.dt_from)
     to_ts   = _parse_dt(args.dt_to)
 
-    fetch_end = to_ts + 24 * 3600
+    fetch_end  = to_ts + 24 * 3600
     m15_needed = 100 + (fetch_end - from_ts) // 900
-    h1_needed  = 200 + (fetch_end - from_ts) // 3600  # 200 zapas na MA20/swing
+    h1_needed  = 200 + (fetch_end - from_ts) // 3600
 
     print(f"Pobieranie danych: {args.dt_from} – {args.dt_to} (+24h ewaluacja)...")
     m15_all = fetch_klines_okx("SOLUSDT", "15m", m15_needed, fetch_end)
@@ -395,13 +508,15 @@ def main():
     print(f"M15: {len(m15_all)} świec | H1: {len(h1_all)} świec")
     print()
 
-    # stats[type]["old"/"new"] = {tp, sl, no, pnl}
-    stats = {t: {"old": {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0},
-                 "new": {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0}}
-             for t in ALL_TYPES}
+    # Statystyki per typ setupu
+    stats = {t: {"tp1": 0, "tp2": 0, "sl": 0, "no": 0,
+                 "pnl_tp1only": 0.0, "pnl_tp1tp2": 0.0}
+             for t in ALL_TYPES + ["RAZEM"]}
 
-    # Per-hour tabela: tylko reżimy
-    hdr = f"{'Godz':>11}  {'Cena':>7}  {'slope':>7}  {'STARY':>14}  {'NOWY':>14}  {'setup old':>28}  {'setup new':>28}"
+    # Wiersze do Sheets: jedna linia = jeden setup
+    sheet_rows: list[list] = []
+
+    hdr = f"{'Godz':>11}  {'Cena':>7}  {'c24':>7}  {'Reżim':>16}  {'Typ setupu':>28}  {'Wynik':>8}  {'TP1only':>9}  {'TP1+TP2':>9}"
     print(hdr)
     print("-" * len(hdr))
 
@@ -416,71 +531,82 @@ def main():
         price = m15_snap[-1]["close"]
         dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d.%m %H:%M")
 
-        old_r, old_dir, old_score        = detect_regime_old(m15_snap, h1_snap, price)
         new_r, new_dir, new_score, slope = detect_regime_new(m15_snap, h1_snap, price)
-
-        old_setups = generate_setups(old_r, old_dir, old_score, m15_snap, h1_snap, price)
         new_setups = generate_setups(new_r, new_dir, new_score, m15_snap, h1_snap, price)
 
-        # Akumuluj statystyki
-        for s in old_setups:
-            res = evaluate(s, future)
-            p   = pnl_pts(s, res)
-            st  = stats[s["type"]]["old"]
-            if "TP1" in res: st["tp"] += 1
-            elif "SL" in res: st["sl"] += 1
-            else:             st["no"] += 1
-            st["pnl"] += p
-
         for s in new_setups:
-            res = evaluate(s, future)
-            p   = pnl_pts(s, res)
-            st  = stats[s["type"]]["new"]
-            if "TP1" in res: st["tp"] += 1
-            elif "SL" in res: st["sl"] += 1
-            else:             st["no"] += 1
-            st["pnl"] += p
+            res                     = evaluate(s, future)
+            pnl_tp1only, pnl_tp1tp2 = calc_pnl_scenarios(s, res)
+            st = stats[s["type"]]
+            if res == "TP2":      st["tp2"] += 1
+            elif res == "TP1":    st["tp1"] += 1
+            elif res == "SL":     st["sl"]  += 1
+            else:                 st["no"]  += 1
+            st["pnl_tp1only"] += pnl_tp1only
+            st["pnl_tp1tp2"]  += pnl_tp1tp2
 
-        # Skrócone nazwy setupów do wyświetlenia
-        def fmt_setups(sl):
-            if not sl: return f"{'—':>28}"
-            names = [s["type"].replace("trend_","t_").replace("impulse_","imp_").replace("range_","r_")
-                     .replace("_short","↓").replace("_long","↑").replace("continuation","cont")
-                     .replace("pullback","pb").replace("resistance","res").replace("support","sup")
-                     for s in sl]
-            return ", ".join(names)[:28].ljust(28)
+            tp1only_str = f"{pnl_tp1only:+.2f}" if res not in ("no_entry", "open") else "—"
+            tp1tp2_str  = f"{pnl_tp1tp2:+.2f}"  if res not in ("no_entry", "open") else "—"
+            tp1only_pct = f"{pnl_tp1only / TRADE_USDT * 100:+.1f}%" if res not in ("no_entry", "open") else "—"
+            tp1tp2_pct  = f"{pnl_tp1tp2  / TRADE_USDT * 100:+.1f}%" if res not in ("no_entry", "open") else "—"
 
-        regime_mark = " ◄" if old_r != new_r else ""
-        print(f"{dt_str}  {price:>7.2f}  c24={slope:>+5.1f}%  {old_r:>14}  {new_r:>14}  "
-              f"{fmt_setups(old_setups)}  {fmt_setups(new_setups)}{regime_mark}")
+            short_type = (s["type"]
+                          .replace("trend_", "t_").replace("impulse_", "imp_").replace("range_", "r_")
+                          .replace("_short", "↓").replace("_long", "↑")
+                          .replace("continuation", "cont").replace("pullback", "pb")
+                          .replace("resistance", "res").replace("support", "sup"))
 
-    # ── Podsumowanie per typ ───────────────────────────────────────────────────
+            print(f"{dt_str}  {price:>7.2f}  c24={slope:>+5.1f}%  {new_r:>16}  "
+                  f"{short_type:>28}  {res:>8}  {tp1only_str:>9}  {tp1tp2_str:>9}")
+
+            sheet_rows.append([
+                datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                round(price, 2),
+                new_r,
+                round(slope, 2),
+                new_score,
+                s["type"],
+                s["direction"],
+                s["w"], s["sl"], s["tp1"],
+                s.get("tp2", ""),
+                s.get("rr", ""),
+                res,
+                tp1only_str, tp1only_pct,
+                tp1tp2_str,  tp1tp2_pct,
+            ])
+
+    # Uzupełnij RAZEM
+    for t in ALL_TYPES:
+        for k in ("tp1", "tp2", "sl", "no", "pnl_tp1only", "pnl_tp1tp2"):
+            stats["RAZEM"][k] += stats[t][k]
+
+    # ── Podsumowanie per typ ──────────────────────────────────────────────────
     print()
     print("=" * 90)
-    print(f"{'Typ setupu':<30}  {'--- STARY ---':>32}  {'--- NOWY ---':>32}")
-    print(f"{'':30}  {'TP1':>4} {'SL':>4} {'brak':>4} {'setupy':>6} {'P&L':>8}  "
-          f"{'TP1':>4} {'SL':>4} {'brak':>4} {'setupy':>6} {'P&L':>8}")
+    print(f"{'Typ setupu':<30}  {'TP1':>4} {'TP2':>4} {'SL':>4} {'brak':>4} {'setupy':>6}  "
+          f"{'TP1only$':>10}  {'TP1+TP2$':>10}")
     print("-" * 90)
-
-    tot_old = {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0}
-    tot_new = {"tp": 0, "sl": 0, "no": 0, "pnl": 0.0}
 
     for t in ALL_TYPES:
-        o = stats[t]["old"]
-        n = stats[t]["new"]
-        n_o = o["tp"] + o["sl"] + o["no"]
-        n_n = n["tp"] + n["sl"] + n["no"]
-        print(f"{t:<30}  {o['tp']:>4} {o['sl']:>4} {o['no']:>4} {n_o:>6} {o['pnl']:>+8.2f}  "
-              f"{n['tp']:>4} {n['sl']:>4} {n['no']:>4} {n_n:>6} {n['pnl']:>+8.2f}")
-        for k in ("tp", "sl", "no", "pnl"):
-            tot_old[k] += o[k]
-            tot_new[k] += n[k]
+        st = stats[t]
+        n  = st["tp1"] + st["tp2"] + st["sl"] + st["no"]
+        print(f"{t:<30}  {st['tp1']:>4} {st['tp2']:>4} {st['sl']:>4} {st['no']:>4} {n:>6}  "
+              f"{st['pnl_tp1only']:>+10.2f}  {st['pnl_tp1tp2']:>+10.2f}")
 
     print("-" * 90)
-    n_o = tot_old["tp"] + tot_old["sl"] + tot_old["no"]
-    n_n = tot_new["tp"] + tot_new["sl"] + tot_new["no"]
-    print(f"{'RAZEM':<30}  {tot_old['tp']:>4} {tot_old['sl']:>4} {tot_old['no']:>4} {n_o:>6} {tot_old['pnl']:>+8.2f}  "
-          f"{tot_new['tp']:>4} {tot_new['sl']:>4} {tot_new['no']:>4} {n_n:>6} {tot_new['pnl']:>+8.2f}")
+    tot = stats["RAZEM"]
+    n   = tot["tp1"] + tot["tp2"] + tot["sl"] + tot["no"]
+    print(f"{'RAZEM':<30}  {tot['tp1']:>4} {tot['tp2']:>4} {tot['sl']:>4} {tot['no']:>4} {n:>6}  "
+          f"{tot['pnl_tp1only']:>+10.2f}  {tot['pnl_tp1tp2']:>+10.2f}")
+    print()
+    print(f"TP1only: {tot['pnl_tp1only']:+.2f}$ ({tot['pnl_tp1only'] / TRADE_USDT * 100:+.1f}% na $100)")
+    print(f"TP1+TP2: {tot['pnl_tp1tp2']:+.2f}$ ({tot['pnl_tp1tp2'] / TRADE_USDT * 100:+.1f}% na $100)")
+
+    # ── Eksport do Sheets ─────────────────────────────────────────────────────
+    date_from = datetime.fromtimestamp(from_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    date_to   = datetime.fromtimestamp(to_ts,   tz=timezone.utc).strftime("%Y-%m-%d")
+    sheet_name = f"TestRegime_{date_from}_{date_to}"
+    export_to_sheets(sheet_name, sheet_rows, stats)
 
 
 if __name__ == "__main__":
