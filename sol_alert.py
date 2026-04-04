@@ -2837,8 +2837,9 @@ STALE_DIST_PCT = 0.05  # 5% — max dystans ceny od entry, powyżej = anuluj
 def check_stale_setups(regime: dict, current_price: float):
     """Anuluje nieotwarte setupy, które się zdezaktualizowały.
     Kryteria:
-    1. Cena uciekła >5% od entry
-    2. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
+    1. Cena przeszła przez poziom SL przed wejściem — techniczna podstawa setupu zniszczona
+    2. Cena uciekła >5% od entry
+    3. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
     """
     pending = db.get_active_setups()
     non_entered = [s for s in pending
@@ -2853,18 +2854,27 @@ def check_stale_setups(regime: dict, current_price: float):
     for s in non_entered:
         sid = s.get("setup_id")
         w1 = s["entries"][0] if s.get("entries") else None
+        sl = s.get("sl")
         d = s.get("direction", "")
         if not w1:
             continue
 
         reason = None
 
-        # 1. Cena uciekła za daleko od entry
-        dist_pct = abs(current_price - w1) / current_price
-        if dist_pct > STALE_DIST_PCT:
-            reason = f"cena uciekła ({dist_pct:.1%} od entry ${w1:.2f})"
+        # 1. Cena przeszła przez SL przed wejściem — punkt inwalidacji przekroczony
+        if sl:
+            if d == "long" and current_price < sl:
+                reason = f"SL przekroczony przed wejściem (cena ${current_price:.2f} < SL ${sl:.2f})"
+            elif d == "short" and current_price > sl:
+                reason = f"SL przekroczony przed wejściem (cena ${current_price:.2f} > SL ${sl:.2f})"
 
-        # 2. Reżim zmienił kierunek
+        # 2. Cena uciekła za daleko od entry
+        if not reason:
+            dist_pct = abs(current_price - w1) / current_price
+            if dist_pct > STALE_DIST_PCT:
+                reason = f"cena uciekła ({dist_pct:.1%} od entry ${w1:.2f})"
+
+        # 3. Reżim zmienił kierunek
         if not reason and regime_dir != "none":
             if d == "short" and regime_dir == "up":
                 reason = f"zmiana reżimu na {regime['regime']} (setup short)"
