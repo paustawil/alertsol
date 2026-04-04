@@ -670,10 +670,10 @@ def main():
           f"{tot_new['tp']:>4} {tot_new['sl']:>4} {tot_new['no']:>4} {n_n:>6} {tot_new['pnl']:>+8.2f}")
 
     # ── Zapis do Google Sheets ────────────────────────────────────────────────
-    _write_to_sheets(args.dt_from, args.dt_to, sheet_rows, dedup=args.dedup)
+    _write_to_sheets(args.dt_from, args.dt_to, sheet_rows, dedup=args.dedup, invalidate=args.invalidate)
 
 
-def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict], dedup: bool = False):
+def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict], dedup: bool = False, invalidate: bool = False):
     creds_json = os.getenv("GOOGLE_CREDENTIALS", "")
     if not creds_json:
         print("Brak GOOGLE_CREDENTIALS — pomijam zapis do Sheets")
@@ -690,8 +690,9 @@ def _write_to_sheets(dt_from: str, dt_to: str, rows: list[dict], dedup: bool = F
         SHEET_ID = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
         wb = client.open_by_key(SHEET_ID)
 
-        dedup_sfx  = "_dedup" if dedup else ""
-        sheet_name = f"Backtest_Regime {dt_from[:10]}–{dt_to[:10]}{dedup_sfx}"
+        dedup_sfx = "_dedup" if dedup else ""
+        val_sfx   = "_val"   if invalidate else ""
+        sheet_name = f"Backtest_Regime {dt_from[:10]}–{dt_to[:10]}{dedup_sfx}{val_sfx}"
 
         HEADER = [
             "Timestamp", "Typ setupu", "Kierunek", "Reżim",
