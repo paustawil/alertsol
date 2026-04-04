@@ -34,7 +34,7 @@ LEVERAGE         = 20
 MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
 SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
-ENTRY_TIMEOUT_H  = 4
+ENTRY_TIMEOUT_H  = 24
 TRADE_TIMEOUT_H  = 24
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
 MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzucony jako zbyt niepewny
