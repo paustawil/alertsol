@@ -2345,6 +2345,68 @@ def log_to_anulowane_grok(s: dict, result: str, entry_ts, exit_ts,
         return False
 
 
+GROK_SHADOW_HEADER = [
+    "ID", "Snapshot", "Kierunek", "Typ", "W1", "SL", "TP1", "TP2", "RR", "Score",
+    "Sprzeczność_Reżimu",
+    "Wynik_Wirtualny", "Entries_hit", "Śr.Entry", "Śr.Exit", "Wejście o", "Wyjście o", "PnL $",
+]
+
+
+def log_to_grok_shadow(s: dict, result: str, entry_ts, exit_ts,
+                       eff_entry, eff_exit, move: float) -> bool:
+    """Zapisuje wirtualny wynik shadow Grok setupu do arkusza Grok_Shadow."""
+    try:
+        creds  = Credentials.from_service_account_info(
+            json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        )
+        client = gspread.authorize(creds)
+        wb     = client.open_by_key(SHEET_ID)
+        try:
+            sh = wb.worksheet("Grok_Shadow")
+        except gspread.WorksheetNotFound:
+            sh = wb.add_worksheet("Grok_Shadow", rows=500, cols=len(GROK_SHADOW_HEADER) + 2)
+            sh.append_row(GROK_SHADOW_HEADER)
+        _at      = s["alert_time"]
+        if isinstance(_at, str):
+            _at = datetime.fromisoformat(_at)
+        alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
+        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
+        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
+        entries  = s.get("entries", [])
+        tps      = s.get("tps", [])
+        n_w      = s.get("entries_hit", 1)
+        # Wyciągnij sprzeczność z reasoning (prefiks "⚠️ SPRZECZNY Z REŻIMEM: X | ")
+        reasoning    = s.get("reasoning", "")
+        conflict_val = ""
+        if reasoning.startswith("⚠️ SPRZECZNY Z REŻIMEM: "):
+            conflict_val = reasoning.split("|")[0].replace("⚠️ SPRZECZNY Z REŻIMEM: ", "").strip()
+        sh.append_row([
+            s.get("setup_id", "") or "",
+            alert_dt,
+            s.get("direction", ""),
+            s.get("type", ""),
+            entries[0] if entries else "",
+            s.get("sl", ""),
+            tps[0] if tps else "",
+            tps[1] if len(tps) > 1 else "",
+            s.get("rr", ""),
+            s.get("score", ""),
+            conflict_val,
+            result,
+            "+".join(f"W{i+1}" for i in range(n_w)) if n_w > 0 else "",
+            round(eff_entry, 2) if eff_entry is not None else "",
+            round(eff_exit,  2) if eff_exit  is not None else "",
+            entry_dt, exit_dt,
+            round(move, 2),
+        ])
+        print(f"[sheets] Grok_Shadow: #{s.get('setup_id')} -> {result} ${move:.2f}")
+        return True
+    except Exception as e:
+        print(f"[sheets] Błąd Grok_Shadow: {e}")
+        return False
+
+
 KALKULATOR_HEADER = [
     "ID", "Data alertu", "Model", "Typ", "Kierunek", "Score",
     "W1", "SL", "TP1", "TP2", "RR",
@@ -2602,21 +2664,21 @@ def next_setup_id() -> int:
     raise RuntimeError("next_setup_id() nie powinien być wywoływany bezpośrednio — użyj db.insert_setup()")
 
 
-def save_pending(setup: dict, model: str, rejection: str, current_price: float):
+def save_pending(setup: dict, model: str, rejection: str, current_price: float, shadow: bool = False):
     entries   = setup.get("entries", [])
     tps       = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
     tps       = [t for t in tps if t is not None]
     new_level = entries[0] if entries else current_price
     direction = setup.get("direction", "-")
 
-    # Nie dodawaj duplikatu — jakikolwiek model ma już ten sam kierunek/poziom w aktywnych setupach.
-    # Blokuje ZARÓWNO setupy przed wejściem (entry_hit_at IS NULL) JAK I po wejściu,
-    # żeby uniknąć podwójnego zlecenia na giełdzie przy otwartej pozycji.
-    for p in db.get_active_setups():
-        if (p["direction"] == direction
-                and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5):
-            print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} (już istnieje #{p['setup_id']} od {p['model']})")
-            return
+    # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
+    # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
+    if not shadow:
+        for p in db.get_active_setups():
+            if (p["direction"] == direction
+                    and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5):
+                print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} (już istnieje #{p['setup_id']} od {p['model']})")
+                return
 
     # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
     w1_lvl    = entries[0] if entries else current_price
@@ -2650,6 +2712,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float):
         "tp1_hit_at":      None,
         "sl_adjusted":     False,
         "entries_hit":     1,
+        "shadow":          shadow,
     }
     sid = db.insert_setup(row)
     if sid is None:
@@ -2974,6 +3037,125 @@ def check_pending(candles_m15: list[dict]):
                             tp1_hit_at=s.get("tp1_hit_at"),
                             sl_adjusted=s.get("sl_adjusted", False),
                             entries_hit=s.get("entries_hit", 1))
+
+
+# ── Grok shadow — niezależna detekcja, shadow mode, wirtualny tracking ───────
+
+def _grok_regime_conflict(grok_direction: str, regime: dict) -> str | None:
+    """Zwraca nazwę reżimu jeśli Grok idzie wbrew dominującemu kierunkowi, inaczej None."""
+    r  = regime.get("regime", "")
+    rd = regime.get("direction", "none")
+    if grok_direction == "long"  and rd == "down": return r   # np. "TREND_DOWN"
+    if grok_direction == "short" and rd == "up":   return r   # np. "IMPULSE_UP"
+    return None
+
+
+_last_grok_detection_ts: float = 0.0
+
+
+def grok_shadow_main() -> None:
+    """Wywoływana co 5 min przez scheduler.
+    Detekcja: co 60 min normalnie, co 5 min podczas IMPULSE_UP/DOWN.
+    Wirtualny tracking: check_pending() w main() co 15 min obsługuje shadow setups automatycznie.
+    """
+    global _last_grok_detection_ts
+    if not XAI_KEY:
+        print("[grok-shadow] Brak XAI_API_KEY — pomijam.")
+        return
+
+    try:
+        candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
+        candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
+        last_1m     = fetch_klines(SYMBOL, "1m",  limit=1)
+        current     = float(last_1m[-1]["close"]) if last_1m else None
+    except Exception as e:
+        print(f"[grok-shadow] Błąd pobierania danych: {e}")
+        return
+
+    if not candles_m15 or not candles_h1 or not current:
+        print("[grok-shadow] Brak danych — pomijam.")
+        return
+
+    regime     = detect_market_regime(candles_m15, candles_h1, current)
+    is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
+
+    now       = time.time()
+    threshold = 5 * 60 if is_impulse else 60 * 60
+    elapsed   = now - _last_grok_detection_ts
+    if elapsed < threshold:
+        mins_left = int((threshold - elapsed) / 60)
+        print(f"[grok-shadow] Za wcześnie — następna detekcja za ~{mins_left} min (reżim: {regime['regime']})")
+        return
+
+    _last_grok_detection_ts = now
+    print(f"[grok-shadow] Detekcja | Reżim: {regime['regime']} | Cena: ${current:.2f}")
+
+    grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
+    if not grok_result:
+        print("[grok-shadow] Brak odpowiedzi od Groka.")
+        return
+
+    bias      = grok_result.get("bias", "neutral")
+    bias_proc = grok_result.get("bias_proc", 0)
+    send_flag = grok_result.get("send_alert", False)
+
+    print(f"[grok-shadow] Bias: {bias} ({bias_proc}%) | send_alert={send_flag}")
+
+    if not send_flag or bias == "neutral" or bias_proc < MIN_GROK_BIAS_PROC:
+        print("[grok-shadow] Brak setupu lub zbyt niski bias.")
+        return
+
+    wejscia = grok_result.get("wejscia", [])
+    entries = [w["poziom"] for w in wejscia if "poziom" in w]
+    if not entries:
+        print("[grok-shadow] Grok bez entries — pomijam.")
+        return
+
+    akcja_lower = grok_result.get("akcja", "").lower()
+    if "pullback" in akcja_lower:
+        warunek = "pullback"
+    elif any(kw in akcja_lower for kw in ["break", "breakdown", "przebicie"]):
+        warunek = "przebicie"
+    else:
+        w1_lvl  = entries[0]
+        warunek = ("przebicie" if (bias == "short" and w1_lvl < current)
+                               or (bias == "long"  and w1_lvl > current)
+                   else "pullback")
+
+    grok_setup = {
+        "type":         grok_result.get("akcja", ""),
+        "direction":    bias,
+        "score":        bias_proc,
+        "kurs":         round(current, 2),
+        "entries":      entries,
+        "warunek":      warunek,
+        "sl":           grok_result.get("sl"),
+        "sl_after_tp1": grok_result.get("sl_after_tp1"),
+        "tps":          [t for t in [grok_result.get("tp1"), grok_result.get("tp2")] if t is not None],
+        "rr":           grok_result.get("rr", 0),
+        "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
+    }
+
+    # Wykryj sprzeczność z reżimem i zaznacz w reasoning (arkusz wyciągnie prefiks)
+    regime_conflict = _grok_regime_conflict(bias, regime)
+    if regime_conflict:
+        grok_setup["reasoning"] = f"⚠️ SPRZECZNY Z REŻIMEM: {regime_conflict} | " + grok_setup["reasoning"]
+
+    rejection = validate_setup(grok_setup, "Grok")
+    if rejection:
+        print(f"[grok-shadow] Odrzucony walidacją: {rejection}")
+        return
+
+    save_pending(grok_setup, "Grok", "", current, shadow=True)
+    if grok_setup.get("setup_id"):
+        conflict_note = f" ⚠️ vs {regime_conflict}" if regime_conflict else ""
+        send_telegram(format_grok_alert(
+            grok_result, current, grok_setup["setup_id"],
+            model_name=f"Grok 👁 (shadow{conflict_note})"
+        ))
+        print(f"[grok-shadow] Setup #{grok_setup['setup_id']} zapisany | shadow=True | conflict={regime_conflict}")
+    else:
+        print("[grok-shadow] Błąd zapisu do DB.")
 
 
 # ── Grok — walidacja oczekujących setupów ────────────────────────────────────

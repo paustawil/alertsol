@@ -83,7 +83,9 @@ def run_sheets_export():
             move      = float(s["pnl_usd"])   if s.get("pnl_usd")   else 0.0
 
             try:
-                if s.get("shadow"):
+                if s.get("shadow") and s.get("model") == "Grok":
+                    ok = sol_alert.log_to_grok_shadow(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
+                elif s.get("shadow"):
                     ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
                 else:
                     ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
@@ -105,6 +107,15 @@ def run_profit_calculator_export():
         sol_alert.export_profit_calculator_to_sheets()
     except Exception:
         log.exception("[kalkulator] Błąd eksportu kalkulatora")
+
+
+def run_grok_shadow():
+    """Grok shadow — detekcja co 60 min (lub co 5 min podczas IMPULSE), wirtualny tracking."""
+    try:
+        import sol_alert
+        sol_alert.grok_shadow_main()
+    except Exception:
+        log.exception("[grok-shadow] grok_shadow_main() BŁĄD")
 
 
 # ── FastAPI dashboard ──────────────────────────────────────────────────────────
@@ -165,8 +176,18 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
 
+    # Grok shadow — co 5 min (wewnętrznie throttled: detekcja co 60 min lub co 5 min podczas IMPULSE)
+    scheduler.add_job(
+        run_grok_shadow,
+        "interval",
+        minutes=5,
+        id="grok_shadow",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
-    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 15min | sheets: co 5min | kalkulator: co 1h")
+    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 15min | grok_shadow: co 5min | sheets: co 5min | kalkulator: co 1h")
 
     yield
 
