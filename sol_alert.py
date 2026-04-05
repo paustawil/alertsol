@@ -3316,7 +3316,7 @@ _last_breakout_tg_regime: str = ""
 
 def breakout_scan():
     """Szybki skan breakoutowy — sprawdza cenę i volume.
-    Przy IMPULSE/TREND: powiadomienie Telegram (z cooldownem) + Algo2 setup."""
+    Przy IMPULSE: powiadomienie Telegram (z cooldownem) + Algo2 setup."""
     global _last_breakout_tg_ts, _last_breakout_tg_regime
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
@@ -3330,10 +3330,11 @@ def breakout_scan():
     if regime["regime"] == "RANGE":
         return  # Nic nie rób w RANGE
 
-    # Telegram notification — cooldown 30 min na ten sam reżim
+    # Telegram notification — tylko przy IMPULSE, cooldown 30 min
+    is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
     now = time.time()
-    if not (regime["regime"] == _last_breakout_tg_regime
-            and now - _last_breakout_tg_ts < 1800):
+    if is_impulse and not (regime["regime"] == _last_breakout_tg_regime
+                           and now - _last_breakout_tg_ts < 1800):
         _last_breakout_tg_ts = now
         _last_breakout_tg_regime = regime["regime"]
 
