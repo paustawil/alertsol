@@ -461,6 +461,57 @@ def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty
         log.warning(f"[exchange] modify_sl {sl_order_id}: {e}")
 
 
+# ── Monitoring pozycji po TP1 (wirtualna druga połowa) ───────────────────────
+
+def _check_after_tp1_positions(client: BitgetClient) -> None:
+    """
+    Sprawdza czy cena osiągnęła TP2 lub sl_after_tp1 dla setupów w stanie after_tp1.
+    Wywoływana co 15s w _sync_inner(). Używa aktualnej ceny mark z Bitget.
+    """
+    setups = db.get_after_tp1_setups()
+    if not setups:
+        return
+
+    try:
+        resp = client.get("/api/v2/mix/market/ticker", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+        })
+        price_data = (resp.get("data") or [{}])[0]
+        current_price = float(price_data.get("markPrice") or 0)
+    except Exception as e:
+        log.warning(f"[exchange] after_tp1 monitor: błąd pobierania ceny — {e}")
+        return
+
+    if not current_price:
+        return
+
+    for s in setups:
+        sid       = s.get("setup_id")
+        direction = s.get("direction", "")
+        tps       = s.get("tps") or []
+        tp2       = float(tps[1]) if len(tps) > 1 else None
+        sl_at_tp1 = float(s["sl_after_tp1"]) if s.get("sl_after_tp1") else None
+        avg_entry = s.get("avg_entry")
+        pnl_usd   = s.get("pnl_usd")
+        label     = f"#{sid} {direction} after_tp1"
+
+        if direction == "long":
+            if tp2 and current_price >= tp2:
+                print(f"[exchange] {label}: cena {current_price} >= TP2 {tp2} → TP1+TP2")
+                db.resolve_setup(int(sid), "TP1+TP2", avg_entry, tp2, pnl_usd, None)
+            elif sl_at_tp1 and current_price <= sl_at_tp1:
+                print(f"[exchange] {label}: cena {current_price} <= sl@TP1 {sl_at_tp1} → TP1+BE")
+                db.resolve_setup(int(sid), "TP1+BE", avg_entry, sl_at_tp1, pnl_usd, None)
+        elif direction == "short":
+            if tp2 and current_price <= tp2:
+                print(f"[exchange] {label}: cena {current_price} <= TP2 {tp2} → TP1+TP2")
+                db.resolve_setup(int(sid), "TP1+TP2", avg_entry, tp2, pnl_usd, None)
+            elif sl_at_tp1 and current_price >= sl_at_tp1:
+                print(f"[exchange] {label}: cena {current_price} >= sl@TP1 {sl_at_tp1} → TP1+BE")
+                db.resolve_setup(int(sid), "TP1+BE", avg_entry, sl_at_tp1, pnl_usd, None)
+
+
 # ── Główna funkcja synchronizacji ─────────────────────────────────────────────
 
 _sync_lock = threading.Lock()
@@ -499,6 +550,9 @@ def _sync_inner():
 
     _set_hedge_mode(client)
     _set_leverage(client)
+
+    # Sprawdź pozycje po TP1 — wirtualna druga połowa
+    _check_after_tp1_positions(client)
 
     pending  = _load_pending()
     modified = False
@@ -720,8 +774,8 @@ def _sync_inner():
                 print(f"[exchange] {label}: TP1 status = {tp1_status}")
 
                 if tp1_status == "executed":
-                    # TP1 zamknął całą pozycję — anuluj SL
-                    print(f"[exchange] {label}: TP1 wykonany — anuluj SL, pozycja zamknięta")
+                    # TP1 zamknął całą pozycję — anuluj SL, zostaw setup aktywny (after_tp1)
+                    print(f"[exchange] {label}: TP1 wykonany — anuluj SL, czekamy na TP2/BE")
                     if sl_oid:
                         _cancel_order(client, sl_oid, "loss_plan")
                     s["exchange_tp1_oid"]  = None
@@ -734,14 +788,13 @@ def _sync_inner():
                         tps       = s.get("tps") or []
                         tp1_price = float(tps[0]) if tps else None
                         avg_entry = s.get("avg_entry")
-                        avg_exit  = tp1_price
                         pnl_usd   = None
                         if avg_entry and tp1_price:
                             fq       = (s.get("exchange_qty_full") or "0").replace(",", ".")
                             full_qty = float(fq)
                             sign     = 1 if s.get("direction") == "long" else -1
                             pnl_usd  = sign * full_qty * (tp1_price - float(avg_entry))
-                        db.resolve_setup(int(sid), "TP1", avg_entry, avg_exit, pnl_usd, None)
+                        db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
 
                 elif tp1_status == "cancelled":
                     log.warning(f"[exchange] {label}: TP1 anulowany — zostanie ponownie złożony")

@@ -120,3 +120,12 @@ ALTER TABLE setups ADD COLUMN IF NOT EXISTS sheets_exported        BOOLEAN NOT N
 -- Hipotetyczne wyniki dla setupów które nie weszły (np. brak slotu na Bitget)
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS hypo_result            TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS hypo_pnl_usd           NUMERIC(10,4);
+
+-- Status setupu: pending | open | after_tp1 | closed
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+CREATE INDEX IF NOT EXISTS idx_setups_status ON setups (status);
+
+-- Backfill statusu dla istniejących rekordów
+UPDATE setups SET status = 'closed'    WHERE resolved = TRUE AND status = 'pending';
+UPDATE setups SET status = 'after_tp1' WHERE resolved = FALSE AND exchange_tp1_done = TRUE AND status = 'pending';
+UPDATE setups SET status = 'open'      WHERE resolved = FALSE AND exchange_position_opened = TRUE AND exchange_tp1_done = FALSE AND status = 'pending';
