@@ -186,6 +186,7 @@ def insert_setup(row: dict) -> int | None:
         "entry_hit_at":    row.get("entry_hit_at"),
         "entries_hit":     row.get("entries_hit", 1),
         "sl_adjusted":     row.get("sl_adjusted", False),
+        "shadow":          row.get("shadow", False),
     }
 
     with _conn() as conn:
@@ -203,20 +204,20 @@ def insert_setup(row: dict) -> int | None:
                     direction, score, kurs, price_at_alert, warunek,
                     entry_trigger, reasoning, llm_scores,
                     entries, tps, sl, sl_after_tp1, rr,
-                    entry_hit_at, entries_hit, sl_adjusted
+                    entry_hit_at, entries_hit, sl_adjusted, shadow
                 )
                 SELECT
                     %(alert_time)s, %(alert_timestamp)s, %(model)s, %(rejection)s, %(type)s,
                     %(direction)s, %(score)s, %(kurs)s, %(price_at_alert)s, %(warunek)s,
                     %(entry_trigger)s, %(reasoning)s, %(llm_scores)s,
                     %(entries)s, %(tps)s, %(sl)s, %(sl_after_tp1)s, %(rr)s,
-                    %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s
+                    %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s, %(shadow)s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM setups
                     WHERE resolved = FALSE
                       AND direction = %(direction)s
                       AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
-                )
+                ) OR %(shadow)s = TRUE
                 RETURNING setup_id
                 """,
                 params,
