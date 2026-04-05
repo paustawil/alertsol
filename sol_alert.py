@@ -1283,8 +1283,15 @@ def h1_trend(candles_h1: list[dict]) -> str:
 
 def impulse_strength(candles_m15: list[dict]) -> int:
     atr   = calc_atr(candles_m15)
-    sizes = [abs(c["close"] - c["open"]) for c in candles_m15[-15:-5]]
-    ratio = (sum(sizes) / len(sizes) if sizes else 0) / atr if atr > 0 else 0
+    if atr <= 0:
+        return 0
+    # Sprawdź zarówno starsze świece [-15:-5] jak i ostatnie [-6:]
+    sizes_old = [abs(c["close"] - c["open"]) for c in candles_m15[-15:-5]]
+    sizes_recent = [abs(c["close"] - c["open"]) for c in candles_m15[-6:]]
+    ratio_old = (sum(sizes_old) / len(sizes_old)) / atr if sizes_old else 0
+    ratio_recent = (sum(sizes_recent) / len(sizes_recent)) / atr if sizes_recent else 0
+    # Bierz większy z dwóch — łapie zarówno trwające jak i świeże impulsy
+    ratio = max(ratio_old, ratio_recent)
     if ratio >= 1.4: return 3
     if ratio >= 0.9: return 2
     if ratio >= 0.5: return 1
@@ -1330,22 +1337,24 @@ def detect_market_regime(
     last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Zmiana cenowa 4h / 24h / 48h ─────────────────────────────────────────
+    # ── Zmiana cenowa 2h / 4h / 24h / 48h ───────────────────────────────────
     # 24h i 48h: średnia z 3 świec wokół punktu referencyjnego.
     # Eliminuje niestabilność gdy pojedyncza świeca trafia na spike/dno impulsu.
+    price_2h  = candles_m15[-8]["close"] if len(candles_m15) >= 8 else candles_m15[0]["close"]
     price_4h  = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
     price_24h = (sum(c["close"] for c in candles_h1[-25:-22]) / 3
                  if len(candles_h1) >= 25 else candles_h1[0]["close"])
     price_48h = (sum(c["close"] for c in candles_h1[-49:-46]) / 3
                  if len(candles_h1) >= 49 else candles_h1[0]["close"])
+    change_2h  = (current_price - price_2h)  / price_2h  * 100
     change_4h  = (current_price - price_4h)  / price_4h  * 100
     change_24h = (current_price - price_24h) / price_24h * 100
     change_48h = (current_price - price_48h) / price_48h * 100
 
-    # ── Kierunek ostatnich 4 M15 (dla IMPULSE) ───────────────────────────────
-    last4 = candles_m15[-4:]
-    bearish_closes = sum(1 for c in last4 if c["close"] < c["open"])
-    bullish_closes = sum(1 for c in last4 if c["close"] > c["open"])
+    # ── Kierunek ostatnich 6 M15 (dla IMPULSE) ───────────────────────────────
+    last6 = candles_m15[-6:]
+    bearish_closes = sum(1 for c in last6 if c["close"] < c["open"])
+    bullish_closes = sum(1 for c in last6 if c["close"] > c["open"])
 
     # Bazowy dict zwracany przez każdy reżim
     base = {
@@ -1362,14 +1371,20 @@ def detect_market_regime(
         impulse_score += 1
     if vol_ratio >= 1.5:
         impulse_score += 1
+    # Zmiana 4h LUB silna zmiana 2h (łapie świeże impulsy)
     if abs(change_4h) >= 2.0:
         impulse_score += 1
     elif abs(change_4h) >= 1.5 and vol_ratio >= 1.3:
         impulse_score += 1
-    if bearish_closes >= 3:
+    if abs(change_2h) >= 1.2:
+        impulse_score += 1
+        if impulse_dir == "none":
+            impulse_dir = "down" if change_2h < 0 else "up"
+    # Kierunek z ostatnich 6 M15 (4+ bearish/bullish = silny kierunek)
+    if bearish_closes >= 4:
         impulse_score += 1
         impulse_dir = "down"
-    elif bullish_closes >= 3:
+    elif bullish_closes >= 4:
         impulse_score += 1
         impulse_dir = "up"
 
@@ -1377,7 +1392,7 @@ def detect_market_regime(
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
         strength = min(10, impulse_score * 2 + imp_str)
-        details = f"4h:{change_4h:+.1f}%; imp:{imp_str}; vol:{vol_ratio:.1f}x"
+        details = f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6"
         return {
             **base,
             "regime": f"IMPULSE_{impulse_dir.upper()}",
@@ -1762,7 +1777,33 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             tp2 = sup + rng_size * 0.1
             dist_ok = abs(w - current_price) <= max_entry_dist
             log_lines.append(f"  → range_short: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok}")
-            if (w - tp1) / (sl - w) >= 1.5 and dist_ok:
+
+            # ── Filtr 1: Bullish momentum – nie shortuj na oporze podczas silnego wzrostu
+            last6_m15_s = candles_m15[-6:]
+            bullish_count_s = sum(1 for c in last6_m15_s if c["close"] > c["open"])
+            m15_rise = (last6_m15_s[-1]["close"] - last6_m15_s[0]["open"]) / last6_m15_s[0]["open"] * 100
+            momentum_ok_s = not (bullish_count_s >= 5 or m15_rise > 1.5)
+            log_lines.append(f"    momentum: {bullish_count_s}/6 bullish, rise={m15_rise:+.2f}% → {'OK' if momentum_ok_s else 'BLOCKED'}")
+
+            # ── Filtr 2: Resistance touches – opór musi mieć min 2 wcześniejsze testy
+            r_touches = rng["r_touches"]
+            touches_ok_s = r_touches >= 2
+            log_lines.append(f"    r_touches: {r_touches} → {'OK' if touches_ok_s else 'BLOCKED (min 2)'}")
+
+            # ── Filtr 3: MA alignment – nie shortuj gdy cena > MA30 > MA60 (bullish alignment)
+            m15_closes_s = [c["close"] for c in candles_m15]
+            ma30_s2 = sum(m15_closes_s[-30:]) / min(30, len(m15_closes_s)) if len(m15_closes_s) >= 10 else None
+            ma60_s2 = sum(m15_closes_s[-60:]) / min(60, len(m15_closes_s)) if len(m15_closes_s) >= 30 else None
+            if ma30_s2 is not None and ma60_s2 is not None:
+                ma_bullish = current_price > ma30_s2 > ma60_s2
+            else:
+                ma_bullish = False
+            ma_ok_s = not ma_bullish
+            ma30_str = f"${ma30_s2:.2f}" if ma30_s2 else "N/A"
+            ma60_str = f"${ma60_s2:.2f}" if ma60_s2 else "N/A"
+            log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_str} MA60={ma60_str} → {'OK' if ma_ok_s else 'BLOCKED (bullish MA)'}")
+
+            if (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
@@ -1771,7 +1812,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((w - tp1) / (sl - w), 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f}",
+                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={r_touches}",
                 })
             # range_support_long
             w = sup + rng_size * 0.1
@@ -1780,7 +1821,33 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             tp2 = res - rng_size * 0.1
             dist_ok = abs(w - current_price) <= max_entry_dist
             log_lines.append(f"  → range_long: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok}")
-            if (tp1 - w) / (w - sl) >= 1.5 and dist_ok:
+
+            # ── Filtr 1: Bearish momentum – nie kupuj na wsparciu podczas silnego spadku
+            last6_m15 = candles_m15[-6:]
+            bearish_count = sum(1 for c in last6_m15 if c["close"] < c["open"])
+            m15_drop = (last6_m15[-1]["close"] - last6_m15[0]["open"]) / last6_m15[0]["open"] * 100
+            momentum_ok = not (bearish_count >= 5 or m15_drop < -1.5)
+            log_lines.append(f"    momentum: {bearish_count}/6 bearish, drop={m15_drop:+.2f}% → {'OK' if momentum_ok else 'BLOCKED'}")
+
+            # ── Filtr 2: Support touches – wsparcie musi mieć min 2 wcześniejsze odbicia
+            s_touches = rng["s_touches"]
+            touches_ok = s_touches >= 2
+            log_lines.append(f"    s_touches: {s_touches} → {'OK' if touches_ok else 'BLOCKED (min 2)'}")
+
+            # ── Filtr 3: MA alignment – nie kupuj gdy cena < MA30 < MA60 (bearish alignment)
+            m15_closes = [c["close"] for c in candles_m15]
+            ma30 = sum(m15_closes[-30:]) / min(30, len(m15_closes)) if len(m15_closes) >= 10 else None
+            ma60 = sum(m15_closes[-60:]) / min(60, len(m15_closes)) if len(m15_closes) >= 30 else None
+            if ma30 is not None and ma60 is not None:
+                ma_bearish = current_price < ma30 < ma60
+            else:
+                ma_bearish = False
+            ma_ok = not ma_bearish
+            ma30_s = f"${ma30:.2f}" if ma30 else "N/A"
+            ma60_s = f"${ma60:.2f}" if ma60 else "N/A"
+            log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_s} MA60={ma60_s} → {'OK' if ma_ok else 'BLOCKED (bearish MA)'}")
+
+            if (tp1 - w) / (w - sl) >= 1.5 and dist_ok and momentum_ok and touches_ok and ma_ok:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_support_long", "direction": "long",
@@ -1789,7 +1856,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((tp1 - w) / (w - sl), 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f}",
+                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={s_touches}",
                 })
     else:
         log_lines.append(f"  Brak setupów dla direction={direction}")
