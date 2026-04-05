@@ -200,7 +200,9 @@ def dashboard():
         sl   = f"${s['sl']:.2f}"           if s.get("sl")          else "—"
         sl2  = f"${s['sl_after_tp1']:.2f}" if s.get("sl_after_tp1") else "—"
         if s.get("entry_hit_at") and s.get("tp1_hit_at"):
-            status = "✅ po TP1"
+            pnl_tp1 = s.get("pnl_usd")
+            pnl_str = f" ({pnl_tp1:+.2f}$)" if pnl_tp1 is not None else ""
+            status = f"✅ po TP1{pnl_str}"
         elif s.get("entry_hit_at"):
             status = "📈 w pozycji"
         else:

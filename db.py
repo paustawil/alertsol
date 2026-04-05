@@ -247,7 +247,8 @@ def resolve_setup(
                     pnl_pct     = %(pnl_pct)s,
                     exit_time   = %(exit_time)s,
                     resolved    = TRUE,
-                    resolved_at = NOW()
+                    resolved_at = NOW(),
+                    status      = 'closed'
                 WHERE setup_id = %(setup_id)s
                 """,
                 {
@@ -261,6 +262,60 @@ def resolve_setup(
                 },
             )
     log.info(f"[db] Setup #{setup_id} zamknięty: {result}, PnL={pnl_usd}")
+
+
+def mark_tp1_hit(
+    setup_id: int,
+    avg_entry: float | None,
+    tp1_price: float | None,
+    pnl_usd: float | None,
+) -> None:
+    """
+    TP1 wykonany na Bitget — zapisz PnL częściowy, zmień status na after_tp1.
+    Setup pozostaje resolved=FALSE i widoczny w aktywnych aż do TP2 lub BE.
+    """
+    pnl_pct = None
+    if pnl_usd is not None:
+        trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+        try:
+            pnl_pct = round(pnl_usd / trade_usdt * 100, 2)
+        except ZeroDivisionError:
+            pass
+
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE setups SET
+                    status            = 'after_tp1',
+                    result            = 'TP1',
+                    avg_entry         = COALESCE(avg_entry, %(avg_entry)s),
+                    avg_exit          = %(tp1_price)s,
+                    pnl_usd           = %(pnl_usd)s,
+                    pnl_pct           = %(pnl_pct)s,
+                    tp1_hit_at        = EXTRACT(EPOCH FROM NOW())::BIGINT,
+                    exchange_tp1_done = TRUE
+                WHERE setup_id = %(setup_id)s
+                """,
+                {
+                    "setup_id":  setup_id,
+                    "avg_entry": avg_entry,
+                    "tp1_price": tp1_price,
+                    "pnl_usd":   pnl_usd,
+                    "pnl_pct":   pnl_pct,
+                },
+            )
+    log.info(f"[db] Setup #{setup_id} po TP1: PnL={pnl_usd}, czeka na TP2/BE")
+
+
+def get_after_tp1_setups() -> list[dict]:
+    """Zwraca wszystkie setupy w stanie after_tp1 (TP1 trafiony, czekamy na TP2/BE)."""
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM setups WHERE status = 'after_tp1' ORDER BY tp1_hit_at ASC"
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
 
 
 # ── Cooldown (was_alerted / save_alerted) ────────────────────────────────────
@@ -442,21 +497,12 @@ def get_summary_stats() -> dict:
                     THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
                     ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                 END *
-                CASE result WHEN 'SL'
-                    THEN COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                         FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                    WHEN 'TP1'
-                    THEN COALESCE(NULLIF(exchange_qty_half,'')::numeric,
-                         FLOOR(COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                               FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                               /2/0.1)*0.1)
-                    ELSE COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                         FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                END
+                COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                     FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
             END
         )"""
 
-    trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')"
+    trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
 
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -468,7 +514,7 @@ def get_summary_stats() -> dict:
                     ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
                         AND {trading_filter})::numeric, 2)               AS total_pnl_usd,
                     COUNT(*) FILTER (WHERE resolved = TRUE
-                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))   AS wins,
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))   AS wins,
                     COUNT(*) FILTER (WHERE resolved = TRUE
                         AND result = 'SL')                               AS losses
                 FROM setups
@@ -492,7 +538,7 @@ def get_summary_stats() -> dict:
                        ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
                            AND {trading_filter})::numeric, 2)                AS pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE
-                           AND result IN ('TP1','TP2','TP1+BE','TP1+SL'))    AS wins
+                           AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))    AS wins
                 FROM setups
                 GROUP BY model
                 ORDER BY model
@@ -544,7 +590,7 @@ def get_period_stats(period: str) -> dict:
             leverage = 20
             pnl_calc = f"""
                 COALESCE(pnl_usd,
-                    CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')
+                    CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
                               AND avg_exit IS NOT NULL
                               AND COALESCE(avg_entry, (entries->>0)::numeric) IS NOT NULL
                     THEN
@@ -552,27 +598,18 @@ def get_period_stats(period: str) -> dict:
                             THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
                             ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                         END *
-                        CASE result WHEN 'SL'
-                            THEN COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                 FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                            WHEN 'TP1'
-                            THEN COALESCE(NULLIF(exchange_qty_half,'')::numeric,
-                                 FLOOR(COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                       FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                                       /2/0.1)*0.1)
-                            ELSE COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                 FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                        END
+                        COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                             FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                     END
                 )"""
             cur.execute(
                 f"""
                 SELECT
-                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','SL')) AS entered,
-                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL'))   AS wins,
-                    COUNT(*) FILTER (WHERE result = 'SL')                               AS losses,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')) AS entered,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))   AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                                         AS losses,
                     COALESCE(ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
-                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','SL'))::numeric, 2), 0) AS total_income
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 2), 0) AS total_income
                 FROM setups
                 WHERE {time_filter}
                 """,
@@ -602,7 +639,7 @@ def get_period_stats(period: str) -> dict:
                                    to_timestamp(entry_hit_at) AT TIME ZONE 'UTC',
                                    alert_time
                                )),
-                               date_trunc('hour', COALESCE(exit_time, NOW())),
+                               date_trunc('hour', COALESCE(exit_time, resolved_at, NOW())),
                                interval '1 hour'
                            ) AS h
                     FROM setups
