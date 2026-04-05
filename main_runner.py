@@ -263,6 +263,12 @@ def dashboard():
         pnl_m     = f"{float(m['pnl_usd']):+.2f}" if m.get("pnl_usd") else "—"
         by_model_rows += f"<tr><td>{m['model']}</td><td>{entry_pct}</td><td>{win_pct}</td><td>{pnl_m}</td></tr>\n"
 
+    model_names = sorted({m["model"] for m in (stats.get("by_model") or []) if m.get("model")})
+    model_checkboxes = " ".join(
+        f'<label style="font-size:0.85em"><input type="checkbox" class="model-filter" value="{m}"> {m}</label>'
+        for m in model_names
+    )
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>AlertSol Dashboard</title>
@@ -397,6 +403,9 @@ def dashboard():
 
 <h3>Zamknięte setupy <span id="hist-count" style="color:#888;font-size:0.7em"></span></h3>
 <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+  <label style="color:#aaa;font-size:0.85em">Model:</label>
+  {model_checkboxes}
+  <span style="width:1px;height:16px;background:#444;display:inline-block;margin:0 4px"></span>
   <label style="color:#aaa;font-size:0.85em">Wynik:</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP1"> TP1</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP2"> TP2</label>
@@ -781,8 +790,11 @@ var HIST_PAGE  = 50;
 function getFilterParams() {{
   var checked = [];
   document.querySelectorAll('.res-filter:checked').forEach(function(cb) {{ checked.push(cb.value); }});
+  var models = [];
+  document.querySelectorAll('.model-filter:checked').forEach(function(cb) {{ models.push(cb.value); }});
   var params = new URLSearchParams();
   if (checked.length) params.set('results', checked.join(','));
+  if (models.length)  params.set('models',  models.join(','));
   var df = document.getElementById('date-from').value;
   var dt = document.getElementById('date-to').value;
   if (df) params.set('date_from', df);
@@ -1535,20 +1547,23 @@ def api_stats():
 @app.get("/api/resolved")
 def api_resolved(
     results: str | None = None,
+    models:  str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ):
-    """Zamknięte setupy z filtrami. results = lista oddzielona przecinkami."""
+    """Zamknięte setupy z filtrami. results/models = listy oddzielone przecinkami."""
     result_list = [r.strip() for r in results.split(",") if r.strip()] if results else None
-    data = db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset)
+    model_list  = [m.strip() for m in models.split(",")  if m.strip()] if models  else None
+    data = db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset, model_list)
     return data
 
 
 @app.get("/api/resolved/csv")
 def api_resolved_csv(
     results: str | None = None,
+    models:  str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
@@ -1558,7 +1573,8 @@ def api_resolved_csv(
     import io
 
     result_list = [r.strip() for r in results.split(",") if r.strip()] if results else None
-    data = db.get_resolved_filtered(result_list, date_from, date_to, limit=5000, offset=0)
+    model_list  = [m.strip() for m in models.split(",")  if m.strip()] if models  else None
+    data = db.get_resolved_filtered(result_list, date_from, date_to, limit=5000, offset=0, models=model_list)
     rows = data["rows"]
 
     buf = io.StringIO()
