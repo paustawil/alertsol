@@ -98,6 +98,52 @@ def init_schema():
         with conn.cursor() as cur:
             cur.execute(sql)
     log.info("Schema zainicjalizowana.")
+    _migrate_tp1_pnl()
+
+
+def _migrate_tp1_pnl() -> None:
+    """
+    Jednorazowa migracja: przelicz pnl_usd / pnl_pct dla zamkniętych TP1
+    używając pełnej ilości (exchange_qty_full), nie połowy.
+    Bezpieczne do wielokrotnego wywołania — nadpisuje tylko gdy avg_entry/avg_exit są dostępne.
+    """
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage   = 20
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE setups SET
+                    pnl_usd = ROUND(
+                        CASE direction
+                            WHEN 'long'  THEN (avg_exit - avg_entry)
+                            WHEN 'short' THEN (avg_entry - avg_exit)
+                        END
+                        * COALESCE(
+                            NULLIF(exchange_qty_full, '')::numeric,
+                            FLOOR({trade_usdt}*{leverage} / avg_entry / 0.1) * 0.1
+                        ),
+                        4),
+                    pnl_pct = ROUND(
+                        CASE direction
+                            WHEN 'long'  THEN (avg_exit - avg_entry)
+                            WHEN 'short' THEN (avg_entry - avg_exit)
+                        END
+                        * COALESCE(
+                            NULLIF(exchange_qty_full, '')::numeric,
+                            FLOOR({trade_usdt}*{leverage} / avg_entry / 0.1) * 0.1
+                        )
+                        / {trade_usdt} * 100,
+                        2)
+                WHERE result = 'TP1'
+                  AND status = 'closed'
+                  AND avg_entry IS NOT NULL
+                  AND avg_exit  IS NOT NULL
+                """,
+            )
+            updated = cur.rowcount
+    if updated:
+        log.info(f"[migrate] Naprawiono pnl_usd/pnl_pct dla {updated} rekordów TP1.")
 
 
 # ── Setups ────────────────────────────────────────────────────────────────────
