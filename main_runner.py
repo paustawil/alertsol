@@ -501,11 +501,9 @@ function calcAvgExit(result, d) {{
 
 function calcPnl(result, d, avgExit) {{
   if (!d.avg_entry || !d.full_qty || avgExit == null || isNaN(avgExit)) return null;
-  if (!['TP1','TP2','TP1+BE','TP1+SL','SL'].includes(result)) return null;
+  if (!['TP1','TP1+TP2','TP2','TP1+BE','TP1+SL','SL'].includes(result)) return null;
   var sign = d.direction === 'long' ? 1 : -1;
-  if (result === 'SL')  return sign * d.full_qty  * (avgExit - d.avg_entry);
-  if (result === 'TP1') return sign * d.half_qty  * (avgExit - d.avg_entry);
-  return sign * (d.half_qty + d.half_qty) * (avgExit - d.avg_entry);
+  return sign * d.full_qty * (avgExit - d.avg_entry);
 }}
 
 function refreshAllCells(tr, pnl) {{
@@ -844,10 +842,7 @@ function buildHistRow(s) {{
   // PnL
   var pnl = s.pnl_usd != null ? s.pnl_usd : null;
   if (pnl == null && TRADING[result] && avgX && efc && fq) {{
-    if (result === 'SL')       pnl = sign * fq * (avgX - efc);
-    else if (result === 'TP1') pnl = sign * hq * (avgX - efc);
-    else                       pnl = sign * (hq + hq) * (avgX - efc);
-    pnl = Math.round(pnl * 100) / 100;
+    pnl = Math.round(sign * fq * (avgX - efc) * 100) / 100;
   }}
   var pnlPct = s.pnl_pct != null ? s.pnl_pct : (pnl != null ? Math.round(pnl / TRADE_USDT * 10000) / 100 : null);
 
@@ -890,7 +885,7 @@ function buildHistRow(s) {{
   }});
 
   var exitInp = avgX != null ? avgX.toFixed(2) : '';
-  var entryInp = avgE ? avgE : (TRADING[result] && w1 ? w1 : '');
+  var entryInp = avgE ? avgE : (w1 || '');
 
   return '<tr data-setup-id="' + s.setup_id + '" data-setup="' + sdJson + '">'
     + '<td>#' + s.setup_id + '</td>'
