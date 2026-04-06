@@ -3066,8 +3066,7 @@ def grok_shadow_main() -> None:
     try:
         candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
         candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
-        last_1m     = fetch_klines(SYMBOL, "1m",  limit=1)
-        current     = float(last_1m[-1]["close"]) if last_1m else None
+        current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     except Exception as e:
         print(f"[grok-shadow] Błąd pobierania danych: {e}")
         return
