@@ -776,8 +776,27 @@ def get_period_stats(period: str) -> dict:
     }
 
 
+def get_last_setups_per_model(models: list[str] | None = None) -> list[dict]:
+    """Zwraca ostatni setup dla każdego modelu (też shadow/odrzucone) — do panelu feedback."""
+    if models is None:
+        models = ["Algo2", "Grok", "Grok2"]
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (model)
+                    setup_id, model, alert_time, direction, type, score,
+                    reasoning, status, result, resolved, entries, tps, sl
+                FROM setups
+                WHERE model = ANY(%(models)s)
+                ORDER BY model, alert_time DESC
+                """,
+                {"models": models},
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
 def get_recent_resolved(limit: int = 20) -> list[dict]:
-    """Zwraca ostatnie zamknięte setupy dla dashboardu."""
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(

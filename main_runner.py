@@ -376,13 +376,23 @@ def dashboard():
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
 
 <!-- ── Market status bar ───────────────────────────────────────────────── -->
-<div id="market-status-bar" style="display:flex;gap:20px;margin-bottom:14px;background:#222;border:1px solid #444;border-radius:6px;padding:8px 16px;align-items:center;flex-wrap:wrap">
-  <span style="color:#aaa;font-size:0.85em">SOL/USDT:</span>
-  <span id="ms-price" style="font-weight:bold;font-size:1.1em;color:#e0e0e0">—</span>
-  <span style="color:#aaa;font-size:0.85em">Regime:</span>
-  <span id="ms-regime" style="font-weight:bold;color:#e0e0e0">—</span>
-  <span id="ms-regime-detail" style="font-size:0.8em;color:#888"></span>
-  <span id="ms-loading" style="font-size:0.75em;color:#555;margin-left:auto"></span>
+<div style="margin-bottom:14px">
+  <div id="market-status-bar" style="display:flex;gap:20px;background:#222;border:1px solid #444;border-radius:6px 6px 0 0;padding:8px 16px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #333">
+    <span style="color:#aaa;font-size:0.85em">SOL/USDT:</span>
+    <span id="ms-price" style="font-weight:bold;font-size:1.1em;color:#e0e0e0">—</span>
+    <span style="color:#aaa;font-size:0.85em">Regime:</span>
+    <span id="ms-regime" style="font-weight:bold;color:#e0e0e0">—</span>
+    <span id="ms-regime-detail" style="font-size:0.8em;color:#888"></span>
+    <span id="ms-loading" style="font-size:0.75em;color:#555;margin-left:auto"></span>
+  </div>
+  <div id="ms-scans" style="display:flex;gap:0;background:#1e1e1e;border:1px solid #444;border-top:none;border-radius:0 0 6px 6px;flex-wrap:wrap">
+    <div id="ms-scan-Algo2" style="flex:1;min-width:260px;padding:7px 16px;border-right:1px solid #333">
+      <span style="color:#555;font-size:0.8em">Algo2: ładowanie...</span>
+    </div>
+    <div id="ms-scan-Grok" style="flex:1;min-width:260px;padding:7px 16px">
+      <span style="color:#555;font-size:0.8em">Grok: ładowanie...</span>
+    </div>
+  </div>
 </div>
 
 <!-- ── Wyniki za okres ────────────────────────────────────────────────── -->
@@ -1135,25 +1145,69 @@ document.addEventListener('click', function(e) {{
 }});
 
 // ── Market status ────────────────────────────────────────────────────────────
+function fmtAgo(isoStr) {{
+  if (!isoStr) return '';
+  var diff = Math.round((Date.now() - new Date(isoStr).getTime()) / 60000);
+  if (diff < 1)  return 'przed chwilą';
+  if (diff < 60) return diff + ' min temu';
+  var h = Math.floor(diff / 60);
+  return h + 'h ' + (diff % 60) + 'min temu';
+}}
+
+function renderScanBlock(el, scan) {{
+  if (!scan) {{ el.innerHTML = '<span style="color:#555;font-size:0.8em">brak danych</span>'; return; }}
+  var dir   = (scan.direction || '').toUpperCase();
+  var dirClr = dir === 'LONG' ? 'lightgreen' : dir === 'SHORT' ? 'salmon' : '#888';
+  var stat  = scan.result || scan.status || '';
+  var statClr = '#888';
+  if (stat === 'open' || stat === 'after_tp1') statClr = 'lightgreen';
+  if (stat === 'SL') statClr = 'salmon';
+  var tp1   = (scan.tps || [])[0];
+  var entry = (scan.entries || [])[0];
+  var rsn   = (scan.reasoning || '').replace(/<[^>]+>/g,'');
+  if (rsn.length > 100) rsn = rsn.slice(0, 100) + '…';
+
+  var parts = [];
+  parts.push('<span style="color:#aaa;font-size:0.75em">' + fmtAgo(scan.alert_time) + '</span>');
+  if (dir) parts.push('<b style="color:' + dirClr + '">' + dir + '</b>');
+  if (scan.type) parts.push('<span style="color:#ccc">' + scan.type + '</span>');
+  if (scan.score) parts.push('<span style="color:#888">score:' + scan.score + '</span>');
+  if (entry) parts.push('<span style="color:#aaa">W:$' + parseFloat(entry).toFixed(2) + '</span>');
+  if (tp1)   parts.push('<span style="color:#aaa">TP1:$' + parseFloat(tp1).toFixed(2) + '</span>');
+  if (stat)  parts.push('<span style="color:' + statClr + ';font-size:0.8em">[' + stat + ']</span>');
+  if (rsn)   parts.push('<div style="color:#666;font-size:0.75em;margin-top:2px">' + rsn + '</div>');
+
+  el.innerHTML = '<span style="color:#80deea;font-size:0.8em;font-weight:bold">' + (scan.model || '') + '</span> '
+    + parts.join(' · ');
+}}
+
 async function loadMarketStatus() {{
   var loading = document.getElementById('ms-loading');
   loading.textContent = '↻';
   try {{
     var resp = await fetch('/api/market-status');
     var d = await resp.json();
-    var priceEl  = document.getElementById('ms-price');
-    var regimeEl = document.getElementById('ms-regime');
-    var detailEl = document.getElementById('ms-regime-detail');
-    priceEl.textContent = d.price != null ? '$' + parseFloat(d.price).toFixed(2) : '—';
+    // Price + regime
+    document.getElementById('ms-price').textContent = d.price != null ? '$' + parseFloat(d.price).toFixed(2) : '—';
     var regime = d.regime || '—';
-    regimeEl.textContent = regime;
+    var regEl = document.getElementById('ms-regime');
+    regEl.textContent = regime;
     var dir = (d.direction || '');
-    var clr = dir === 'up' ? 'lightgreen' : dir === 'down' ? 'salmon' : '#aaa';
-    regimeEl.style.color = clr;
+    regEl.style.color = dir === 'up' ? 'lightgreen' : dir === 'down' ? 'salmon' : '#aaa';
     var details = [];
     if (d.score != null) details.push('score:' + d.score);
     if (d.change_24h != null) details.push('24h:' + (d.change_24h >= 0 ? '+' : '') + parseFloat(d.change_24h).toFixed(1) + '%');
-    detailEl.textContent = details.join('  ');
+    document.getElementById('ms-regime-detail').textContent = details.join('  ');
+    // Algo feedback
+    var scans = d.last_scans || [];
+    var byModel = {{}};
+    scans.forEach(function(s) {{ byModel[s.model] = s; }});
+    // Algo2
+    var el2 = document.getElementById('ms-scan-Algo2');
+    if (el2) renderScanBlock(el2, byModel['Algo2']);
+    // Grok (prefer Grok2 if present, fall back to Grok)
+    var elG = document.getElementById('ms-scan-Grok');
+    if (elG) renderScanBlock(elG, byModel['Grok2'] || byModel['Grok'] || null);
     loading.textContent = '';
   }} catch(e) {{
     document.getElementById('ms-loading').textContent = '⚠';
@@ -1649,7 +1703,35 @@ def api_market_status():
         "score":      reg.get("score"),
         "change_24h": reg.get("change_24h"),
         "change_48h": reg.get("change_48h"),
+        "last_scans":  _get_last_scans(),
     }
+
+
+def _get_last_scans() -> list[dict]:
+    """Ostatni setup per model (Algo2, Grok/Grok2) — dla panelu feedback."""
+    try:
+        rows = db.get_last_setups_per_model(["Algo2", "Grok", "Grok2"])
+        result = []
+        for r in rows:
+            at = r.get("alert_time")
+            result.append({
+                "model":     r.get("model"),
+                "alert_time": at.isoformat() if at else None,
+                "direction": r.get("direction"),
+                "type":      r.get("type"),
+                "score":     r.get("score"),
+                "reasoning": (r.get("reasoning") or "")[:120],
+                "status":    r.get("status"),
+                "result":    r.get("result"),
+                "resolved":  r.get("resolved"),
+                "setup_id":  r.get("setup_id"),
+                "entries":   r.get("entries") or [],
+                "tps":       r.get("tps") or [],
+            })
+        return result
+    except Exception as e:
+        log.warning(f"[market-status] last_scans: {e}")
+        return []
 
 
 @app.get("/api/bitget-live")
