@@ -408,9 +408,14 @@ def dashboard():
       <div class="sub" id="ps-avg-daily-mult"></div>
     </div>
     <div class="ind-card">
-      <div class="label">Łączny dochód</div>
+      <div class="label">PnL rzeczywisty (TP1+TP2)</div>
       <div class="value" id="ps-total-income">—</div>
-      <div class="sub" id="ps-tp1-income-sub"></div>
+      <div class="sub" id="ps-total-income-pct"></div>
+    </div>
+    <div class="ind-card">
+      <div class="label">PnL TP1-only</div>
+      <div class="value" id="ps-tp1-income">—</div>
+      <div class="sub" id="ps-tp1-income-pct"></div>
     </div>
     <div class="ind-card">
       <div class="label">Entry rate</div>
@@ -471,10 +476,10 @@ def dashboard():
 </div>
 <table id="history-table">
 <thead>
-<tr><th>#</th><th>Alert</th><th>Wejście dt</th><th>Wyjście dt</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th style="background:#1a2a2a">PnL $</th><th style="background:#1a2a2a">PnL %</th><th style="background:#1a2a2a" title="PnL gdyby cała pozycja wyszła na TP1 (dla SL = rzeczywisty PnL)">TP1-only $</th><th style="background:#1a2a2a" title="TP1-only %">TP1-only %</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th title="Hipotetyczny wynik gdyby setup wszedł">Hypo</th><th></th></tr>
-<tr id="hist-totals" style="background:#1a2a1a;font-weight:bold;font-size:0.9em"><td colspan=9 style="color:#888;font-size:0.8em">∑ filtr:</td><td id="ht-pnl" style="background:#1a2a2a">—</td><td id="ht-pnl-pct" style="background:#1a2a2a">—</td><td id="ht-tp1" style="background:#1a2a2a">—</td><td id="ht-tp1-pct" style="background:#1a2a2a">—</td><td colspan=3></td></tr>
+<tr><th>#</th><th>Alert</th><th>Wejście dt</th><th>Wyjście dt</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th style="background:#1a2a2a">PnL $</th><th style="background:#1a2a2a">PnL %</th><th style="background:#1a2a2a" title="PnL gdyby cała pozycja wyszła na TP1 (dla SL = rzeczywisty PnL)">TP1-only $</th><th style="background:#1a2a2a" title="TP1-only %">TP1-only %</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
+<tr id="hist-totals" style="background:#1a2a1a;font-weight:bold;font-size:0.9em"><td colspan=9 style="color:#888;font-size:0.8em">∑ filtr:</td><td id="ht-pnl" style="background:#1a2a2a">—</td><td id="ht-pnl-pct" style="background:#1a2a2a">—</td><td id="ht-tp1" style="background:#1a2a2a">—</td><td id="ht-tp1-pct" style="background:#1a2a2a">—</td><td id="ht-delta">—</td><td></td></tr>
 </thead>
-<tbody id="hist-body"><tr><td colspan=16 style="color:#888">Ładowanie...</td></tr></tbody>
+<tbody id="hist-body"><tr><td colspan=15 style="color:#888">Ładowanie...</td></tr></tbody>
 </table>
 <div style="text-align:center;margin:10px 0">
   <button class="btn-action" id="load-more-btn" onclick="loadHistory(false)" style="display:none">Załaduj więcej</button>
@@ -916,13 +921,6 @@ function buildHistRow(s) {{
   var exitStr  = avgX != null ? avgX.toFixed(2) : '—';
   var resLabel = RESULT_LABELS[result] || result || '—';
 
-  // Hypo
-  var hypoStr = '';
-  if (s.hypo_result) {{
-    var hpnl = s.hypo_pnl_usd != null ? ' (' + fmt(s.hypo_pnl_usd) + ')' : '';
-    hypoStr = '<span title="Hipotetyczny wynik">' + (RESULT_LABELS[s.hypo_result] || s.hypo_result) + hpnl + '</span>';
-  }}
-
   // Setup data JSON for edit mode
   var sd = {{
     avg_entry: avgE || w1, w1: w1, tp1: tp1p, tp2: tps[1] || null,
@@ -959,7 +957,6 @@ function buildHistRow(s) {{
     + '<td class="alt-pnl-cell" style="background:#1a2a2a;color:' + clr(alt) + '">' + fmt(alt) + '</td>'
     + '<td class="alt-pct-cell" style="background:#1a2a2a;color:' + clr(altPct) + '">' + fmtP(altPct) + '</td>'
     + '<td class="delta-cell" style="color:' + clr(dlt) + '">' + fmt(dlt) + '</td>'
-    + '<td>' + hypoStr + '</td>'
     + '<td style="white-space:nowrap">'
     +   '<button class="btn-edit vmode" onclick="editRow(this)">Edytuj</button>'
     +   '<button class="btn-action emode" onclick="saveResult(this)">Zapisz</button>'
@@ -978,7 +975,7 @@ async function loadHistory(reset) {{
     var body = document.getElementById('hist-body');
     if (reset) body.innerHTML = '';
     if (!data.rows || data.rows.length === 0) {{
-      if (reset) body.innerHTML = '<tr><td colspan=16 style="color:#888">Brak wyników</td></tr>';
+      if (reset) body.innerHTML = '<tr><td colspan=15 style="color:#888">Brak wyników</td></tr>';
     }} else {{
       data.rows.forEach(function(s) {{ body.innerHTML += buildHistRow(s); }});
     }}
@@ -1001,9 +998,13 @@ async function loadHistory(reset) {{
       setT('ht-pnl-pct', t.sum_pnl_pct,      fmtPT);
       setT('ht-tp1',     t.sum_tp1_only_usd,  fmtT);
       setT('ht-tp1-pct', t.sum_tp1_only_pct,  fmtPT);
+      var delta = (t.sum_pnl_usd != null && t.sum_tp1_only_usd != null)
+        ? Math.round((parseFloat(t.sum_pnl_usd) - parseFloat(t.sum_tp1_only_usd)) * 100) / 100
+        : null;
+      setT('ht-delta', delta, fmtT);
     }}
   }} catch(e) {{
-    document.getElementById('hist-body').innerHTML = '<tr><td colspan=16 style="color:salmon">Błąd: ' + e.message + '</td></tr>';
+    document.getElementById('hist-body').innerHTML = '<tr><td colspan=15 style="color:salmon">Błąd: ' + e.message + '</td></tr>';
   }}
 }}
 
@@ -1088,14 +1089,20 @@ async function loadPeriodStats() {{
     document.getElementById('ps-avg-daily').style.color = clr(d.avg_daily_pnl);
     document.getElementById('ps-avg-daily-mult').textContent = (d.avg_daily_mult >= 0 ? '+' : '') + (d.avg_daily_mult * 100).toFixed(1) + '% kwoty';
 
-    // Total income + TP1-only
-    document.getElementById('ps-total-income').textContent = fmt(d.total_income) + ' $';
-    document.getElementById('ps-total-income').style.color = clr(d.total_income);
+    // Actual PnL (TP1+TP2)
+    var actualInc = d.total_income != null ? d.total_income : null;
+    var actualPct = actualInc != null ? Math.round(actualInc / tu * 10000) / 100 : null;
+    document.getElementById('ps-total-income').textContent = actualInc != null ? fmt(actualInc) + ' $' : '—';
+    document.getElementById('ps-total-income').style.color = clr(actualInc);
+    document.getElementById('ps-total-income-pct').textContent = actualPct != null ? (actualPct >= 0 ? '+' : '') + actualPct.toFixed(1) + '%' : '';
+    document.getElementById('ps-total-income-pct').style.color = clr(actualPct);
+    // TP1-only PnL
     var tp1Inc = d.tp1_only_income != null ? d.tp1_only_income : null;
     var tp1Pct = tp1Inc != null ? Math.round(tp1Inc / tu * 10000) / 100 : null;
-    var tp1Str = tp1Inc != null ? ('TP1-only: ' + fmt(tp1Inc) + ' $ (' + (tp1Pct >= 0 ? '+' : '') + tp1Pct.toFixed(1) + '%)') : '';
-    document.getElementById('ps-tp1-income-sub').textContent = tp1Str;
-    document.getElementById('ps-tp1-income-sub').style.color = tp1Inc != null ? clr(tp1Inc) : '#888';
+    document.getElementById('ps-tp1-income').textContent = tp1Inc != null ? fmt(tp1Inc) + ' $' : '—';
+    document.getElementById('ps-tp1-income').style.color = clr(tp1Inc);
+    document.getElementById('ps-tp1-income-pct').textContent = tp1Pct != null ? (tp1Pct >= 0 ? '+' : '') + tp1Pct.toFixed(1) + '%' : '';
+    document.getElementById('ps-tp1-income-pct').style.color = clr(tp1Pct);
 
     // Entry rate
     document.getElementById('ps-entry-rate').textContent = d.entry_rate.toFixed(1) + '%';
