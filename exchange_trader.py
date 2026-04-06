@@ -755,8 +755,34 @@ def _sync_inner():
                     continue
 
                 if sl_status == "cancelled":
+                    # SL anulowany — może to Bitget auto-anulował go po TP1.
+                    # Sprawdź TP1 zanim uznamy za nieokreślone.
+                    if tp1_oid:
+                        tp1_check = _tpsl_order_status(client, tp1_oid)
+                        print(f"[exchange] {label}: SL cancelled — sprawdzam TP1: {tp1_check}")
+                        if tp1_check == "executed":
+                            # TP1 zamknął pozycję i Bitget auto-anulował SL
+                            print(f"[exchange] {label}: TP1 wykonany (via SL-cancelled path) — czekamy na TP2/BE")
+                            s["exchange_tp1_oid"]  = None
+                            s["exchange_tp1_done"] = True
+                            s["exchange_sl_oid"]   = None
+                            s["exchange_tp2_oid"]  = None
+                            s["exchange_done"]     = True
+                            modified = True
+                            if sid and sid != "?":
+                                tps       = s.get("tps") or []
+                                tp1_price = float(tps[0]) if tps else None
+                                avg_entry = s.get("avg_entry")
+                                pnl_usd   = None
+                                if avg_entry and tp1_price:
+                                    fq       = (s.get("exchange_qty_full") or "0").replace(",", ".")
+                                    full_qty = float(fq)
+                                    sign     = 1 if s.get("direction") == "long" else -1
+                                    pnl_usd  = sign * full_qty * (tp1_price - float(avg_entry))
+                                db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
+                            continue
                     # SL anulowany ręcznie — pozycja zamknięta manualnie
-                    log.warning(f"[exchange] {label}: SL anulowany ręcznie — zwalniam slot i zamykam setup")
+                    log.warning(f"[exchange] {label}: SL anulowany ręcznie (nie TP1) — zwalniam slot i zamykam setup")
                     if tp1_oid:
                         _cancel_order(client, tp1_oid, "profit_plan")
                     s["exchange_sl_oid"]  = None
