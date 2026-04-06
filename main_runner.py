@@ -376,13 +376,23 @@ def dashboard():
 <p style="color:#888">Ostatnia aktualizacja: {now}</p>
 
 <!-- ── Market status bar ───────────────────────────────────────────────── -->
-<div id="market-status-bar" style="display:flex;gap:20px;margin-bottom:14px;background:#222;border:1px solid #444;border-radius:6px;padding:8px 16px;align-items:center;flex-wrap:wrap">
-  <span style="color:#aaa;font-size:0.85em">SOL/USDT:</span>
-  <span id="ms-price" style="font-weight:bold;font-size:1.1em;color:#e0e0e0">—</span>
-  <span style="color:#aaa;font-size:0.85em">Regime:</span>
-  <span id="ms-regime" style="font-weight:bold;color:#e0e0e0">—</span>
-  <span id="ms-regime-detail" style="font-size:0.8em;color:#888"></span>
-  <span id="ms-loading" style="font-size:0.75em;color:#555;margin-left:auto"></span>
+<div style="margin-bottom:14px">
+  <div id="market-status-bar" style="display:flex;gap:20px;background:#222;border:1px solid #444;border-radius:6px 6px 0 0;padding:8px 16px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #333">
+    <span style="color:#aaa;font-size:0.85em">SOL/USDT:</span>
+    <span id="ms-price" style="font-weight:bold;font-size:1.1em;color:#e0e0e0">—</span>
+    <span style="color:#aaa;font-size:0.85em">Regime:</span>
+    <span id="ms-regime" style="font-weight:bold;color:#e0e0e0">—</span>
+    <span id="ms-regime-detail" style="font-size:0.8em;color:#888"></span>
+    <span id="ms-loading" style="font-size:0.75em;color:#555;margin-left:auto"></span>
+  </div>
+  <div id="ms-scans" style="display:flex;gap:0;background:#1e1e1e;border:1px solid #444;border-top:none;border-radius:0 0 6px 6px;flex-wrap:wrap">
+    <div id="ms-scan-Algo2" style="flex:1;min-width:260px;padding:7px 16px;border-right:1px solid #333">
+      <span style="color:#555;font-size:0.8em">Algo2: ładowanie...</span>
+    </div>
+    <div id="ms-scan-Grok" style="flex:1;min-width:260px;padding:7px 16px">
+      <span style="color:#555;font-size:0.8em">Grok: ładowanie...</span>
+    </div>
+  </div>
 </div>
 
 <!-- ── Wyniki za okres ────────────────────────────────────────────────── -->
@@ -1135,25 +1145,60 @@ document.addEventListener('click', function(e) {{
 }});
 
 // ── Market status ────────────────────────────────────────────────────────────
+function fmtAgo(isoStr) {{
+  if (!isoStr) return '';
+  var diff = Math.round((Date.now() - new Date(isoStr).getTime()) / 60000);
+  if (diff < 1)  return 'przed chwilą';
+  if (diff < 60) return diff + ' min temu';
+  var h = Math.floor(diff / 60);
+  return h + 'h ' + (diff % 60) + 'min temu';
+}}
+
+function renderScanBlock(el, model, scan) {{
+  var label = '<span style="color:#80deea;font-size:0.8em;font-weight:bold">' + model + ':</span> ';
+  if (!scan || !scan.text) {{
+    el.innerHTML = label + '<span style="color:#555;font-size:0.8em">brak danych (app restart?)</span>';
+    return;
+  }}
+  var ago = scan.time ? '<span style="color:#555;font-size:0.75em">' + fmtAgo(scan.time) + '</span> · ' : '';
+  var foundBadge = scan.found
+    ? '<span style="color:lightgreen;font-size:0.8em">✓ setup</span> · '
+    : '<span style="color:#888;font-size:0.8em">✗ brak setupu</span> · ';
+  // Grok-specific: bias info
+  var extra = '';
+  if (scan.bias != null) {{
+    var bClr = scan.bias === 'long' ? 'lightgreen' : scan.bias === 'short' ? 'salmon' : '#888';
+    extra = '<span style="color:' + bClr + '">' + scan.bias.toUpperCase() + ' ' + (scan.bias_proc || 0) + '%</span> · ';
+  }}
+  var txt = (scan.text || '').trim().replace(/\n/g, '  ');
+  if (txt.length > 160) txt = txt.slice(0, 160) + '…';
+  el.innerHTML = label + ago + foundBadge + extra
+    + '<span style="color:#999;font-size:0.78em">' + txt + '</span>';
+}}
+
 async function loadMarketStatus() {{
   var loading = document.getElementById('ms-loading');
   loading.textContent = '↻';
   try {{
     var resp = await fetch('/api/market-status');
     var d = await resp.json();
-    var priceEl  = document.getElementById('ms-price');
-    var regimeEl = document.getElementById('ms-regime');
-    var detailEl = document.getElementById('ms-regime-detail');
-    priceEl.textContent = d.price != null ? '$' + parseFloat(d.price).toFixed(2) : '—';
+    // Price + regime
+    document.getElementById('ms-price').textContent = d.price != null ? '$' + parseFloat(d.price).toFixed(2) : '—';
     var regime = d.regime || '—';
-    regimeEl.textContent = regime;
+    var regEl = document.getElementById('ms-regime');
+    regEl.textContent = regime;
     var dir = (d.direction || '');
-    var clr = dir === 'up' ? 'lightgreen' : dir === 'down' ? 'salmon' : '#aaa';
-    regimeEl.style.color = clr;
+    regEl.style.color = dir === 'up' ? 'lightgreen' : dir === 'down' ? 'salmon' : '#aaa';
     var details = [];
     if (d.score != null) details.push('score:' + d.score);
     if (d.change_24h != null) details.push('24h:' + (d.change_24h >= 0 ? '+' : '') + parseFloat(d.change_24h).toFixed(1) + '%');
-    detailEl.textContent = details.join('  ');
+    document.getElementById('ms-regime-detail').textContent = details.join('  ');
+    // Algo feedback (last_scans is now a dict keyed by model name)
+    var scans = d.last_scans || {{}};
+    var el2 = document.getElementById('ms-scan-Algo2');
+    if (el2) renderScanBlock(el2, 'Algo2', scans['Algo2'] || null);
+    var elG = document.getElementById('ms-scan-Grok');
+    if (elG) renderScanBlock(elG, 'Grok', scans['Grok'] || null);
     loading.textContent = '';
   }} catch(e) {{
     document.getElementById('ms-loading').textContent = '⚠';
@@ -1649,7 +1694,18 @@ def api_market_status():
         "score":      reg.get("score"),
         "change_24h": reg.get("change_24h"),
         "change_48h": reg.get("change_48h"),
+        "last_scans":  _get_last_scans(),
     }
+
+
+def _get_last_scans() -> dict:
+    """Zwraca feedback z ostatniego uruchomienia Algo2 i Grok (z sol_alert._last_feedback)."""
+    try:
+        import sol_alert as sa
+        return dict(sa._last_feedback)
+    except Exception as e:
+        log.warning(f"[market-status] last_scans: {e}")
+        return {}
 
 
 @app.get("/api/bitget-live")

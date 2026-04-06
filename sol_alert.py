@@ -44,6 +44,9 @@ ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT
 ENABLE_GPT3          = True   # zweryfikowany backtestem Mar 15-29 (+$19.76 vs Algo2 alone)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
 
+# ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
+_last_feedback: dict = {}  # {"Algo2": {...}, "Grok": {...}}
+
 
 # ── System prompt dla Claude ──────────────────────────────────────────────────
 FORTECA_PROMPT = """FORTeca v1.0 — CLAUDE EDITION — SOL/USDT SETUP DETECTION
@@ -3724,14 +3727,30 @@ def main():
                     send_telegram(format_grok_alert(grok_result, current, None, model_name="Grok2"))
             else:
                 print(f"[grok] Brak konkretnego setupu.")
+            _last_feedback["Grok"] = {
+                "time":       datetime.now(TZ).isoformat(),
+                "found":      bool(send_alert and bias != "neutral"),
+                "bias":       bias,
+                "bias_proc":  bias_proc,
+                "send_alert": send_alert,
+                "text":       " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
+            }
         else:
             print("[grok] Brak odpowiedzi.")
+            _last_feedback["Grok"] = {"time": datetime.now(TZ).isoformat(), "found": False, "text": "Brak odpowiedzi API"}
     else:
         print("[grok] Pominięty (ENABLE_GROK=False).")
+        _last_feedback.setdefault("Grok", {"text": "wyłączony (ENABLE_GROK=False)"})
 
     # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
     algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
     print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
+    _last_feedback["Algo2"] = {
+        "time":  datetime.now(TZ).isoformat(),
+        "found": bool(algo2_setups),
+        "count": len(algo2_setups),
+        "text":  algo2_log,
+    }
 
     if algo2_setups:
         best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
