@@ -351,7 +351,7 @@ def dashboard():
 <div style="position:relative">
 <h2 style="display:inline">🤖 AlertSol Dashboard</h2>
 <button class="gear-btn" onclick="toggleSettings()" title="Ustawienia">⚙</button>
-<div id="settings-popover">
+<div id="settings-popover" style="display:none">
   <h4>⚙ Ustawienia</h4>
   <div class="ind-row">
     <div class="ind-card">
