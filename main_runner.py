@@ -1154,31 +1154,26 @@ function fmtAgo(isoStr) {{
   return h + 'h ' + (diff % 60) + 'min temu';
 }}
 
-function renderScanBlock(el, scan) {{
-  if (!scan) {{ el.innerHTML = '<span style="color:#555;font-size:0.8em">brak danych</span>'; return; }}
-  var dir   = (scan.direction || '').toUpperCase();
-  var dirClr = dir === 'LONG' ? 'lightgreen' : dir === 'SHORT' ? 'salmon' : '#888';
-  var stat  = scan.result || scan.status || '';
-  var statClr = '#888';
-  if (stat === 'open' || stat === 'after_tp1') statClr = 'lightgreen';
-  if (stat === 'SL') statClr = 'salmon';
-  var tp1   = (scan.tps || [])[0];
-  var entry = (scan.entries || [])[0];
-  var rsn   = (scan.reasoning || '').replace(/<[^>]+>/g,'');
-  if (rsn.length > 100) rsn = rsn.slice(0, 100) + '…';
-
-  var parts = [];
-  parts.push('<span style="color:#aaa;font-size:0.75em">' + fmtAgo(scan.alert_time) + '</span>');
-  if (dir) parts.push('<b style="color:' + dirClr + '">' + dir + '</b>');
-  if (scan.type) parts.push('<span style="color:#ccc">' + scan.type + '</span>');
-  if (scan.score) parts.push('<span style="color:#888">score:' + scan.score + '</span>');
-  if (entry) parts.push('<span style="color:#aaa">W:$' + parseFloat(entry).toFixed(2) + '</span>');
-  if (tp1)   parts.push('<span style="color:#aaa">TP1:$' + parseFloat(tp1).toFixed(2) + '</span>');
-  if (stat)  parts.push('<span style="color:' + statClr + ';font-size:0.8em">[' + stat + ']</span>');
-  if (rsn)   parts.push('<div style="color:#666;font-size:0.75em;margin-top:2px">' + rsn + '</div>');
-
-  el.innerHTML = '<span style="color:#80deea;font-size:0.8em;font-weight:bold">' + (scan.model || '') + '</span> '
-    + parts.join(' · ');
+function renderScanBlock(el, model, scan) {{
+  var label = '<span style="color:#80deea;font-size:0.8em;font-weight:bold">' + model + ':</span> ';
+  if (!scan || !scan.text) {{
+    el.innerHTML = label + '<span style="color:#555;font-size:0.8em">brak danych (app restart?)</span>';
+    return;
+  }}
+  var ago = scan.time ? '<span style="color:#555;font-size:0.75em">' + fmtAgo(scan.time) + '</span> · ' : '';
+  var foundBadge = scan.found
+    ? '<span style="color:lightgreen;font-size:0.8em">✓ setup</span> · '
+    : '<span style="color:#888;font-size:0.8em">✗ brak setupu</span> · ';
+  // Grok-specific: bias info
+  var extra = '';
+  if (scan.bias != null) {{
+    var bClr = scan.bias === 'long' ? 'lightgreen' : scan.bias === 'short' ? 'salmon' : '#888';
+    extra = '<span style="color:' + bClr + '">' + scan.bias.toUpperCase() + ' ' + (scan.bias_proc || 0) + '%</span> · ';
+  }}
+  var txt = (scan.text || '').trim().replace(/\n/g, '  ');
+  if (txt.length > 160) txt = txt.slice(0, 160) + '…';
+  el.innerHTML = label + ago + foundBadge + extra
+    + '<span style="color:#999;font-size:0.78em">' + txt + '</span>';
 }}
 
 async function loadMarketStatus() {{
@@ -1198,16 +1193,12 @@ async function loadMarketStatus() {{
     if (d.score != null) details.push('score:' + d.score);
     if (d.change_24h != null) details.push('24h:' + (d.change_24h >= 0 ? '+' : '') + parseFloat(d.change_24h).toFixed(1) + '%');
     document.getElementById('ms-regime-detail').textContent = details.join('  ');
-    // Algo feedback
-    var scans = d.last_scans || [];
-    var byModel = {{}};
-    scans.forEach(function(s) {{ byModel[s.model] = s; }});
-    // Algo2
+    // Algo feedback (last_scans is now a dict keyed by model name)
+    var scans = d.last_scans || {{}};
     var el2 = document.getElementById('ms-scan-Algo2');
-    if (el2) renderScanBlock(el2, byModel['Algo2']);
-    // Grok (prefer Grok2 if present, fall back to Grok)
+    if (el2) renderScanBlock(el2, 'Algo2', scans['Algo2'] || null);
     var elG = document.getElementById('ms-scan-Grok');
-    if (elG) renderScanBlock(elG, byModel['Grok2'] || byModel['Grok'] || null);
+    if (elG) renderScanBlock(elG, 'Grok', scans['Grok'] || null);
     loading.textContent = '';
   }} catch(e) {{
     document.getElementById('ms-loading').textContent = '⚠';
@@ -1707,31 +1698,14 @@ def api_market_status():
     }
 
 
-def _get_last_scans() -> list[dict]:
-    """Ostatni setup per model (Algo2, Grok/Grok2) — dla panelu feedback."""
+def _get_last_scans() -> dict:
+    """Zwraca feedback z ostatniego uruchomienia Algo2 i Grok (z sol_alert._last_feedback)."""
     try:
-        rows = db.get_last_setups_per_model(["Algo2", "Grok", "Grok2"])
-        result = []
-        for r in rows:
-            at = r.get("alert_time")
-            result.append({
-                "model":     r.get("model"),
-                "alert_time": at.isoformat() if at else None,
-                "direction": r.get("direction"),
-                "type":      r.get("type"),
-                "score":     r.get("score"),
-                "reasoning": (r.get("reasoning") or "")[:120],
-                "status":    r.get("status"),
-                "result":    r.get("result"),
-                "resolved":  r.get("resolved"),
-                "setup_id":  r.get("setup_id"),
-                "entries":   r.get("entries") or [],
-                "tps":       r.get("tps") or [],
-            })
-        return result
+        import sol_alert as sa
+        return dict(sa._last_feedback)
     except Exception as e:
         log.warning(f"[market-status] last_scans: {e}")
-        return []
+        return {}
 
 
 @app.get("/api/bitget-live")
