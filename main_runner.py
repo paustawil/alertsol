@@ -17,6 +17,7 @@ import signal
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -274,6 +275,7 @@ def dashboard():
 
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
 
+    _tu = stats.get("trade_usdt") or trade_usdt
     by_model_rows = ""
     for m in (stats.get("by_model") or []):
         all_s   = m.get("all_setups") or 0
@@ -281,8 +283,17 @@ def dashboard():
         wins    = m.get("wins") or 0
         entry_pct = f"{entered / all_s * 100:.0f}%" if all_s else "—"
         win_pct   = f"{wins / entered * 100:.0f}%" if entered else "—"
-        pnl_m     = f"{float(m['pnl_usd']):+.2f}" if m.get("pnl_usd") else "—"
-        by_model_rows += f"<tr><td>{m['model']}</td><td>{entry_pct}</td><td>{win_pct}</td><td>{pnl_m}</td></tr>\n"
+        pnl_usd_m = float(m["pnl_usd"]) if m.get("pnl_usd") is not None else None
+        pnl_m     = f"{pnl_usd_m:+.2f}" if pnl_usd_m is not None else "—"
+        pnl_pct_m = f"{pnl_usd_m / _tu * 100:+.1f}%" if pnl_usd_m is not None and _tu else "—"
+        tp1_usd_m = float(m["tp1_only_pnl_usd"]) if m.get("tp1_only_pnl_usd") is not None else None
+        tp1_m     = f"{tp1_usd_m:+.2f}" if tp1_usd_m is not None else "—"
+        tp1_pct_m = f"{tp1_usd_m / _tu * 100:+.1f}%" if tp1_usd_m is not None and _tu else "—"
+        by_model_rows += (
+            f"<tr><td>{m['model']}</td><td>{entry_pct}</td><td>{win_pct}</td>"
+            f"<td>{pnl_m}</td><td>{pnl_pct_m}</td>"
+            f"<td>{tp1_m}</td><td>{tp1_pct_m}</td></tr>\n"
+        )
 
     model_names = sorted({m["model"] for m in (stats.get("by_model") or []) if m.get("model")})
     model_checkboxes = " ".join(
@@ -290,7 +301,7 @@ def dashboard():
         for m in model_names
     )
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(ZoneInfo("Europe/Warsaw")).strftime("%Y-%m-%d %H:%M %Z")
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>AlertSol Dashboard</title>
 <style>
@@ -331,14 +342,17 @@ def dashboard():
   .period-btn:hover {{ background: #444; }}
   .settings-save {{ background: #1a5276; color: #e0e0e0; border: 1px solid #5dade2; padding: 3px 12px; cursor: pointer; font-family: monospace; font-size: 0.85em; border-radius: 3px; }}
   .settings-save:hover {{ background: #2471a3; }}
+  /* ── Settings gear popover ──────────────────────────────────────────── */
+  .gear-btn {{ background: none; border: none; cursor: pointer; font-size: 1em; padding: 0 0 0 10px; color: #80deea; vertical-align: middle; line-height: 1; }}
+  .gear-btn:hover {{ color: #e0e0e0; }}
+  #settings-popover {{ display:none; position:fixed; top:60px; left:20px; z-index:200; background:#1e1e1e; border:1px solid #5dade2; border-radius:8px; padding:16px 20px; box-shadow:0 4px 20px rgba(0,0,0,0.7); min-width:420px; }}
+  #settings-popover h4 {{ margin:0 0 12px 0; color:#80deea; font-size:0.95em; }}
 </style></head><body>
-<h2>🤖 AlertSol Dashboard</h2>
-<p style="color:#888">Ostatnia aktualizacja: {now}</p>
-
-<!-- ── Ustawienia ──────────────────────────────────────────────────────── -->
-<div class="indicators-panel">
-  <h3 style="cursor:pointer;user-select:none" onclick="var p=document.getElementById('settings-body');p.style.display=p.style.display==='none'?'block':'none'">⚙️ Ustawienia <span style="font-size:0.6em;color:#888">▶ kliknij</span></h3>
-  <div id="settings-body" style="display:none">
+<div style="position:relative">
+<h2 style="display:inline">🤖 AlertSol Dashboard</h2>
+<button class="gear-btn" onclick="toggleSettings()" title="Ustawienia">⚙</button>
+<div id="settings-popover">
+  <h4>⚙ Ustawienia</h4>
   <div class="ind-row">
     <div class="ind-card">
       <div class="label">Kwota zlecenia (USDT)</div>
@@ -352,12 +366,23 @@ def dashboard():
       <div class="label">Maks. otwartych zleceń</div>
       <div class="value"><input type="number" step="1" min="1" max="20" id="set-max-positions" class="settings-input" value="—"></div>
     </div>
-    <div style="display:flex;align-items:flex-end">
+    <div style="display:flex;align-items:flex-end;margin-top:8px">
       <button class="settings-save" id="settings-save-btn" onclick="saveSettings()">Zapisz ustawienia</button>
       <span id="settings-status" style="margin-left:8px;font-size:0.8em;color:#888"></span>
     </div>
   </div>
-  </div>
+</div>
+</div>
+<p style="color:#888">Ostatnia aktualizacja: {now}</p>
+
+<!-- ── Market status bar ───────────────────────────────────────────────── -->
+<div id="market-status-bar" style="display:flex;gap:20px;margin-bottom:14px;background:#222;border:1px solid #444;border-radius:6px;padding:8px 16px;align-items:center;flex-wrap:wrap">
+  <span style="color:#aaa;font-size:0.85em">SOL/USDT:</span>
+  <span id="ms-price" style="font-weight:bold;font-size:1.1em;color:#e0e0e0">—</span>
+  <span style="color:#aaa;font-size:0.85em">Regime:</span>
+  <span id="ms-regime" style="font-weight:bold;color:#e0e0e0">—</span>
+  <span id="ms-regime-detail" style="font-size:0.8em;color:#888"></span>
+  <span id="ms-loading" style="font-size:0.75em;color:#555;margin-left:auto"></span>
 </div>
 
 <!-- ── Wyniki za okres ────────────────────────────────────────────────── -->
@@ -385,6 +410,7 @@ def dashboard():
     <div class="ind-card">
       <div class="label">Łączny dochód</div>
       <div class="value" id="ps-total-income">—</div>
+      <div class="sub" id="ps-tp1-income-sub"></div>
     </div>
     <div class="ind-card">
       <div class="label">Entry rate</div>
@@ -418,8 +444,8 @@ def dashboard():
 </table>
 
 <h3>Per model</h3>
-<table><tr><th>Model</th><th title="% setupów które weszły na giełdę">% entry</th><th title="% wygranych (TP1+BE+TP2) z uruchomionych">% win</th><th>PnL $</th></tr>
-{by_model_rows or '<tr><td colspan=4 style="color:#888">Brak danych</td></tr>'}
+<table><tr><th>Model</th><th title="% setupów które weszły na giełdę">% entry</th><th title="% wygranych (TP1+BE+TP2) z uruchomionych">% win</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby każda pozycja wyszła na TP1">TP1-only $</th><th>TP1-only %</th></tr>
+{by_model_rows or '<tr><td colspan=7 style="color:#888">Brak danych</td></tr>'}
 </table>
 
 <h3>Zamknięte setupy <span id="hist-count" style="color:#888;font-size:0.7em"></span></h3>
@@ -444,8 +470,11 @@ def dashboard():
   <button class="btn-action" onclick="exportCsv()" title="Eksport CSV">Eksport CSV</button>
 </div>
 <table id="history-table">
-<thead><tr><th>#</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby cała pozycja wyszła na TP1">TP1-only $</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th title="Hipotetyczny wynik gdyby setup wszedł">Hypo</th><th></th></tr></thead>
-<tbody id="hist-body"><tr><td colspan=12 style="color:#888">Ładowanie...</td></tr></tbody>
+<thead>
+<tr><th>#</th><th>Alert</th><th>Wejście dt</th><th>Wyjście dt</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th style="background:#1a2a2a">PnL $</th><th style="background:#1a2a2a">PnL %</th><th style="background:#1a2a2a" title="PnL gdyby cała pozycja wyszła na TP1 (dla SL = rzeczywisty PnL)">TP1-only $</th><th style="background:#1a2a2a" title="TP1-only %">TP1-only %</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th title="Hipotetyczny wynik gdyby setup wszedł">Hypo</th><th></th></tr>
+<tr id="hist-totals" style="background:#1a2a1a;font-weight:bold;font-size:0.9em"><td colspan=9 style="color:#888;font-size:0.8em">∑ filtr:</td><td id="ht-pnl" style="background:#1a2a2a">—</td><td id="ht-pnl-pct" style="background:#1a2a2a">—</td><td id="ht-tp1" style="background:#1a2a2a">—</td><td id="ht-tp1-pct" style="background:#1a2a2a">—</td><td colspan=3></td></tr>
+</thead>
+<tbody id="hist-body"><tr><td colspan=16 style="color:#888">Ładowanie...</td></tr></tbody>
 </table>
 <div style="text-align:center;margin:10px 0">
   <button class="btn-action" id="load-more-btn" onclick="loadHistory(false)" style="display:none">Załaduj więcej</button>
@@ -821,6 +850,23 @@ function getFilterParams() {{
   return params;
 }}
 
+function fmtDt(v) {{
+  // Format ISO datetime or Unix timestamp (ms or s) as "DD.MM HH:MM"
+  if (!v) return '—';
+  var d;
+  if (typeof v === 'number') {{
+    d = new Date(v > 1e12 ? v : v * 1000);
+  }} else {{
+    d = new Date(v);
+  }}
+  if (isNaN(d)) return '—';
+  var dd = String(d.getDate()).padStart(2,'0');
+  var mm = String(d.getMonth()+1).padStart(2,'0');
+  var hh = String(d.getHours()).padStart(2,'0');
+  var mi = String(d.getMinutes()).padStart(2,'0');
+  return dd + '.' + mm + ' ' + hh + ':' + mi;
+}}
+
 function buildHistRow(s) {{
   var TRADING = {{'TP1':1,'TP2':1,'TP1+BE':1,'TP1+SL':1,'SL':1}};
   var entries = s.entries || [];
@@ -831,6 +877,11 @@ function buildHistRow(s) {{
   var result  = s.result || '';
   var dir     = s.direction || 'long';
   var sign    = dir === 'long' ? 1 : -1;
+
+  // Date/time columns
+  var alertDt = fmtDt(s.alert_time);
+  var entryDt = fmtDt(s.entry_hit_at);
+  var exitDt  = fmtDt(s.exit_time);
 
   // Qty
   var fq = s.exchange_qty_full ? parseFloat(s.exchange_qty_full) : null;
@@ -846,13 +897,16 @@ function buildHistRow(s) {{
   }}
   var pnlPct = s.pnl_pct != null ? s.pnl_pct : (pnl != null ? Math.round(pnl / TRADE_USDT * 10000) / 100 : null);
 
-  // Alt PnL (TP1-only)
+  // Alt PnL (TP1-only): for SL = same as actual; for TP2/TP1+BE/TP1+SL = TP1 price
   var tp1p = tps[0] || null;
   var alt = null, dlt = null;
-  if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && tp1p && efc && fq) {{
+  if (result === 'SL') {{
+    alt = pnl;
+  }} else if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && tp1p && efc && fq) {{
     alt = Math.round(sign * fq * (tp1p - efc) * 100) / 100;
-    if (pnl != null) dlt = Math.round((pnl - alt) * 100) / 100;
   }}
+  var altPct = alt != null ? Math.round(alt / TRADE_USDT * 10000) / 100 : null;
+  if (alt != null && pnl != null) dlt = Math.round((pnl - alt) * 100) / 100;
 
   var fmt  = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2); }};
   var fmtP = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }};
@@ -889,6 +943,9 @@ function buildHistRow(s) {{
 
   return '<tr data-setup-id="' + s.setup_id + '" data-setup="' + sdJson + '">'
     + '<td>#' + s.setup_id + '</td>'
+    + '<td style="font-size:0.8em;color:#aaa">' + alertDt + '</td>'
+    + '<td style="font-size:0.8em;color:#aaa">' + entryDt + '</td>'
+    + '<td style="font-size:0.8em;color:#aaa">' + exitDt + '</td>'
     + '<td>' + s.model + '</td>'
     + '<td>' + dir.toUpperCase() + '</td>'
     + '<td><span class="vmode avg-entry-display">' + entryStr + '</span>'
@@ -897,9 +954,10 @@ function buildHistRow(s) {{
     +   '<select class="emode result-select" onchange="onResultChange(this)">' + opts + '</select></td>'
     + '<td><span class="vmode exit-display">' + exitStr + '</span>'
     +   '<input class="emode avg-exit-input" type="number" step="0.01" value="' + exitInp + '" oninput="onExitChange(this)"></td>'
-    + '<td class="pnl-cell" style="color:' + clr(pnl) + '">' + fmt(pnl) + '</td>'
-    + '<td class="pnl-pct-cell" style="color:' + clr(pnlPct) + '">' + fmtP(pnlPct) + '</td>'
-    + '<td class="alt-pnl-cell" style="color:' + clr(alt) + '">' + fmt(alt) + '</td>'
+    + '<td class="pnl-cell" style="background:#1a2a2a;color:' + clr(pnl) + '">' + fmt(pnl) + '</td>'
+    + '<td class="pnl-pct-cell" style="background:#1a2a2a;color:' + clr(pnlPct) + '">' + fmtP(pnlPct) + '</td>'
+    + '<td class="alt-pnl-cell" style="background:#1a2a2a;color:' + clr(alt) + '">' + fmt(alt) + '</td>'
+    + '<td class="alt-pct-cell" style="background:#1a2a2a;color:' + clr(altPct) + '">' + fmtP(altPct) + '</td>'
     + '<td class="delta-cell" style="color:' + clr(dlt) + '">' + fmt(dlt) + '</td>'
     + '<td>' + hypoStr + '</td>'
     + '<td style="white-space:nowrap">'
@@ -920,7 +978,7 @@ async function loadHistory(reset) {{
     var body = document.getElementById('hist-body');
     if (reset) body.innerHTML = '';
     if (!data.rows || data.rows.length === 0) {{
-      if (reset) body.innerHTML = '<tr><td colspan=12 style="color:#888">Brak wyników</td></tr>';
+      if (reset) body.innerHTML = '<tr><td colspan=16 style="color:#888">Brak wyników</td></tr>';
     }} else {{
       data.rows.forEach(function(s) {{ body.innerHTML += buildHistRow(s); }});
     }}
@@ -928,8 +986,24 @@ async function loadHistory(reset) {{
     var total = data.total || 0;
     document.getElementById('hist-count').textContent = '(' + histOffset + '/' + total + ')';
     document.getElementById('load-more-btn').style.display = histOffset < total ? '' : 'none';
+    // Update totals row (always reflects full filter, not just loaded page)
+    if (reset && data.totals) {{
+      var t = data.totals;
+      var fmtT = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + parseFloat(v).toFixed(2); }};
+      var fmtPT = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + parseFloat(v).toFixed(1) + '%'; }};
+      var clrT = function(v) {{ return v == null ? '#888' : (parseFloat(v) >= 0 ? 'lightgreen' : 'salmon'); }};
+      var setT = function(id, val, fmt) {{
+        var el = document.getElementById(id);
+        el.textContent = fmt(val);
+        el.style.color = clrT(val);
+      }};
+      setT('ht-pnl',     t.sum_pnl_usd,      fmtT);
+      setT('ht-pnl-pct', t.sum_pnl_pct,      fmtPT);
+      setT('ht-tp1',     t.sum_tp1_only_usd,  fmtT);
+      setT('ht-tp1-pct', t.sum_tp1_only_pct,  fmtPT);
+    }}
   }} catch(e) {{
-    document.getElementById('hist-body').innerHTML = '<tr><td colspan=12 style="color:salmon">Błąd: ' + e.message + '</td></tr>';
+    document.getElementById('hist-body').innerHTML = '<tr><td colspan=16 style="color:salmon">Błąd: ' + e.message + '</td></tr>';
   }}
 }}
 
@@ -938,7 +1012,6 @@ function exportCsv() {{
   window.open('/api/resolved/csv?' + params.toString());
 }}
 
-loadHistory(true);
 // ── koniec historii ──────────────────────────────────────────────────────────
 
 // ── Ustawienia ──────────────────────────────────────────────────────────────
@@ -1015,9 +1088,14 @@ async function loadPeriodStats() {{
     document.getElementById('ps-avg-daily').style.color = clr(d.avg_daily_pnl);
     document.getElementById('ps-avg-daily-mult').textContent = (d.avg_daily_mult >= 0 ? '+' : '') + (d.avg_daily_mult * 100).toFixed(1) + '% kwoty';
 
-    // Total income
+    // Total income + TP1-only
     document.getElementById('ps-total-income').textContent = fmt(d.total_income) + ' $';
     document.getElementById('ps-total-income').style.color = clr(d.total_income);
+    var tp1Inc = d.tp1_only_income != null ? d.tp1_only_income : null;
+    var tp1Pct = tp1Inc != null ? Math.round(tp1Inc / tu * 10000) / 100 : null;
+    var tp1Str = tp1Inc != null ? ('TP1-only: ' + fmt(tp1Inc) + ' $ (' + (tp1Pct >= 0 ? '+' : '') + tp1Pct.toFixed(1) + '%)') : '';
+    document.getElementById('ps-tp1-income-sub').textContent = tp1Str;
+    document.getElementById('ps-tp1-income-sub').style.color = tp1Inc != null ? clr(tp1Inc) : '#888';
 
     // Entry rate
     document.getElementById('ps-entry-rate').textContent = d.entry_rate.toFixed(1) + '%';
@@ -1034,6 +1112,55 @@ async function loadPeriodStats() {{
 }}
 
 loadPeriodStats();
+
+// ── Settings popover ─────────────────────────────────────────────────────────
+function toggleSettings() {{
+  var p = document.getElementById('settings-popover');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}}
+document.addEventListener('click', function(e) {{
+  var pop = document.getElementById('settings-popover');
+  if (pop.style.display !== 'none' &&
+      !pop.contains(e.target) &&
+      !e.target.closest('.gear-btn')) {{
+    pop.style.display = 'none';
+  }}
+}});
+
+// ── Market status ────────────────────────────────────────────────────────────
+async function loadMarketStatus() {{
+  var loading = document.getElementById('ms-loading');
+  loading.textContent = '↻';
+  try {{
+    var resp = await fetch('/api/market-status');
+    var d = await resp.json();
+    var priceEl  = document.getElementById('ms-price');
+    var regimeEl = document.getElementById('ms-regime');
+    var detailEl = document.getElementById('ms-regime-detail');
+    priceEl.textContent = d.price != null ? '$' + parseFloat(d.price).toFixed(2) : '—';
+    var regime = d.regime || '—';
+    regimeEl.textContent = regime;
+    var dir = (d.direction || '');
+    var clr = dir === 'up' ? 'lightgreen' : dir === 'down' ? 'salmon' : '#aaa';
+    regimeEl.style.color = clr;
+    var details = [];
+    if (d.score != null) details.push('score:' + d.score);
+    if (d.change_24h != null) details.push('24h:' + (d.change_24h >= 0 ? '+' : '') + parseFloat(d.change_24h).toFixed(1) + '%');
+    detailEl.textContent = details.join('  ');
+    loading.textContent = '';
+  }} catch(e) {{
+    document.getElementById('ms-loading').textContent = '⚠';
+  }}
+}}
+loadMarketStatus();
+setInterval(loadMarketStatus, 60000);
+
+// ── Default filter: exclude 'nie weszlo' ─────────────────────────────────────
+document.querySelectorAll('.res-filter').forEach(function(cb) {{
+  if (cb.value !== 'nie weszlo') cb.checked = true;
+}});
+loadHistory(true);
+
 // ── koniec wskaźników ───────────────────────────────────────────────────────
 </script>
 </html>"""
@@ -1489,6 +1616,32 @@ def admin_diagnose_positions():
             "bitget_tpsl":    len(live_tpsl),
             "issue_count":    len(issues),
         },
+    }
+
+
+@app.get("/api/market-status")
+def api_market_status():
+    """Zwraca aktualny kurs SOL i reżim rynkowy."""
+    import sol_alert as sa
+    price = None
+    reg: dict = {}
+    try:
+        price = sa.fetch_current_price(sa.SYMBOL)
+    except Exception as e:
+        log.warning(f"[market-status] price: {e}")
+    try:
+        m15 = sa.fetch_klines(sa.SYMBOL, "15m", 100)
+        h1  = sa.fetch_klines(sa.SYMBOL, "1h", 50)
+        reg = sa.detect_market_regime(m15, h1, price or 0) or {}
+    except Exception as e:
+        log.warning(f"[market-status] regime: {e}")
+    return {
+        "price":      price,
+        "regime":     reg.get("regime"),
+        "direction":  reg.get("direction"),
+        "score":      reg.get("score"),
+        "change_24h": reg.get("change_24h"),
+        "change_48h": reg.get("change_48h"),
     }
 
 

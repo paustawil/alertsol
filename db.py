@@ -576,6 +576,21 @@ def get_summary_stats() -> dict:
             row["win_rate_pct"] = round(wins / total * 100, 1) if total > 0 else None
 
             # Per-model breakdown
+            tp1_only_calc = f"""
+                CASE
+                    WHEN result = 'SL' THEN {pnl_calc}
+                    WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
+                         AND (tps->>0) IS NOT NULL
+                         AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+                    THEN CASE direction WHEN 'long'
+                         THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                         ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                         END
+                END"""
             cur.execute(
                 f"""
                 SELECT model,
@@ -584,6 +599,8 @@ def get_summary_stats() -> dict:
                            AND {trading_filter})                             AS entered,
                        ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
                            AND {trading_filter})::numeric, 2)                AS pnl_usd,
+                       ROUND(SUM({tp1_only_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})::numeric, 2)                AS tp1_only_pnl_usd,
                        COUNT(*) FILTER (WHERE resolved = TRUE
                            AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))    AS wins
                 FROM setups
@@ -592,6 +609,7 @@ def get_summary_stats() -> dict:
                 """
             )
             row["by_model"] = [dict(r) for r in cur.fetchall()]
+            row["trade_usdt"] = trade_usdt
 
     return row
 
@@ -649,6 +667,21 @@ def get_period_stats(period: str) -> dict:
                              FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                     END
                 )"""
+            tp1_only_calc_period = f"""
+                CASE
+                    WHEN result = 'SL' THEN {pnl_calc}
+                    WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
+                         AND (tps->>0) IS NOT NULL
+                         AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+                    THEN CASE direction WHEN 'long'
+                         THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                         ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                         END
+                END"""
             cur.execute(
                 f"""
                 SELECT
@@ -656,7 +689,9 @@ def get_period_stats(period: str) -> dict:
                     COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))   AS wins,
                     COUNT(*) FILTER (WHERE result = 'SL')                                         AS losses,
                     COALESCE(ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
-                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 2), 0) AS total_income
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 2), 0) AS total_income,
+                    COALESCE(ROUND(SUM({tp1_only_calc_period}) FILTER (WHERE resolved = TRUE
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 2), 0) AS tp1_only_income
                 FROM setups
                 WHERE {time_filter}
                 """,
@@ -667,6 +702,7 @@ def get_period_stats(period: str) -> dict:
             wins = row["wins"] or 0
             losses = row["losses"] or 0
             total_income = float(row["total_income"])
+            tp1_only_income = float(row["tp1_only_income"])
 
             # Entry rate
             entry_rate = round(entered / total_setups * 100, 1) if total_setups > 0 else 0
@@ -731,6 +767,7 @@ def get_period_stats(period: str) -> dict:
         "wins": wins,
         "losses": losses,
         "total_income": total_income,
+        "tp1_only_income": tp1_only_income,
         "avg_daily_pnl": avg_daily_pnl,
         "avg_daily_mult": avg_daily_mult,
         "max_capital": max_capital,
@@ -789,6 +826,37 @@ def get_resolved_filtered(
 
     where_sql = " AND ".join(where)
 
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage = 20
+    pnl_calc_f = f"""
+        COALESCE(pnl_usd,
+            CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                      AND avg_exit IS NOT NULL
+                      AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN (avg_exit - COALESCE(avg_entry,(entries->>0)::numeric))
+                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - avg_exit)
+                 END *
+                 COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+            END
+        )"""
+    tp1_only_calc_f = f"""
+        CASE
+            WHEN result = 'SL' THEN {pnl_calc_f}
+            WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
+                 AND (tps->>0) IS NOT NULL
+                 AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                           FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                           FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                 END
+        END"""
+
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"SELECT COUNT(*) AS cnt FROM setups WHERE {where_sql}", params)
@@ -796,7 +864,7 @@ def get_resolved_filtered(
 
             cur.execute(
                 f"""
-                SELECT setup_id, alert_time, model, direction, score,
+                SELECT setup_id, alert_time, entry_hit_at, model, direction, score,
                        result, avg_entry, avg_exit, pnl_usd, pnl_pct,
                        exit_time, entries, tps, sl, sl_after_tp1,
                        exchange_qty_full, exchange_qty_half,
@@ -810,7 +878,32 @@ def get_resolved_filtered(
             )
             rows = [_row_to_dict(r) for r in cur.fetchall()]
 
-    return {"total": total, "rows": rows}
+            # Totals for filtered set (all pages)
+            cur.execute(
+                f"""
+                SELECT
+                    ROUND(COALESCE(SUM({pnl_calc_f}) FILTER (
+                        WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    ), 0)::numeric, 2) AS sum_pnl_usd,
+                    ROUND(COALESCE(SUM({tp1_only_calc_f}) FILTER (
+                        WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    ), 0)::numeric, 2) AS sum_tp1_only_usd
+                FROM setups WHERE {where_sql}
+                """,
+                params,
+            )
+            totals_row = dict(cur.fetchone())
+            sum_pnl = float(totals_row["sum_pnl_usd"] or 0)
+            sum_tp1 = float(totals_row["sum_tp1_only_usd"] or 0)
+            totals = {
+                "sum_pnl_usd":      round(sum_pnl, 2),
+                "sum_pnl_pct":      round(sum_pnl / trade_usdt * 100, 2) if trade_usdt else 0,
+                "sum_tp1_only_usd": round(sum_tp1, 2),
+                "sum_tp1_only_pct": round(sum_tp1 / trade_usdt * 100, 2) if trade_usdt else 0,
+                "trade_usdt":       trade_usdt,
+            }
+
+    return {"total": total, "rows": rows, "totals": totals}
 
 
 def get_all_resolved_for_calc() -> list[dict]:
