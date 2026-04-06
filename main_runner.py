@@ -1953,9 +1953,9 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         if body.result == "SL":
             pnl_usd = sign * full_qty * (avg_exit - avg_entry)
         elif body.result == "TP1":
-            pnl_usd = sign * half_qty * (avg_exit - avg_entry)
+            pnl_usd = sign * full_qty * (avg_exit - avg_entry)
         elif body.result in ("TP2", "TP1+BE", "TP1+SL"):
-            pnl_usd = sign * (half_qty + half_qty) * (avg_exit - avg_entry)
+            pnl_usd = sign * full_qty * (avg_exit - avg_entry)
 
     db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)
     return {
