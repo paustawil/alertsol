@@ -125,3 +125,20 @@ Railway udostępnia panel pod adresem serwisu:
 
 - `pnl_usd` — realny zysk/strata w USD dla danego trade'u (ruch ceny × qty SOL)
 - `pnl_pct` — % zwrotu z zainwestowanego kapitału (`pnl_usd / BITGET_TRADE_USDT × 100`)
+
+---
+
+## Historia badań
+
+### Kwiecień 2026 — test logiki wejść przy IMPULSE (plik: `impulse_backtest.py`)
+
+Porównanie 3 wersji logiki wejścia dla reżimu `IMPULSE_DOWN` / `IMPULSE_UP` na danych SOL/USDT M15:
+
+| Wersja | Opis | Wynik |
+|--------|------|-------|
+| **A (obecna)** | 1–2 świece odreagowania (zielone/czerwone), wejście market przy lokalnym ekstremum | **najlepsza** |
+| B | Limit order na poziomie Fibonacci (38/50/62%), czeka aż pullback będzie widoczny | gorsza od A |
+| C | Limit order na Fib, wystawiany natychmiast po wykryciu IMPULSE (antycypacja pullbacku) | gorsza od A |
+
+Testy przeprowadzono na 3 okresach: ostatnie 90 dni, VIII–IX 2025 (wzrosty), X–XI 2025 (spadki).  
+Wniosek: aktualna logika `impulse_continuation_short/long` pozostaje bez zmian.
