@@ -1170,7 +1170,7 @@ function renderScanBlock(el, model, scan) {{
     var bClr = scan.bias === 'long' ? 'lightgreen' : scan.bias === 'short' ? 'salmon' : '#888';
     extra = '<span style="color:' + bClr + '">' + scan.bias.toUpperCase() + ' ' + (scan.bias_proc || 0) + '%</span> · ';
   }}
-  var txt = (scan.text || '').trim().replace(/\n/g, '  ');
+  var txt = (scan.text || '').trim().replace(/\\n/g, '  ');
   if (txt.length > 160) txt = txt.slice(0, 160) + '…';
   el.innerHTML = label + ago + foundBadge + extra
     + '<span style="color:#ccc;font-size:0.78em">' + txt + '</span>';
