@@ -2692,6 +2692,8 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     new_level = entries[0] if entries else current_price
     direction = setup.get("direction", "-")
 
+    replaced_setup = None  # wypełniane gdy nowy setup zastępuje stary
+
     # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     if not shadow:
@@ -2722,16 +2724,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
                                     cancel_time=now_iso,
                                     cancel_price=round(current_price, 2))
                     db.resolve_setup(p["setup_id"], "anulowany", None, None, None, None)
-                    try:
-                        di = "📉" if direction == "short" else "📈"
-                        send_telegram(
-                            f"🔄 <b>Setup #{p['setup_id']} zastąpiony</b>\n"
-                            f"{di} {direction.upper()}"
-                            f" | W1: ${old_w1:.2f} → ${new_level:.2f}\n"
-                            f"<i>Algo zaktualizował poziomy</i>"
-                        )
-                    except Exception:
-                        pass
+                    replaced_setup = {"sid": p["setup_id"], "w1": old_w1}
                     break  # stary anulowany — kontynuuj wstawianie nowego
 
     # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
@@ -2774,6 +2767,18 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         print(f"[pending] Duplikat DB: {model} {direction} ~${new_level:.2f}")
         return
     setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
+
+    if replaced_setup:
+        try:
+            di = "📉" if direction == "short" else "📈"
+            send_telegram(
+                f"🔄 <b>Setup #{replaced_setup['sid']} zastąpiony przez #{sid}</b>\n"
+                f"{di} {direction.upper()}"
+                f" | W1: ${replaced_setup['w1']:.2f} → ${new_level:.2f}\n"
+                f"<i>Algo zaktualizował poziomy</i>"
+            )
+        except Exception:
+            pass
 
 
 def _hits(candle: dict, price: float, direction: str, side: str, entry_trigger: str = None) -> bool:
