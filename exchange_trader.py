@@ -558,10 +558,14 @@ def _sync_inner():
     modified = False
 
     # Guard: maksymalnie MAX_POSITIONS aktywnych pozycji na raz.
+    # Liczymy tylko pozycje realnie otwarte na Bitget — bez shadow i bez po-TP1
+    # (po TP1 pozycja jest już zamknięta połowicznie i trackowana tylko wirtualnie).
     active_count = sum(
         1 for s in pending
         if s.get("exchange_position_opened")
         and not s.get("exchange_done", False)
+        and not s.get("shadow", False)
+        and not s.get("exchange_tp1_done", False)
     )
     exchange_slot_taken = active_count >= MAX_POSITIONS
     if exchange_slot_taken:
