@@ -2681,6 +2681,10 @@ def next_setup_id() -> int:
     raise RuntimeError("next_setup_id() nie powinien być wywoływany bezpośrednio — użyj db.insert_setup()")
 
 
+REPLACE_MIN_DIFF = 0.10  # poniżej → prawdziwy duplikat, pomiń
+REPLACE_MAX_DIFF = 0.50  # powyżej → osobny setup
+
+
 def save_pending(setup: dict, model: str, rejection: str, current_price: float, shadow: bool = False):
     entries   = setup.get("entries", [])
     tps       = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
@@ -2688,14 +2692,40 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     new_level = entries[0] if entries else current_price
     direction = setup.get("direction", "-")
 
+    replaced_setup = None  # wypełniane gdy nowy setup zastępuje stary
+
     # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     if not shadow:
         for p in db.get_active_setups():
-            if (p["direction"] == direction
-                    and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5):
-                print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} (już istnieje #{p['setup_id']} od {p['model']})")
-                return
+            if p["direction"] == direction:
+                old_w1 = p["entries"][0] if p["entries"] else 0
+                diff = abs(old_w1 - new_level)
+
+                if diff < REPLACE_MIN_DIFF:
+                    # Identyczny poziom — prawdziwy duplikat
+                    print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} "
+                          f"(już istnieje #{p['setup_id']} od {p['model']})")
+                    return
+
+                if diff < REPLACE_MAX_DIFF:
+                    if p.get("entry_hit_at") is not None:
+                        # Stary setup już wszedł w pozycję — nie ruszaj
+                        print(f"[pending] Pominięto zastępowanie #{p['setup_id']} — już w pozycji")
+                        return
+                    # Zaktualizowane poziomy — anuluj stary, wstaw nowy
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    reason = (f"zastąpiony nowszym setupem W1=${new_level:.2f} "
+                              f"(poprzedni W1=${old_w1:.2f}, diff=${diff:.2f})")
+                    print(f"[pending] Zastępuję #{p['setup_id']} W1=${old_w1:.2f} → ${new_level:.2f}")
+                    db.update_setup(p["setup_id"],
+                                    shadow=True,
+                                    cancel_reason=reason,
+                                    cancel_time=now_iso,
+                                    cancel_price=round(current_price, 2))
+                    db.resolve_setup(p["setup_id"], "anulowany", None, None, None, None)
+                    replaced_setup = {"sid": p["setup_id"], "w1": old_w1}
+                    break  # stary anulowany — kontynuuj wstawianie nowego
 
     # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
     w1_lvl    = entries[0] if entries else current_price
@@ -2737,6 +2767,24 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         print(f"[pending] Duplikat DB: {model} {direction} ~${new_level:.2f}")
         return
     setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
+
+    if replaced_setup:
+        try:
+            di = "📉" if direction == "short" else "📈"
+            tp1 = tps[0] if len(tps) > 0 else None
+            tp2 = tps[1] if len(tps) > 1 else None
+            sl  = row.get("sl")
+            send_telegram(
+                f"🔄 <b>Setup #{replaced_setup['sid']} zastąpiony przez #{sid}</b>\n"
+                f"{di} {direction.upper()}"
+                f" | W1: ${replaced_setup['w1']:.2f} → ${new_level:.2f}\n"
+                + (f"TP1: ${tp1:.2f}" if tp1 else "")
+                + (f" | TP2: ${tp2:.2f}" if tp2 else "")
+                + (f" | SL: ${sl:.2f}" if sl else "") + "\n"
+                f"<i>Algo zaktualizował poziomy</i>"
+            )
+        except Exception:
+            pass
 
 
 def _hits(candle: dict, price: float, direction: str, side: str, entry_trigger: str = None) -> bool:
@@ -3340,6 +3388,7 @@ def check_stale_setups(regime: dict, current_price: float):
     Kryteria:
     1. Cena uciekła >5% od entry
     2. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
+    3. Cena przebiła TP1 bez wejścia w pozycję
     """
     pending = db.get_active_setups()
     non_entered = [s for s in pending
@@ -3371,6 +3420,14 @@ def check_stale_setups(regime: dict, current_price: float):
                 reason = f"zmiana reżimu na {regime['regime']} (setup short)"
             elif d == "long" and regime_dir == "down":
                 reason = f"zmiana reżimu na {regime['regime']} (setup long)"
+
+        # 3. Cena przebiła TP1 bez wejścia w pozycję
+        if not reason and s.get("tps"):
+            tp1 = s["tps"][0]
+            if d == "long" and current_price > tp1:
+                reason = f"cena przebiła TP1 ${tp1:.2f} bez wejścia (long)"
+            elif d == "short" and current_price < tp1:
+                reason = f"cena przebiła TP1 ${tp1:.2f} bez wejścia (short)"
 
         if reason:
             print(f"[stale] #{sid} anulowany: {reason}")
