@@ -275,7 +275,6 @@ def dashboard():
 
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
 
-    _tu = stats.get("trade_usdt") or trade_usdt
     by_model_rows = ""
     for m in (stats.get("by_model") or []):
         all_s   = m.get("all_setups") or 0
@@ -285,10 +284,12 @@ def dashboard():
         win_pct   = f"{wins / entered * 100:.0f}%" if entered else "—"
         pnl_usd_m = float(m["pnl_usd"]) if m.get("pnl_usd") is not None else None
         pnl_m     = f"{pnl_usd_m:+.2f}" if pnl_usd_m is not None else "—"
-        pnl_pct_m = f"{pnl_usd_m / _tu * 100:+.1f}%" if pnl_usd_m is not None and _tu else "—"
+        _pnl_pct_v = float(m["pnl_pct"]) if m.get("pnl_pct") is not None else None
+        pnl_pct_m = f"{_pnl_pct_v:+.1f}%" if _pnl_pct_v is not None else "—"
         tp1_usd_m = float(m["tp1_only_pnl_usd"]) if m.get("tp1_only_pnl_usd") is not None else None
         tp1_m     = f"{tp1_usd_m:+.2f}" if tp1_usd_m is not None else "—"
-        tp1_pct_m = f"{tp1_usd_m / _tu * 100:+.1f}%" if tp1_usd_m is not None and _tu else "—"
+        _tp1_pct_v = float(m["tp1_only_pnl_pct"]) if m.get("tp1_only_pnl_pct") is not None else None
+        tp1_pct_m = f"{_tp1_pct_v:+.1f}%" if _tp1_pct_v is not None else "—"
         by_model_rows += (
             f"<tr><td>{m['model']}</td><td>{entry_pct}</td><td>{win_pct}</td>"
             f"<td>{pnl_m}</td><td>{pnl_pct_m}</td>"
@@ -898,11 +899,14 @@ function buildHistRow(s) {{
   var entryDt = fmtDt(s.entry_hit_at);
   var exitDt  = fmtDt(s.exit_time);
 
+  // Per-row trade_usdt (kwota zlecenia z momentu otwarcia pozycji)
+  var rowTU = s.trade_usdt != null ? parseFloat(s.trade_usdt) : TRADE_USDT;
+
   // Qty
   var fq = s.exchange_qty_full ? parseFloat(s.exchange_qty_full) : null;
   var hq = s.exchange_qty_half ? parseFloat(s.exchange_qty_half) : null;
   var efc = avgE || (TRADING[result] ? w1 : null);
-  if (!fq && efc) fq = Math.max(Math.floor((TRADE_USDT * 20 / efc) / 0.1) * 0.1, 0.1);
+  if (!fq && efc) fq = Math.max(Math.floor((rowTU * 20 / efc) / 0.1) * 0.1, 0.1);
   if (!hq && fq) hq = Math.max(Math.floor((fq / 2) / 0.1) * 0.1, 0.1);
 
   // PnL
@@ -910,7 +914,7 @@ function buildHistRow(s) {{
   if (pnl == null && TRADING[result] && avgX && efc && fq) {{
     pnl = Math.round(sign * fq * (avgX - efc) * 100) / 100;
   }}
-  var pnlPct = s.pnl_pct != null ? s.pnl_pct : (pnl != null ? Math.round(pnl / TRADE_USDT * 10000) / 100 : null);
+  var pnlPct = s.pnl_pct != null ? s.pnl_pct : (pnl != null && rowTU ? Math.round(pnl / rowTU * 10000) / 100 : null);
 
   // Alt PnL (TP1-only): for SL = same as actual; for TP2/TP1+BE/TP1+SL = TP1 price
   var tp1p = tps[0] || null;
@@ -920,7 +924,7 @@ function buildHistRow(s) {{
   }} else if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && tp1p && efc && fq) {{
     alt = Math.round(sign * fq * (tp1p - efc) * 100) / 100;
   }}
-  var altPct = alt != null ? Math.round(alt / TRADE_USDT * 10000) / 100 : null;
+  var altPct = alt != null && rowTU ? Math.round(alt / rowTU * 10000) / 100 : null;
   if (alt != null && pnl != null) dlt = Math.round((pnl - alt) * 100) / 100;
 
   var fmt  = function(v) {{ return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2); }};
@@ -1101,14 +1105,14 @@ async function loadPeriodStats() {{
 
     // Actual PnL (TP1+TP2)
     var actualInc = d.total_income != null ? d.total_income : null;
-    var actualPct = actualInc != null ? Math.round(actualInc / tu * 10000) / 100 : null;
+    var actualPct = d.total_income_pct != null ? d.total_income_pct : null;
     document.getElementById('ps-total-income').textContent = actualInc != null ? fmt(actualInc) + ' $' : '—';
     document.getElementById('ps-total-income').style.color = clr(actualInc);
     document.getElementById('ps-total-income-pct').textContent = actualPct != null ? (actualPct >= 0 ? '+' : '') + actualPct.toFixed(1) + '%' : '';
     document.getElementById('ps-total-income-pct').style.color = clr(actualPct);
     // TP1-only PnL
     var tp1Inc = d.tp1_only_income != null ? d.tp1_only_income : null;
-    var tp1Pct = tp1Inc != null ? Math.round(tp1Inc / tu * 10000) / 100 : null;
+    var tp1Pct = d.tp1_only_income_pct != null ? d.tp1_only_income_pct : null;
     document.getElementById('ps-tp1-income').textContent = tp1Inc != null ? fmt(tp1Inc) + ' $' : '—';
     document.getElementById('ps-tp1-income').style.color = clr(tp1Inc);
     document.getElementById('ps-tp1-income-pct').textContent = tp1Pct != null ? (tp1Pct >= 0 ? '+' : '') + tp1Pct.toFixed(1) + '%' : '';
