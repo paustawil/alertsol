@@ -3511,7 +3511,14 @@ def breakout_scan():
     # Anuluj przestarzałe setupy (co 3 min — szybciej niż main)
     check_stale_setups(regime, current)
 
+    # Zawsze zapisz feedback z reżimu — nawet gdy RANGE (brak skanowania)
     if regime["regime"] == "RANGE":
+        _last_feedback["Algo2"] = {
+            "time":  datetime.now(TZ).isoformat(),
+            "found": False,
+            "count": 0,
+            "text":  f"RANGE — Algo2 nie skanuje w konsolidacji. {regime.get('details', '')}",
+        }
         return  # Nic nie rób w RANGE
 
     # Telegram notification — tylko przy IMPULSE, cooldown 30 min
@@ -3543,6 +3550,12 @@ def breakout_scan():
     # Algo2 przy IMPULSE/TREND — save_pending odrzuci duplikaty
     print(f"[breakout-scan] {regime['regime']} wykryty — szukam setupu Algo2...")
     algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    _last_feedback["Algo2"] = {
+        "time":  datetime.now(TZ).isoformat(),
+        "found": bool(algo2_setups),
+        "count": len(algo2_setups),
+        "text":  algo2_log,
+    }
 
     if algo2_setups:
         best = max(algo2_setups, key=lambda s: s["rr"])
