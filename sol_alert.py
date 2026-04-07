@@ -3517,7 +3517,7 @@ def breakout_scan():
             "time":  datetime.now(TZ).isoformat(),
             "found": False,
             "count": 0,
-            "text":  f"RANGE — Algo2 nie skanuje w konsolidacji. {regime.get('details', '')}",
+            "text":  f"RANGE — Algo2 nie skanuje w konsolidacji. Support: ${regime.get('support', 0):.2f}, Resistance: ${regime.get('resistance', 0):.2f}. {regime.get('details', '')}",
         }
         return  # Nic nie rób w RANGE
 

@@ -1170,8 +1170,8 @@ function renderScanBlock(el, model, scan) {{
     var bClr = scan.bias === 'long' ? 'lightgreen' : scan.bias === 'short' ? 'salmon' : '#888';
     extra = '<span style="color:' + bClr + '">' + scan.bias.toUpperCase() + ' ' + (scan.bias_proc || 0) + '%</span> · ';
   }}
-  var txt = (scan.text || '').trim().replace(/\\n/g, '  ');
-  if (txt.length > 160) txt = txt.slice(0, 160) + '…';
+  var txt = (scan.text || '').trim().replace(/={3,}/g, '').replace(/\\n/g, '  ').replace(/\s{2,}/g, ' ').trim();
+  if (txt.length > 200) txt = txt.slice(0, 200) + '…';
   el.innerHTML = label + ago + foundBadge + extra
     + '<span style="color:#ccc;font-size:0.78em">' + txt + '</span>';
 }}
@@ -1195,10 +1195,19 @@ async function loadMarketStatus() {{
     document.getElementById('ms-regime-detail').textContent = details.join('  ');
     // Algo feedback (last_scans is now a dict keyed by model name)
     var scans = d.last_scans || {{}};
+    var isRange = (d.regime || '').indexOf('RANGE') !== -1;
+    var srSuffix = '';
+    if (isRange && d.support != null && d.resistance != null) {{
+      srSuffix = ' | Support: $' + parseFloat(d.support).toFixed(2) + ', Resistance: $' + parseFloat(d.resistance).toFixed(2);
+    }}
+    var scanAlgo2 = scans['Algo2'] ? Object.assign({{}}, scans['Algo2'], srSuffix ? {{text: (scans['Algo2'].text || '') + srSuffix}} : {{}}) : null;
+    var scanGrok  = scans['Grok']  ? Object.assign({{}}, scans['Grok'],  srSuffix ? {{text: (scans['Grok'].text  || '') + srSuffix}} : {{}}) : null;
     var el2 = document.getElementById('ms-scan-Algo2');
-    if (el2) renderScanBlock(el2, 'Algo2', scans['Algo2'] || null);
+    if (el2) renderScanBlock(el2, 'Algo2', isRange && !scans['Algo2'] && srSuffix
+      ? {{text: 'RANGE — brak skanowania.' + srSuffix}} : scanAlgo2);
     var elG = document.getElementById('ms-scan-Grok');
-    if (elG) renderScanBlock(elG, 'Grok', scans['Grok'] || null);
+    if (elG) renderScanBlock(elG, 'Grok', isRange && !scans['Grok'] && srSuffix
+      ? {{text: 'RANGE — brak danych.' + srSuffix}} : scanGrok);
     loading.textContent = '';
   }} catch(e) {{
     document.getElementById('ms-loading').textContent = '⚠';
@@ -1692,8 +1701,10 @@ def api_market_status():
         "regime":     reg.get("regime"),
         "direction":  reg.get("direction"),
         "score":      reg.get("score"),
-        "change_24h": reg.get("change_24h"),
-        "change_48h": reg.get("change_48h"),
+        "change_24h":  reg.get("change_24h"),
+        "change_48h":  reg.get("change_48h"),
+        "support":     reg.get("support"),
+        "resistance":  reg.get("resistance"),
         "last_scans":  _get_last_scans(),
     }
 
