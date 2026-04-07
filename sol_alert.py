@@ -2258,10 +2258,10 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         raw_score = s.get("score", s.get("total", 0))
         score_val = f"{raw_score}%" if model in ("Grok", "Grok2") else raw_score
 
-        # PnL %
+        # PnL % — użyj trade_usdt z momentu otwarcia pozycji
         pnl_pct = s.get("pnl_pct")
         if pnl_pct is None and move:
-            _tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
+            _tu = float(s.get("trade_usdt") or os.getenv("BITGET_TRADE_USDT", "100"))
             pnl_pct = round(move / _tu * 100, 2) if _tu else None
         pnl_pct_val = f"{pnl_pct:+.1f}%" if pnl_pct is not None else ""
 

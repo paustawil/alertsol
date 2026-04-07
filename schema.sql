@@ -129,3 +129,23 @@ CREATE INDEX IF NOT EXISTS idx_setups_status ON setups (status);
 UPDATE setups SET status = 'closed'    WHERE resolved = TRUE AND status = 'pending';
 UPDATE setups SET status = 'after_tp1' WHERE resolved = FALSE AND exchange_tp1_done = TRUE AND status = 'pending';
 UPDATE setups SET status = 'open'      WHERE resolved = FALSE AND exchange_position_opened = TRUE AND exchange_tp1_done = FALSE AND status = 'pending';
+
+-- Kwota zlecenia (USDT) użyta przy otwieraniu pozycji — do poprawnego liczenia %
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS trade_usdt NUMERIC(10,2);
+
+-- Backfill trade_usdt: odtwórz z exchange_qty_full * avg_entry / leverage
+-- (odwrotność wzoru: qty = FLOOR(trade_usdt * leverage / entry / 0.1) * 0.1)
+UPDATE setups SET trade_usdt = ROUND(
+    NULLIF(exchange_qty_full, '')::numeric
+    * COALESCE(avg_entry, (entries->>0)::numeric)
+    / 20, 2)
+WHERE trade_usdt IS NULL
+  AND exchange_qty_full IS NOT NULL
+  AND exchange_qty_full != ''
+  AND COALESCE(avg_entry, (entries->>0)::numeric) IS NOT NULL;
+
+-- Przelicz pnl_pct dla setupów z odtworzonym trade_usdt (naprawia błędne %)
+UPDATE setups SET pnl_pct = ROUND(pnl_usd / NULLIF(trade_usdt, 0) * 100, 2)
+WHERE pnl_usd IS NOT NULL
+  AND trade_usdt IS NOT NULL
+  AND resolved = TRUE;

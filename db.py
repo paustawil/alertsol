@@ -109,6 +109,7 @@ def _migrate_tp1_pnl() -> None:
     """
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
+    _tu = f"COALESCE(trade_usdt, {trade_usdt})"
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -121,7 +122,7 @@ def _migrate_tp1_pnl() -> None:
                         END
                         * COALESCE(
                             NULLIF(exchange_qty_full, '')::numeric,
-                            FLOOR({trade_usdt}*{leverage} / avg_entry / 0.1) * 0.1
+                            FLOOR({_tu}*{leverage} / avg_entry / 0.1) * 0.1
                         ),
                         4),
                     pnl_pct = ROUND(
@@ -131,9 +132,9 @@ def _migrate_tp1_pnl() -> None:
                         END
                         * COALESCE(
                             NULLIF(exchange_qty_full, '')::numeric,
-                            FLOOR({trade_usdt}*{leverage} / avg_entry / 0.1) * 0.1
+                            FLOOR({_tu}*{leverage} / avg_entry / 0.1) * 0.1
                         )
-                        / {trade_usdt} * 100,
+                        / NULLIF({_tu}, 0) * 100,
                         2)
                 WHERE result = 'TP1'
                   AND status = 'closed'
@@ -187,6 +188,7 @@ def insert_setup(row: dict) -> int | None:
         "entries_hit":     row.get("entries_hit", 1),
         "sl_adjusted":     row.get("sl_adjusted", False),
         "shadow":          row.get("shadow", False),
+        "trade_usdt":      float(os.getenv("BITGET_TRADE_USDT", "100")),
     }
 
     with _conn() as conn:
@@ -204,14 +206,16 @@ def insert_setup(row: dict) -> int | None:
                     direction, score, kurs, price_at_alert, warunek,
                     entry_trigger, reasoning, llm_scores,
                     entries, tps, sl, sl_after_tp1, rr,
-                    entry_hit_at, entries_hit, sl_adjusted, shadow
+                    entry_hit_at, entries_hit, sl_adjusted, shadow,
+                    trade_usdt
                 )
                 SELECT
                     %(alert_time)s, %(alert_timestamp)s, %(model)s, %(rejection)s, %(type)s,
                     %(direction)s, %(score)s, %(kurs)s, %(price_at_alert)s, %(warunek)s,
                     %(entry_trigger)s, %(reasoning)s, %(llm_scores)s,
                     %(entries)s, %(tps)s, %(sl)s, %(sl_after_tp1)s, %(rr)s,
-                    %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s, %(shadow)s
+                    %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s, %(shadow)s,
+                    %(trade_usdt)s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM setups
                     WHERE resolved = FALSE
@@ -270,20 +274,25 @@ def resolve_setup(
     Zamknij setup: zapisz wynik, PnL, czas wyjścia.
     pnl_pct obliczany automatycznie jeśli avg_entry jest dostępne.
     """
-    pnl_pct = None
-    if pnl_usd is not None:
-        trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
-        try:
-            pnl_pct = round(pnl_usd / trade_usdt * 100, 2)
-        except ZeroDivisionError:
-            pass
-
     exit_time = None
     if exit_ts:
         exit_time = datetime.fromtimestamp(exit_ts, tz=timezone.utc)
 
+    # Pobierz trade_usdt zapisany przy tworzeniu setupu (fallback: env var)
+    _default_tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
     with _conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT trade_usdt FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+            trade_usdt = float(row[0]) if row and row[0] else _default_tu
+
+            pnl_pct = None
+            if pnl_usd is not None:
+                try:
+                    pnl_pct = round(pnl_usd / trade_usdt * 100, 2)
+                except ZeroDivisionError:
+                    pass
+
             cur.execute(
                 """
                 UPDATE setups SET
@@ -321,16 +330,20 @@ def mark_tp1_hit(
     TP1 wykonany na Bitget — zapisz PnL częściowy, zmień status na after_tp1.
     Setup pozostaje resolved=FALSE i widoczny w aktywnych aż do TP2 lub BE.
     """
-    pnl_pct = None
-    if pnl_usd is not None:
-        trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
-        try:
-            pnl_pct = round(pnl_usd / trade_usdt * 100, 2)
-        except ZeroDivisionError:
-            pass
-
+    _default_tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
     with _conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT trade_usdt FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+            trade_usdt = float(row[0]) if row and row[0] else _default_tu
+
+            pnl_pct = None
+            if pnl_usd is not None:
+                try:
+                    pnl_pct = round(pnl_usd / trade_usdt * 100, 2)
+                except ZeroDivisionError:
+                    pass
+
             cur.execute(
                 """
                 UPDATE setups SET
@@ -533,6 +546,9 @@ def get_summary_stats() -> dict:
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
 
+    # Per-row trade_usdt z fallbackiem na aktualną wartość env var
+    _tu = f"COALESCE(trade_usdt, {trade_usdt})"
+
     # Fragment SQL obliczający PnL z fallbackiem gdy pnl_usd IS NULL
     pnl_calc = f"""
         COALESCE(pnl_usd,
@@ -545,9 +561,12 @@ def get_summary_stats() -> dict:
                     ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                 END *
                 COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                     FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                     FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
             END
         )"""
+
+    # PnL % per row — używa trade_usdt z momentu otwarcia pozycji
+    pnl_pct_calc = f"({pnl_calc}) / NULLIF({_tu}, 0) * 100"
 
     trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
 
@@ -585,12 +604,13 @@ def get_summary_stats() -> dict:
                     THEN CASE direction WHEN 'long'
                          THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
                               COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
                               COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          END
                 END"""
+            tp1_only_pct_calc = f"({tp1_only_calc}) / NULLIF({_tu}, 0) * 100"
             cur.execute(
                 f"""
                 SELECT model,
@@ -599,8 +619,12 @@ def get_summary_stats() -> dict:
                            AND {trading_filter})                             AS entered,
                        ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
                            AND {trading_filter})::numeric, 2)                AS pnl_usd,
+                       ROUND(SUM({pnl_pct_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})::numeric, 1)                AS pnl_pct,
                        ROUND(SUM({tp1_only_calc}) FILTER (WHERE resolved = TRUE
                            AND {trading_filter})::numeric, 2)                AS tp1_only_pnl_usd,
+                       ROUND(SUM({tp1_only_pct_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})::numeric, 1)                AS tp1_only_pnl_pct,
                        COUNT(*) FILTER (WHERE resolved = TRUE
                            AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))    AS wins
                 FROM setups
@@ -653,6 +677,7 @@ def get_period_stats(period: str) -> dict:
             # Entered = resolved with trading result (TP1/TP2/TP1+BE/TP1+SL/SL)
             # PnL with fallback computation when pnl_usd is NULL
             leverage = 20
+            _tu = f"COALESCE(trade_usdt, {trade_usdt})"
             pnl_calc = f"""
                 COALESCE(pnl_usd,
                     CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
@@ -664,9 +689,10 @@ def get_period_stats(period: str) -> dict:
                             ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                         END *
                         COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                             FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                             FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                     END
                 )"""
+            pnl_pct_calc = f"({pnl_calc}) / NULLIF({_tu}, 0) * 100"
             tp1_only_calc_period = f"""
                 CASE
                     WHEN result = 'SL' THEN {pnl_calc}
@@ -676,12 +702,13 @@ def get_period_stats(period: str) -> dict:
                     THEN CASE direction WHEN 'long'
                          THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
                               COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
                               COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          END
                 END"""
+            tp1_only_pct_calc = f"({tp1_only_calc_period}) / NULLIF({_tu}, 0) * 100"
             cur.execute(
                 f"""
                 SELECT
@@ -690,8 +717,12 @@ def get_period_stats(period: str) -> dict:
                     COUNT(*) FILTER (WHERE result = 'SL')                                         AS losses,
                     COALESCE(ROUND(SUM({pnl_calc}) FILTER (WHERE resolved = TRUE
                         AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 2), 0) AS total_income,
+                    COALESCE(ROUND(SUM({pnl_pct_calc}) FILTER (WHERE resolved = TRUE
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 1), 0) AS total_income_pct,
                     COALESCE(ROUND(SUM({tp1_only_calc_period}) FILTER (WHERE resolved = TRUE
-                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 2), 0) AS tp1_only_income
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 2), 0) AS tp1_only_income,
+                    COALESCE(ROUND(SUM({tp1_only_pct_calc}) FILTER (WHERE resolved = TRUE
+                        AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL'))::numeric, 1), 0) AS tp1_only_income_pct
                 FROM setups
                 WHERE {time_filter}
                 """,
@@ -702,7 +733,9 @@ def get_period_stats(period: str) -> dict:
             wins = row["wins"] or 0
             losses = row["losses"] or 0
             total_income = float(row["total_income"])
+            total_income_pct = float(row["total_income_pct"])
             tp1_only_income = float(row["tp1_only_income"])
+            tp1_only_income_pct = float(row["tp1_only_income_pct"])
 
             # Entry rate
             entry_rate = round(entered / total_setups * 100, 1) if total_setups > 0 else 0
@@ -767,7 +800,9 @@ def get_period_stats(period: str) -> dict:
         "wins": wins,
         "losses": losses,
         "total_income": total_income,
+        "total_income_pct": total_income_pct,
         "tp1_only_income": tp1_only_income,
+        "tp1_only_income_pct": tp1_only_income_pct,
         "avg_daily_pnl": avg_daily_pnl,
         "avg_daily_mult": avg_daily_mult,
         "max_capital": max_capital,
@@ -847,6 +882,7 @@ def get_resolved_filtered(
 
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage = 20
+    _tu = f"COALESCE(trade_usdt, {trade_usdt})"
     pnl_calc_f = f"""
         COALESCE(pnl_usd,
             CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
@@ -857,9 +893,10 @@ def get_resolved_filtered(
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - avg_exit)
                  END *
                  COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                      FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                      FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
             END
         )"""
+    pnl_pct_calc_f = f"({pnl_calc_f}) / NULLIF({_tu}, 0) * 100"
     tp1_only_calc_f = f"""
         CASE
             WHEN result = 'SL' THEN {pnl_calc_f}
@@ -869,12 +906,13 @@ def get_resolved_filtered(
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
                       COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                           FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
                       COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                           FLOOR({trade_usdt}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
+    tp1_only_pct_calc_f = f"({tp1_only_calc_f}) / NULLIF({_tu}, 0) * 100"
 
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -887,7 +925,7 @@ def get_resolved_filtered(
                        result, avg_entry, avg_exit, pnl_usd, pnl_pct,
                        exit_time, entries, tps, sl, sl_after_tp1,
                        exchange_qty_full, exchange_qty_half,
-                       hypo_result, hypo_pnl_usd
+                       hypo_result, hypo_pnl_usd, trade_usdt
                 FROM setups
                 WHERE {where_sql}
                 ORDER BY resolved_at DESC
@@ -904,21 +942,25 @@ def get_resolved_filtered(
                     ROUND(COALESCE(SUM({pnl_calc_f}) FILTER (
                         WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
                     ), 0)::numeric, 2) AS sum_pnl_usd,
+                    ROUND(COALESCE(SUM({pnl_pct_calc_f}) FILTER (
+                        WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    ), 0)::numeric, 2) AS sum_pnl_pct,
                     ROUND(COALESCE(SUM({tp1_only_calc_f}) FILTER (
                         WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
-                    ), 0)::numeric, 2) AS sum_tp1_only_usd
+                    ), 0)::numeric, 2) AS sum_tp1_only_usd,
+                    ROUND(COALESCE(SUM({tp1_only_pct_calc_f}) FILTER (
+                        WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    ), 0)::numeric, 2) AS sum_tp1_only_pct
                 FROM setups WHERE {where_sql}
                 """,
                 params,
             )
             totals_row = dict(cur.fetchone())
-            sum_pnl = float(totals_row["sum_pnl_usd"] or 0)
-            sum_tp1 = float(totals_row["sum_tp1_only_usd"] or 0)
             totals = {
-                "sum_pnl_usd":      round(sum_pnl, 2),
-                "sum_pnl_pct":      round(sum_pnl / trade_usdt * 100, 2) if trade_usdt else 0,
-                "sum_tp1_only_usd": round(sum_tp1, 2),
-                "sum_tp1_only_pct": round(sum_tp1 / trade_usdt * 100, 2) if trade_usdt else 0,
+                "sum_pnl_usd":      float(totals_row["sum_pnl_usd"] or 0),
+                "sum_pnl_pct":      float(totals_row["sum_pnl_pct"] or 0),
+                "sum_tp1_only_usd": float(totals_row["sum_tp1_only_usd"] or 0),
+                "sum_tp1_only_pct": float(totals_row["sum_tp1_only_pct"] or 0),
                 "trade_usdt":       trade_usdt,
             }
 
