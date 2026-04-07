@@ -3372,6 +3372,14 @@ def check_stale_setups(regime: dict, current_price: float):
             elif d == "long" and regime_dir == "down":
                 reason = f"zmiana reżimu na {regime['regime']} (setup long)"
 
+        # 3. Cena przebiła TP1 bez wejścia w pozycję
+        if not reason and s.get("tps"):
+            tp1 = s["tps"][0]
+            if d == "long" and current_price > tp1:
+                reason = f"cena przebiła TP1 ${tp1:.2f} bez wejścia (long)"
+            elif d == "short" and current_price < tp1:
+                reason = f"cena przebiła TP1 ${tp1:.2f} bez wejścia (short)"
+
         if reason:
             print(f"[stale] #{sid} anulowany: {reason}")
             db.update_setup(sid,
