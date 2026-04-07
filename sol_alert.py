@@ -3095,6 +3095,7 @@ def grok_shadow_main() -> None:
     grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
     if not grok_result:
         print("[grok-shadow] Brak odpowiedzi od Groka.")
+        _last_feedback["Grok"] = {"time": datetime.now(TZ).isoformat(), "found": False, "text": "Brak odpowiedzi API (shadow)"}
         return
 
     bias      = grok_result.get("bias", "neutral")
@@ -3103,8 +3104,17 @@ def grok_shadow_main() -> None:
 
     print(f"[grok-shadow] Bias: {bias} ({bias_proc}%) | send_alert={send_flag}")
 
+    analiza = grok_result.get("analiza", "")
+    akcja   = grok_result.get("akcja", "")
+    feedback_text = " | ".join(filter(None, [analiza, akcja]))
+
     if not send_flag or bias == "neutral" or bias_proc < MIN_GROK_BIAS_PROC:
         print("[grok-shadow] Brak setupu lub zbyt niski bias.")
+        _last_feedback["Grok"] = {
+            "time": datetime.now(TZ).isoformat(), "found": False,
+            "bias": bias, "bias_proc": bias_proc,
+            "text": feedback_text or f"Bias {bias} {bias_proc}% — brak setupu",
+        }
         return
 
     wejscia = grok_result.get("wejscia", [])
@@ -3156,8 +3166,18 @@ def grok_shadow_main() -> None:
             model_name=f"Grok 👁 (shadow{conflict_note})"
         ))
         print(f"[grok-shadow] Setup #{grok_setup['setup_id']} zapisany | shadow=True | conflict={regime_conflict}")
+        _last_feedback["Grok"] = {
+            "time": datetime.now(TZ).isoformat(), "found": True,
+            "bias": bias, "bias_proc": bias_proc,
+            "text": (("⚠️ SPRZECZNY Z REŻIMEM | " if regime_conflict else "") + feedback_text),
+        }
     else:
         print("[grok-shadow] Błąd zapisu do DB.")
+        _last_feedback["Grok"] = {
+            "time": datetime.now(TZ).isoformat(), "found": False,
+            "bias": bias, "bias_proc": bias_proc,
+            "text": feedback_text or "Setup wykryty ale błąd zapisu DB",
+        }
 
 
 # ── Grok — walidacja oczekujących setupów ────────────────────────────────────
@@ -3752,8 +3772,8 @@ def main():
             print("[grok] Brak odpowiedzi.")
             _last_feedback["Grok"] = {"time": datetime.now(TZ).isoformat(), "found": False, "text": "Brak odpowiedzi API"}
     else:
-        print("[grok] Pominięty (ENABLE_GROK=False).")
-        _last_feedback.setdefault("Grok", {"text": "wyłączony (ENABLE_GROK=False)"})
+        print("[grok] Pominięty (ENABLE_GROK=False) — shadow tryb aktywny.")
+        # Nie nadpisuj _last_feedback["Grok"] — grok_shadow_main() aktualizuje go samodzielnie
 
     # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
     algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
