@@ -2681,6 +2681,10 @@ def next_setup_id() -> int:
     raise RuntimeError("next_setup_id() nie powinien być wywoływany bezpośrednio — użyj db.insert_setup()")
 
 
+REPLACE_MIN_DIFF = 0.10  # poniżej → prawdziwy duplikat, pomiń
+REPLACE_MAX_DIFF = 0.50  # powyżej → osobny setup
+
+
 def save_pending(setup: dict, model: str, rejection: str, current_price: float, shadow: bool = False):
     entries   = setup.get("entries", [])
     tps       = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
@@ -2692,10 +2696,43 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     if not shadow:
         for p in db.get_active_setups():
-            if (p["direction"] == direction
-                    and abs((p["entries"][0] if p["entries"] else 0) - new_level) < 0.5):
-                print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} (już istnieje #{p['setup_id']} od {p['model']})")
-                return
+            if p["direction"] == direction:
+                old_w1 = p["entries"][0] if p["entries"] else 0
+                diff = abs(old_w1 - new_level)
+
+                if diff < REPLACE_MIN_DIFF:
+                    # Identyczny poziom — prawdziwy duplikat
+                    print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} "
+                          f"(już istnieje #{p['setup_id']} od {p['model']})")
+                    return
+
+                if diff < REPLACE_MAX_DIFF:
+                    if p.get("entry_hit_at") is not None:
+                        # Stary setup już wszedł w pozycję — nie ruszaj
+                        print(f"[pending] Pominięto zastępowanie #{p['setup_id']} — już w pozycji")
+                        return
+                    # Zaktualizowane poziomy — anuluj stary, wstaw nowy
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    reason = (f"zastąpiony nowszym setupem W1=${new_level:.2f} "
+                              f"(poprzedni W1=${old_w1:.2f}, diff=${diff:.2f})")
+                    print(f"[pending] Zastępuję #{p['setup_id']} W1=${old_w1:.2f} → ${new_level:.2f}")
+                    db.update_setup(p["setup_id"],
+                                    shadow=True,
+                                    cancel_reason=reason,
+                                    cancel_time=now_iso,
+                                    cancel_price=round(current_price, 2))
+                    db.resolve_setup(p["setup_id"], "anulowany", None, None, None, None)
+                    try:
+                        di = "📉" if direction == "short" else "📈"
+                        send_telegram(
+                            f"🔄 <b>Setup #{p['setup_id']} zastąpiony</b>\n"
+                            f"{di} {direction.upper()}"
+                            f" | W1: ${old_w1:.2f} → ${new_level:.2f}\n"
+                            f"<i>Algo zaktualizował poziomy</i>"
+                        )
+                    except Exception:
+                        pass
+                    break  # stary anulowany — kontynuuj wstawianie nowego
 
     # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
     w1_lvl    = entries[0] if entries else current_price
