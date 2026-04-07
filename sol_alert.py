@@ -3388,6 +3388,7 @@ def check_stale_setups(regime: dict, current_price: float):
     Kryteria:
     1. Cena uciekła >5% od entry
     2. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
+    3. Cena przebiła TP1 bez wejścia w pozycję
     """
     pending = db.get_active_setups()
     non_entered = [s for s in pending
