@@ -387,10 +387,10 @@ def dashboard():
   </div>
   <div id="ms-scans" style="display:flex;gap:0;background:#1e1e1e;border:1px solid #444;border-top:none;border-radius:0 0 6px 6px;flex-wrap:wrap">
     <div id="ms-scan-Algo2" style="flex:1;min-width:260px;padding:7px 16px;border-right:1px solid #333">
-      <span style="color:#555;font-size:0.8em">Algo2: ładowanie...</span>
+      <span style="color:#aaa;font-size:0.8em">Algo2: ładowanie...</span>
     </div>
     <div id="ms-scan-Grok" style="flex:1;min-width:260px;padding:7px 16px">
-      <span style="color:#555;font-size:0.8em">Grok: ładowanie...</span>
+      <span style="color:#aaa;font-size:0.8em">Grok: ładowanie...</span>
     </div>
   </div>
 </div>
