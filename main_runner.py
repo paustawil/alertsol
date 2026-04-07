@@ -387,10 +387,10 @@ def dashboard():
   </div>
   <div id="ms-scans" style="display:flex;gap:0;background:#1e1e1e;border:1px solid #444;border-top:none;border-radius:0 0 6px 6px;flex-wrap:wrap">
     <div id="ms-scan-Algo2" style="flex:1;min-width:260px;padding:7px 16px;border-right:1px solid #333">
-      <span style="color:#555;font-size:0.8em">Algo2: ładowanie...</span>
+      <span style="color:#aaa;font-size:0.8em">Algo2: ładowanie...</span>
     </div>
     <div id="ms-scan-Grok" style="flex:1;min-width:260px;padding:7px 16px">
-      <span style="color:#555;font-size:0.8em">Grok: ładowanie...</span>
+      <span style="color:#aaa;font-size:0.8em">Grok: ładowanie...</span>
     </div>
   </div>
 </div>
@@ -1157,10 +1157,10 @@ function fmtAgo(isoStr) {{
 function renderScanBlock(el, model, scan) {{
   var label = '<span style="color:#80deea;font-size:0.8em;font-weight:bold">' + model + ':</span> ';
   if (!scan || !scan.text) {{
-    el.innerHTML = label + '<span style="color:#555;font-size:0.8em">brak danych (app restart?)</span>';
+    el.innerHTML = label + '<span style="color:#aaa;font-size:0.8em">brak danych (oczekiwanie na pierwsze skanowanie...)</span>';
     return;
   }}
-  var ago = scan.time ? '<span style="color:#555;font-size:0.75em">' + fmtAgo(scan.time) + '</span> · ' : '';
+  var ago = scan.time ? '<span style="color:#888;font-size:0.75em">' + fmtAgo(scan.time) + '</span> · ' : '';
   var foundBadge = scan.found
     ? '<span style="color:lightgreen;font-size:0.8em">✓ setup</span> · '
     : '<span style="color:#888;font-size:0.8em">✗ brak setupu</span> · ';
@@ -1173,7 +1173,7 @@ function renderScanBlock(el, model, scan) {{
   var txt = (scan.text || '').trim().replace(/\n/g, '  ');
   if (txt.length > 160) txt = txt.slice(0, 160) + '…';
   el.innerHTML = label + ago + foundBadge + extra
-    + '<span style="color:#999;font-size:0.78em">' + txt + '</span>';
+    + '<span style="color:#ccc;font-size:0.78em">' + txt + '</span>';
 }}
 
 async function loadMarketStatus() {{
