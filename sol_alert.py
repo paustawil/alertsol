@@ -48,6 +48,20 @@ ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algoryt
 _last_feedback: dict = {}  # {"Algo2": {...}, "Grok": {...}}
 
 
+def _clean_log(text: str) -> str:
+    """Usuwa linie separatorów (===) i timestamp-header z logów algo."""
+    lines = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # pomiń linie złożone głównie z '='
+        if stripped and len(stripped) > 3 and stripped.count("=") / len(stripped) > 0.7:
+            continue
+        lines.append(stripped)
+    return "  ".join(lines)
+
+
 # ── System prompt dla Claude ──────────────────────────────────────────────────
 FORTECA_PROMPT = """FORTeca v1.0 — CLAUDE EDITION — SOL/USDT SETUP DETECTION
 
@@ -3574,7 +3588,7 @@ def breakout_scan():
         "time":  datetime.now(TZ).isoformat(),
         "found": bool(algo2_setups),
         "count": len(algo2_setups),
-        "text":  algo2_log,
+        "text":  _clean_log(algo2_log),
     }
 
     if algo2_setups:
@@ -3782,7 +3796,7 @@ def main():
         "time":  datetime.now(TZ).isoformat(),
         "found": bool(algo2_setups),
         "count": len(algo2_setups),
-        "text":  algo2_log,
+        "text":  _clean_log(algo2_log),
     }
 
     if algo2_setups:

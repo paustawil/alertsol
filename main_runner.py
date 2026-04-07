@@ -386,10 +386,10 @@ def dashboard():
     <span id="ms-loading" style="font-size:0.75em;color:#555;margin-left:auto"></span>
   </div>
   <div id="ms-scans" style="display:flex;gap:0;background:#1e1e1e;border:1px solid #444;border-top:none;border-radius:0 0 6px 6px;flex-wrap:wrap">
-    <div id="ms-scan-Algo2" style="flex:1;min-width:260px;padding:7px 16px;border-right:1px solid #333">
+    <div id="ms-scan-Algo2" style="flex:1;min-width:300px;padding:7px 16px;border-right:1px solid #333;word-wrap:break-word;overflow-wrap:break-word">
       <span style="color:#aaa;font-size:0.8em">Algo2: ładowanie...</span>
     </div>
-    <div id="ms-scan-Grok" style="flex:1;min-width:260px;padding:7px 16px">
+    <div id="ms-scan-Grok" style="flex:1;min-width:300px;padding:7px 16px;word-wrap:break-word;overflow-wrap:break-word">
       <span style="color:#aaa;font-size:0.8em">Grok: ładowanie...</span>
     </div>
   </div>
@@ -1170,8 +1170,7 @@ function renderScanBlock(el, model, scan) {{
     var bClr = scan.bias === 'long' ? 'lightgreen' : scan.bias === 'short' ? 'salmon' : '#888';
     extra = '<span style="color:' + bClr + '">' + scan.bias.toUpperCase() + ' ' + (scan.bias_proc || 0) + '%</span> · ';
   }}
-  var txt = (scan.text || '').trim().replace(/={3,}/g, '').replace(/\\n/g, '  ').replace(/\s{2,}/g, ' ').trim();
-  if (txt.length > 200) txt = txt.slice(0, 200) + '…';
+  var txt = (scan.text || '').trim();
   el.innerHTML = label + ago + foundBadge + extra
     + '<span style="color:#ccc;font-size:0.78em">' + txt + '</span>';
 }}
