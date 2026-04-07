@@ -2221,6 +2221,16 @@ def api_update_settings(body: SettingsUpdate):
 
     if body.trade_usdt is not None and body.trade_usdt > 0:
         os.environ["BITGET_TRADE_USDT"] = str(body.trade_usdt)
+        try:
+            import exchange_trader
+            exchange_trader.TRADE_USDT = body.trade_usdt
+        except Exception:
+            pass
+        try:
+            import sol_alert
+            sol_alert.TRADE_USDT = body.trade_usdt
+        except Exception:
+            pass
         updated.append(f"trade_usdt={body.trade_usdt}")
 
     if body.max_positions is not None and body.max_positions > 0:
