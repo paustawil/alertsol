@@ -2771,10 +2771,16 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     if replaced_setup:
         try:
             di = "📉" if direction == "short" else "📈"
+            tp1 = tps[0] if len(tps) > 0 else None
+            tp2 = tps[1] if len(tps) > 1 else None
+            sl  = row.get("sl")
             send_telegram(
                 f"🔄 <b>Setup #{replaced_setup['sid']} zastąpiony przez #{sid}</b>\n"
                 f"{di} {direction.upper()}"
                 f" | W1: ${replaced_setup['w1']:.2f} → ${new_level:.2f}\n"
+                + (f"TP1: ${tp1:.2f}" if tp1 else "")
+                + (f" | TP2: ${tp2:.2f}" if tp2 else "")
+                + (f" | SL: ${sl:.2f}" if sl else "") + "\n"
                 f"<i>Algo zaktualizował poziomy</i>"
             )
         except Exception:
