@@ -4,14 +4,12 @@ Exchange Trader — Bitget USDT-M Futures (SOLUSDT Perpetual)
 
 Flow dla każdego setupu:
   1. Nowy setup → 1 plan order przy W1 (pełna pozycja, bez presetów TP/SL)
-  2. Plan order wykonany → 3 TPSL ordery:
-       TP1: profit_plan, half_qty SOL, trigger=TP1
-       TP2: profit_plan, half_qty SOL, trigger=TP2
+  2. Plan order wykonany → 2 TPSL ordery:
+       TP1: profit_plan, full_qty SOL, trigger=TP1  (zamyka całość; half_qty zachowane dla przyszłego split TP)
        SL:  loss_plan,   full_qty SOL, trigger=SL
   3. Monitoring TPSL:
-       SL wykonany  → anuluj TP1 i TP2
-       TP1 wykonany → zmodyfikuj SL: size=half_qty, trigger=SLpoTP1
-       TP2 wykonany → anuluj SL
+       SL wykonany  → anuluj TP1
+       TP1 wykonany → pozycja zamknięta w całości
 
 Wymagane zmienne środowiskowe:
   BITGET_API_KEY, BITGET_API_SECRET, BITGET_PASSPHRASE
