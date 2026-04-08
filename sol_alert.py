@@ -2731,7 +2731,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     if not shadow:
         for p in db.get_active_setups():
-            if p["direction"] == direction:
+            if p["direction"] == direction and p["model"] == model:
                 old_w1 = p["entries"][0] if p["entries"] else 0
                 diff = abs(old_w1 - new_level)
 

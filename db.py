@@ -196,7 +196,7 @@ def insert_setup(row: dict) -> int | None:
             # Advisory lock serializuje równoczesne INSERTy dla tego samego kierunku.
             # Bez tego READ COMMITTED pozwala dwóm transakcjom (Railway + GitHub Actions)
             # przejść WHERE NOT EXISTS jednocześnie i wstawić duplikat.
-            lock_key = f"insert_setup_{params.get('direction', '')}"
+            lock_key = f"insert_setup_{params.get('model', '')}_{params.get('direction', '')}"
             cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
 
             cur.execute(
@@ -220,6 +220,7 @@ def insert_setup(row: dict) -> int | None:
                     SELECT 1 FROM setups
                     WHERE resolved = FALSE
                       AND direction = %(direction)s
+                      AND model = %(model)s
                       AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
                 ) OR %(shadow)s = TRUE
                 RETURNING setup_id
