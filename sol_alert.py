@@ -34,8 +34,9 @@ LEVERAGE         = 20
 MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
 SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
-ENTRY_TIMEOUT_H  = 4
-TRADE_TIMEOUT_H  = 24
+ENTRY_TIMEOUT_H      = 4
+TRADE_TIMEOUT_H      = 24
+OPEN_TRADE_TIMEOUT_H = 16   # timeout od wejścia (entry_hit_at) dla otwartych setupów
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
 MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzucony jako zbyt niepewny
 ENABLE_CLAUDE        = False  # wyłączony tymczasowo — kod zachowany
@@ -3457,6 +3458,141 @@ def check_stale_setups(regime: dict, current_price: float):
         print(f"[stale] Anulowano {cancelled} setupów.")
 
 
+# ── Inwalidacja otwartych setupów (po wejściu w pozycję) ─────────────────────
+
+def _handle_open_invalidation(setup: dict, reason: str, action: str, current_price: float) -> None:
+    """
+    Obsługuje inwalidację otwartego setupu.
+    action == "move_sl_to_entry": przesuwa SL do ceny wejścia (break-even)
+    action == "close":            zamyka pozycję market orderem
+    """
+    setup_id  = setup["setup_id"]
+    direction = setup.get("direction", "")
+    avg_entry = setup.get("avg_entry")
+    now_iso   = datetime.now(timezone.utc).isoformat()
+    di        = "📉" if direction == "short" else "📈"
+
+    if action == "move_sl_to_entry":
+        new_sl = round(float(avg_entry), 2) if avg_entry else round(current_price, 2)
+        print(f"[open_inval] #{setup_id}: BE — SL → {new_sl} | {reason}")
+
+        exchange_trader.move_sl_to_entry(setup_id, new_sl)
+
+        db.update_setup(setup_id,
+                        sl=new_sl,
+                        cancel_reason=reason,
+                        cancel_time=now_iso,
+                        cancel_price=round(current_price, 2))
+        try:
+            send_telegram(
+                f"⚠️ <b>Open setup #{setup_id} — BE</b>\n"
+                f"{di} {direction.upper()}"
+                + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
+                f"SL przesunięty → ${new_sl:.2f}\n"
+                f"<i>{reason}</i>\n"
+                f"Cena: ${current_price:.2f}"
+            )
+        except Exception:
+            pass
+
+    elif action == "close":
+        print(f"[open_inval] #{setup_id}: zamknięcie pozycji | {reason}")
+
+        exchange_trader.close_open_position(setup_id)
+
+        move = None
+        if avg_entry:
+            move = round(current_price - float(avg_entry), 4) if direction == "long" \
+                   else round(float(avg_entry) - current_price, 4)
+
+        db.update_setup(setup_id,
+                        shadow=True,
+                        cancel_reason=reason,
+                        cancel_time=now_iso,
+                        cancel_price=round(current_price, 2))
+        db.resolve_setup(setup_id, "inwalidacja", avg_entry,
+                         round(current_price, 2), move,
+                         int(time.time() * 1000))
+
+        pnl_str = f"{move:+.2f} USD" if move is not None else "n/d"
+        try:
+            send_telegram(
+                f"🛑 <b>Open setup #{setup_id} zamknięty — inwalidacja</b>\n"
+                f"{di} {direction.upper()}"
+                + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
+                f"<i>{reason}</i>\n"
+                f"Cena zamknięcia: ${current_price:.2f} | P&L: {pnl_str}"
+            )
+        except Exception:
+            pass
+
+
+def check_open_setups_invalidation(regime: dict, current_price: float) -> None:
+    """
+    Inwaliduje otwarte setupy (status='open') gdy:
+    1. Reżim zmienił się na przeciwny do kierunku setupu
+       - na plusie (cena bliżej TP1 niż SL) → przesuń SL do entry (break-even)
+       - na minusie (cena bliżej SL niż TP1) → zamknij pozycję
+    2. Timeout OPEN_TRADE_TIMEOUT_H od wejścia → zamknij pozycję
+
+    RANGE nie jest traktowany jako inwalidacja — tylko pełny odwrót kierunku.
+    Setupy after_tp1 nie są objęte tym sprawdzeniem.
+    """
+    regime_dir = regime.get("direction", "none")
+
+    open_setups = [s for s in db.get_active_setups()
+                   if s.get("entry_hit_at") is not None
+                   and s.get("status") == "open"]
+
+    if not open_setups:
+        return
+
+    invalidated = 0
+    for s in open_setups:
+        direction    = s.get("direction", "")
+        avg_entry    = s.get("avg_entry")
+        sl           = s.get("sl")
+        tp1          = (s.get("tps") or [None])[0]
+        entry_hit_at = s.get("entry_hit_at")
+        age_h        = (time.time() - entry_hit_at) / 3600 if entry_hit_at else 0
+
+        reason = None
+        action = None
+
+        # Zasada 1: Zmiana reżimu na przeciwny (RANGE jest ignorowany)
+        regime_conflict = (direction == "short" and regime_dir == "up") or \
+                          (direction == "long"  and regime_dir == "down")
+
+        if regime_conflict:
+            # Określ czy jesteśmy na plusie (cena bliżej TP1 niż SL)
+            if avg_entry and sl and tp1:
+                in_profit = abs(current_price - float(tp1)) < abs(current_price - float(sl))
+            elif avg_entry:
+                in_profit = (direction == "long"  and current_price >= float(avg_entry)) or \
+                            (direction == "short" and current_price <= float(avg_entry))
+            else:
+                in_profit = False
+
+            if in_profit:
+                action = "move_sl_to_entry"
+                reason = f"zmiana reżimu na {regime['regime']} (setup {direction.upper()}, na plusie → BE)"
+            else:
+                action = "close"
+                reason = f"zmiana reżimu na {regime['regime']} (setup {direction.upper()}, na minusie → zamknięcie)"
+
+        # Zasada 2: Timeout od wejścia
+        elif age_h > OPEN_TRADE_TIMEOUT_H:
+            action = "close"
+            reason = f"timeout {OPEN_TRADE_TIMEOUT_H}h od wejścia"
+
+        if reason:
+            _handle_open_invalidation(s, reason, action, current_price)
+            invalidated += 1
+
+    if invalidated:
+        print(f"[open_inval] Przetworzono {invalidated} otwartych setupów.")
+
+
 # ── Anti-spam ─────────────────────────────────────────────────────────────────
 def was_alerted(model: str, level: float, direction: str) -> bool:
     return db.was_alerted(model, level, direction)
@@ -3601,6 +3737,7 @@ def breakout_scan():
 
     # Anuluj przestarzałe setupy (co 3 min — szybciej niż main)
     check_stale_setups(regime, current)
+    check_open_setups_invalidation(regime, current)
 
     # Zawsze zapisz feedback z reżimu — nawet gdy RANGE (brak skanowania)
     if regime["regime"] == "RANGE":
@@ -3697,6 +3834,7 @@ def main():
 
     # Algorytmiczne anulowanie przestarzałych setupów (co 15 min)
     check_stale_setups(regime, current)
+    check_open_setups_invalidation(regime, current)
 
     # ── 1. Algorytm (stary, range-based) — WYŁĄCZONY, zastąpiony przez Algo2 ──
     # algo_setups  = algo_detect(candles_m15, candles_h1, rng)
