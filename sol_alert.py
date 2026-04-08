@@ -34,14 +34,16 @@ LEVERAGE         = 20
 MIN_SCORE        = 9
 COOLDOWN_HOURS   = 4
 SHEET_ID         = "19TWHI4sJnJznyaGzA97AOBQp7oKUauSqBY1K0jiuPZE"
-ENTRY_TIMEOUT_H  = 4
-TRADE_TIMEOUT_H  = 24
+ENTRY_TIMEOUT_H      = 4
+TRADE_TIMEOUT_H      = 24
+OPEN_TRADE_TIMEOUT_H = 16   # timeout od wejścia (entry_hit_at) dla otwartych setupów
 MIN_SL_DISTANCE  = 0.30   # minimalna odleglosc W1-SL w USD; ponizej = odrzucony setup
 MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzucony jako zbyt niepewny
 ENABLE_CLAUDE        = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT           = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT3
-ENABLE_GPT3          = True   # zweryfikowany backtestem Mar 15-29 (+$19.76 vs Algo2 alone)
+ENABLE_GPT3          = False  # standalone GPT3 detektor — wyłączony
+ENABLE_GPT3_VALIDATOR = True  # GPT3 jako filtr Algo2 setupów — aktywny (backtest Mar 15-29: +$19.76)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
@@ -2232,7 +2234,7 @@ def log_to_alerty(model: str, rejection: str, setup: dict):
             tps[0] if tps else setup.get("tp1", "") or "",
             tps[1] if len(tps) > 1 else setup.get("tp2", "") or "",
             setup.get("rr", "") or "",
-            setup.get("reasoning", "") or "",
+            (setup.get("reasoning", "") or "")[:500],
         ])
         print(f"[sheets] Alerty: {model} {setup.get('direction')} [{setup.get('total', setup.get('score'))}]")
     except Exception as e:
@@ -3116,6 +3118,7 @@ def _grok_regime_conflict(grok_direction: str, regime: dict) -> str | None:
 
 
 _last_grok_detection_ts: float = 0.0
+_last_algo2_ts:          float = 0.0
 
 
 def grok_shadow_main() -> None:
@@ -3144,7 +3147,7 @@ def grok_shadow_main() -> None:
     is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
 
     now       = time.time()
-    threshold = 5 * 60 if is_impulse else 60 * 60
+    threshold = 5 * 60 if is_impulse else 30 * 60
     elapsed   = now - _last_grok_detection_ts
     if elapsed < threshold:
         mins_left = int((threshold - elapsed) / 60)
@@ -3210,31 +3213,32 @@ def grok_shadow_main() -> None:
         "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
     }
 
-    # Wykryj sprzeczność z reżimem i zaznacz w reasoning (arkusz wyciągnie prefiks)
+    # Blokuj setupy sprzeczne z dominującym reżimem rynkowym
     regime_conflict = _grok_regime_conflict(bias, regime)
     if regime_conflict:
-        grok_setup["reasoning"] = f"⚠️ SPRZECZNY Z REŻIMEM: {regime_conflict} | " + grok_setup["reasoning"]
+        print(f"[grok] Konflikt reżimu ({regime_conflict}) — setup zablokowany.")
+        log_to_alerty("Grok", f"konflikt_reżimu: {regime_conflict}", grok_setup)
+        return
 
     rejection = validate_setup(grok_setup, "Grok")
     if rejection:
-        print(f"[grok-shadow] Odrzucony walidacją: {rejection}")
+        print(f"[grok] Odrzucony walidacją: {rejection}")
         return
 
-    save_pending(grok_setup, "Grok", "", current, shadow=True)
+    save_pending(grok_setup, "Grok", "", current)
     if grok_setup.get("setup_id"):
-        conflict_note = f" ⚠️ vs {regime_conflict}" if regime_conflict else ""
         send_telegram(format_grok_alert(
             grok_result, current, grok_setup["setup_id"],
-            model_name=f"Grok 👁 (shadow{conflict_note})"
+            model_name="Grok"
         ))
-        print(f"[grok-shadow] Setup #{grok_setup['setup_id']} zapisany | shadow=True | conflict={regime_conflict}")
+        print(f"[grok] Setup #{grok_setup['setup_id']} zapisany")
         _last_feedback["Grok"] = {
             "time": datetime.now(TZ).isoformat(), "found": True,
             "bias": bias, "bias_proc": bias_proc,
-            "text": (("⚠️ SPRZECZNY Z REŻIMEM | " if regime_conflict else "") + feedback_text),
+            "text": feedback_text,
         }
     else:
-        print("[grok-shadow] Błąd zapisu do DB.")
+        print("[grok] Błąd zapisu do DB.")
         _last_feedback["Grok"] = {
             "time": datetime.now(TZ).isoformat(), "found": False,
             "bias": bias, "bias_proc": bias_proc,
@@ -3457,6 +3461,141 @@ def check_stale_setups(regime: dict, current_price: float):
         print(f"[stale] Anulowano {cancelled} setupów.")
 
 
+# ── Inwalidacja otwartych setupów (po wejściu w pozycję) ─────────────────────
+
+def _handle_open_invalidation(setup: dict, reason: str, action: str, current_price: float) -> None:
+    """
+    Obsługuje inwalidację otwartego setupu.
+    action == "move_sl_to_entry": przesuwa SL do ceny wejścia (break-even)
+    action == "close":            zamyka pozycję market orderem
+    """
+    setup_id  = setup["setup_id"]
+    direction = setup.get("direction", "")
+    avg_entry = setup.get("avg_entry")
+    now_iso   = datetime.now(timezone.utc).isoformat()
+    di        = "📉" if direction == "short" else "📈"
+
+    if action == "move_sl_to_entry":
+        new_sl = round(float(avg_entry), 2) if avg_entry else round(current_price, 2)
+        print(f"[open_inval] #{setup_id}: BE — SL → {new_sl} | {reason}")
+
+        exchange_trader.move_sl_to_entry(setup_id, new_sl)
+
+        db.update_setup(setup_id,
+                        sl=new_sl,
+                        cancel_reason=reason,
+                        cancel_time=now_iso,
+                        cancel_price=round(current_price, 2))
+        try:
+            send_telegram(
+                f"⚠️ <b>Open setup #{setup_id} — BE</b>\n"
+                f"{di} {direction.upper()}"
+                + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
+                f"SL przesunięty → ${new_sl:.2f}\n"
+                f"<i>{reason}</i>\n"
+                f"Cena: ${current_price:.2f}"
+            )
+        except Exception:
+            pass
+
+    elif action == "close":
+        print(f"[open_inval] #{setup_id}: zamknięcie pozycji | {reason}")
+
+        exchange_trader.close_open_position(setup_id)
+
+        move = None
+        if avg_entry:
+            move = round(current_price - float(avg_entry), 4) if direction == "long" \
+                   else round(float(avg_entry) - current_price, 4)
+
+        db.update_setup(setup_id,
+                        shadow=True,
+                        cancel_reason=reason,
+                        cancel_time=now_iso,
+                        cancel_price=round(current_price, 2))
+        db.resolve_setup(setup_id, "inwalidacja", avg_entry,
+                         round(current_price, 2), move,
+                         int(time.time() * 1000))
+
+        pnl_str = f"{move:+.2f} USD" if move is not None else "n/d"
+        try:
+            send_telegram(
+                f"🛑 <b>Open setup #{setup_id} zamknięty — inwalidacja</b>\n"
+                f"{di} {direction.upper()}"
+                + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
+                f"<i>{reason}</i>\n"
+                f"Cena zamknięcia: ${current_price:.2f} | P&L: {pnl_str}"
+            )
+        except Exception:
+            pass
+
+
+def check_open_setups_invalidation(regime: dict, current_price: float) -> None:
+    """
+    Inwaliduje otwarte setupy (status='open') gdy:
+    1. Reżim zmienił się na przeciwny do kierunku setupu
+       - na plusie (cena bliżej TP1 niż SL) → przesuń SL do entry (break-even)
+       - na minusie (cena bliżej SL niż TP1) → zamknij pozycję
+    2. Timeout OPEN_TRADE_TIMEOUT_H od wejścia → zamknij pozycję
+
+    RANGE nie jest traktowany jako inwalidacja — tylko pełny odwrót kierunku.
+    Setupy after_tp1 nie są objęte tym sprawdzeniem.
+    """
+    regime_dir = regime.get("direction", "none")
+
+    open_setups = [s for s in db.get_active_setups()
+                   if s.get("entry_hit_at") is not None
+                   and s.get("status") == "open"]
+
+    if not open_setups:
+        return
+
+    invalidated = 0
+    for s in open_setups:
+        direction    = s.get("direction", "")
+        avg_entry    = s.get("avg_entry")
+        sl           = s.get("sl")
+        tp1          = (s.get("tps") or [None])[0]
+        entry_hit_at = s.get("entry_hit_at")
+        age_h        = (time.time() - entry_hit_at) / 3600 if entry_hit_at else 0
+
+        reason = None
+        action = None
+
+        # Zasada 1: Zmiana reżimu na przeciwny (RANGE jest ignorowany)
+        regime_conflict = (direction == "short" and regime_dir == "up") or \
+                          (direction == "long"  and regime_dir == "down")
+
+        if regime_conflict:
+            # Określ czy jesteśmy na plusie (cena bliżej TP1 niż SL)
+            if avg_entry and sl and tp1:
+                in_profit = abs(current_price - float(tp1)) < abs(current_price - float(sl))
+            elif avg_entry:
+                in_profit = (direction == "long"  and current_price >= float(avg_entry)) or \
+                            (direction == "short" and current_price <= float(avg_entry))
+            else:
+                in_profit = False
+
+            if in_profit:
+                action = "move_sl_to_entry"
+                reason = f"zmiana reżimu na {regime['regime']} (setup {direction.upper()}, na plusie → BE)"
+            else:
+                action = "close"
+                reason = f"zmiana reżimu na {regime['regime']} (setup {direction.upper()}, na minusie → zamknięcie)"
+
+        # Zasada 2: Timeout od wejścia
+        elif age_h > OPEN_TRADE_TIMEOUT_H:
+            action = "close"
+            reason = f"timeout {OPEN_TRADE_TIMEOUT_H}h od wejścia"
+
+        if reason:
+            _handle_open_invalidation(s, reason, action, current_price)
+            invalidated += 1
+
+    if invalidated:
+        print(f"[open_inval] Przetworzono {invalidated} otwartych setupów.")
+
+
 # ── Anti-spam ─────────────────────────────────────────────────────────────────
 def was_alerted(model: str, level: float, direction: str) -> bool:
     return db.was_alerted(model, level, direction)
@@ -3590,8 +3729,8 @@ _last_breakout_tg_ts: float = 0.0
 _last_breakout_tg_regime: str = ""
 
 def breakout_scan():
-    """Szybki skan breakoutowy — sprawdza cenę i volume.
-    Przy IMPULSE: powiadomienie Telegram (z cooldownem) + Algo2 setup."""
+    """Szybki skan co 3 min — inwalidacja setupów + Telegram przy IMPULSE.
+    Detekcja Algo2 odbywa się tylko w main() co 15 min (z GPT3 Validator)."""
     global _last_breakout_tg_ts, _last_breakout_tg_regime
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
@@ -3601,8 +3740,9 @@ def breakout_scan():
 
     # Anuluj przestarzałe setupy (co 3 min — szybciej niż main)
     check_stale_setups(regime, current)
+    check_open_setups_invalidation(regime, current)
 
-    # Zawsze zapisz feedback z reżimu — nawet gdy RANGE (brak skanowania)
+    # Feedback reżimu dla dashboardu — nawet przy RANGE
     if regime["regime"] == "RANGE":
         _last_feedback["Algo2"] = {
             "time":  datetime.now(TZ).isoformat(),
@@ -3610,7 +3750,7 @@ def breakout_scan():
             "count": 0,
             "text":  f"RANGE — Algo2 nie skanuje w konsolidacji. Support: ${regime.get('support', 0):.2f}, Resistance: ${regime.get('resistance', 0):.2f}. {regime.get('details', '')}",
         }
-        return  # Nic nie rób w RANGE
+        return
 
     # Telegram notification — tylko przy IMPULSE, cooldown 30 min
     is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
@@ -3638,41 +3778,6 @@ def breakout_scan():
         )
         send_telegram(msg)
 
-    # Algo2 przy IMPULSE/TREND — save_pending odrzuci duplikaty
-    print(f"[breakout-scan] {regime['regime']} wykryty — szukam setupu Algo2...")
-    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
-    _last_feedback["Algo2"] = {
-        "time":  datetime.now(TZ).isoformat(),
-        "found": bool(algo2_setups),
-        "count": len(algo2_setups),
-        "text":  _clean_log(algo2_log),
-    }
-
-    if algo2_setups:
-        best = max(algo2_setups, key=lambda s: s["rr"])
-        best["reasoning"] = algo2_log
-        level = best["entries"][0]
-        d = best["direction"]
-        print(f"[breakout-scan] Algo2: {best['type']} {d} W={level:.2f} RR={best['rr']}")
-
-        rejection = validate_setup(best, "Algo2-breakout")
-        if not rejection:
-            save_pending(best, "Algo2", "", current)
-            if best.get("setup_id"):
-                log_to_alerty("Algo2", "", best)
-                send_telegram(format_alert("Algo2", best, current, True))
-            else:
-                print("[breakout-scan] Duplikat — setup już istnieje.")
-        else:
-            log_to_alerty("Algo2", rejection, best)
-            print(f"[breakout-scan] Algo2 odrzucony: {rejection}")
-    else:
-        log_to_alerty("Algo2", "brak_setupu", {
-            "type": "", "direction": "", "reasoning": algo2_log,
-            "kurs": round(current, 2),
-        })
-        print(f"[breakout-scan] Algo2 nie znalazł setupu.")
-
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
@@ -3697,6 +3802,7 @@ def main():
 
     # Algorytmiczne anulowanie przestarzałych setupów (co 15 min)
     check_stale_setups(regime, current)
+    check_open_setups_invalidation(regime, current)
 
     # ── 1. Algorytm (stary, range-based) — WYŁĄCZONY, zastąpiony przez Algo2 ──
     # algo_setups  = algo_detect(candles_m15, candles_h1, rng)
@@ -3847,64 +3953,86 @@ def main():
         # Nie nadpisuj _last_feedback["Grok"] — grok_shadow_main() aktualizuje go samodzielnie
 
     # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
-    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
-    print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
-    _last_feedback["Algo2"] = {
-        "time":  datetime.now(TZ).isoformat(),
-        "found": bool(algo2_setups),
-        "count": len(algo2_setups),
-        "text":  _clean_log(algo2_log),
-    }
-
-    if algo2_setups:
-        best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
-        best_algo2["reasoning"] = algo2_log
-        level = best_algo2["entries"][0]
-        d = best_algo2["direction"]
-        dist = abs(current - level)
-        print(f"[algo2] Best: {best_algo2['type']} {d} W=${level:.2f} (dist=${dist:.2f}) RR={best_algo2['rr']}")
-        rejection = validate_setup(best_algo2, "Algo2")
-        if rejection:
-            log_to_alerty("Algo2", rejection, best_algo2)
-        elif not was_alerted("Algo2", level, d):
-            # ── GPT3 Validator — walidacja setupu Algo2 przed alertem ──────
-            if ENABLE_GPT3:
-                val_atr    = calc_atr(candles_m15)
-                val_sup    = regime.get("support")
-                val_res    = regime.get("resistance")
-                val_rng    = regime.get("range_size", 0)
-                val_pct    = max(0.0, min(100.0, (current - val_sup) / val_rng * 100)) if val_rng and val_sup else 50.0
-                val_result = call_gpt3_validator(
-                    best_algo2, candles_m15, candles_h1, current,
-                    atr=val_atr, support=val_sup, resistance=val_res,
-                    price_pct_in_range=val_pct,
-                )
-                if val_result:
-                    approved   = val_result.get("approve", True)
-                    val_reason = val_result.get("reason", "")
-                    val_conf   = val_result.get("confidence", 0)
-                    print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
-                    if not approved:
-                        log_to_alerty("Algo2", f"GPT3-val odrzucił: {val_reason}", best_algo2)
-                        print(f"[algo2] Setup odrzucony przez GPT3 Validator.")
-                        return  # pomiń alert
-                else:
-                    print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
-            # ── koniec walidatora ─────────────────────────────────────────
-            save_pending(best_algo2, "Algo2", "", current)
-            if best_algo2.get("setup_id"):
-                log_to_alerty("Algo2", "", best_algo2)
-                save_alerted("Algo2", level, d)
-                send_telegram(format_alert("Algo2", best_algo2, current, True))
-            else:
-                print("[algo2] Duplikat pominięty — setup już istnieje.")
-        else:
-            print(f"[algo2] Duplikat w cooldown, pomijam.")
+    # Internal throttle: 5 min w IMPULSE (bez GPT3 Validator), 15 min w pozostałych reżimach
+    _a2_now      = time.time()
+    _a2_impulse  = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
+    _a2_threshold = 5 * 60 if _a2_impulse else 15 * 60
+    if _a2_now - _last_algo2_ts < _a2_threshold:
+        _a2_mins = int((_a2_threshold - (_a2_now - _last_algo2_ts)) / 60)
+        print(f"[algo2] Za wcześnie — następna detekcja za ~{_a2_mins} min (reżim: {regime['regime']})")
     else:
-        log_to_alerty("Algo2", "brak_setupu", {
-            "type": "", "direction": "", "reasoning": algo2_log,
-            "kurs": round(current, 2),
-        })
+        global _last_algo2_ts
+        _last_algo2_ts = _a2_now
+        algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
+        print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
+        _last_feedback["Algo2"] = {
+            "time":  datetime.now(TZ).isoformat(),
+            "found": bool(algo2_setups),
+            "count": len(algo2_setups),
+            "text":  _clean_log(algo2_log),
+        }
+
+        if algo2_setups:
+            best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
+            best_algo2["reasoning"] = algo2_log
+            level = best_algo2["entries"][0]
+            d = best_algo2["direction"]
+            dist = abs(current - level)
+            print(f"[algo2] Best: {best_algo2['type']} {d} W=${level:.2f} (dist=${dist:.2f}) RR={best_algo2['rr']}")
+            rejection = validate_setup(best_algo2, "Algo2")
+            if rejection:
+                log_to_alerty("Algo2", rejection, best_algo2)
+            else:
+                # ── GPT3 Validator — pomijany w IMPULSE (szybkość > jakość) ──────
+                val_result = None
+                if ENABLE_GPT3_VALIDATOR and not _a2_impulse:
+                    val_atr    = calc_atr(candles_m15)
+                    val_sup    = regime.get("support")
+                    val_res    = regime.get("resistance")
+                    val_rng    = regime.get("range_size", 0)
+                    val_pct    = max(0.0, min(100.0, (current - val_sup) / val_rng * 100)) if val_rng and val_sup else 50.0
+                    val_result = call_gpt3_validator(
+                        best_algo2, candles_m15, candles_h1, current,
+                        atr=val_atr, support=val_sup, resistance=val_res,
+                        price_pct_in_range=val_pct,
+                    )
+                    if val_result:
+                        approved   = val_result.get("approve", True)
+                        val_reason = val_result.get("reason", "")
+                        val_conf   = val_result.get("confidence", 0)
+                        print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
+                        if not approved:
+                            log_to_alerty("Algo2", f"GPT3-val odrzucił: {val_reason}", best_algo2)
+                            # Zapisz odrzucony setup do DB jako shadow (nie idzie na giełdę)
+                            save_pending(best_algo2, "Algo2", f"GPT3-val odrzucił: {val_reason}", current, shadow=True)
+                            if best_algo2.get("setup_id"):
+                                db.update_setup(best_algo2["setup_id"], llm_scores={
+                                    "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
+                                })
+                                db.resolve_setup(best_algo2["setup_id"], "odrzucony_validator", None, None, None, None)
+                            print(f"[algo2] Setup odrzucony przez GPT3 Validator.")
+                            return
+                    else:
+                        print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
+                elif _a2_impulse:
+                    print("[algo2] IMPULSE — GPT3 Validator pominięty.")
+                # ── koniec walidatora ─────────────────────────────────────────
+                save_pending(best_algo2, "Algo2", "", current)
+                if best_algo2.get("setup_id"):
+                    log_to_alerty("Algo2", "", best_algo2)
+                    send_telegram(format_alert("Algo2", best_algo2, current, True))
+                    # Zapisz confidence validatora jeśli dostępny
+                    if val_result:
+                        db.update_setup(best_algo2["setup_id"], llm_scores={
+                            "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
+                        })
+                else:
+                    print("[algo2] Duplikat pominięty — setup już istnieje.")
+        else:
+            log_to_alerty("Algo2", "brak_setupu", {
+                "type": "", "direction": "", "reasoning": algo2_log,
+                "kurs": round(current, 2),
+            })
 
     # ── 5. GPT Relaxed (live search — sam pobiera BTC/ETH/F&G) ──────────────
     if ENABLE_GPT_RELAXED:

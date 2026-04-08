@@ -461,6 +461,97 @@ def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty
         log.warning(f"[exchange] modify_sl {sl_order_id}: {e}")
 
 
+# ── Inwalidacja otwartych pozycji (wywoływana z sol_alert.py) ─────────────────
+
+def close_open_position(setup_id: int) -> bool:
+    """
+    Zamknij otwartą pozycję market orderem i anuluj wszystkie zlecenia TPSL.
+    Wywoływana przy inwalidacji otwartego setupu (zmiana reżimu / timeout).
+    Zwraca True jeśli market close powiódł się, False przy błędzie.
+    """
+    client = _client()
+    if client is None:
+        log.warning(f"[exchange] close_open_position #{setup_id}: brak klienta")
+        return False
+
+    setups = db.get_active_setups()
+    s = next((x for x in setups if x["setup_id"] == setup_id), None)
+    if s is None:
+        log.warning(f"[exchange] close_open_position #{setup_id}: nie znaleziono setupu")
+        return False
+
+    direction    = s.get("direction", "")
+    tp1_oid      = s.get("exchange_tp1_oid")
+    tp2_oid      = s.get("exchange_tp2_oid")
+    sl_oid       = s.get("exchange_sl_oid")
+    full_qty_str = (s.get("exchange_qty_full") or "0").replace(",", ".")
+    full_qty     = float(full_qty_str)
+
+    if not direction or full_qty <= 0:
+        log.warning(f"[exchange] close_open_position #{setup_id}: brak kierunku lub qty=0")
+        return False
+
+    # Anuluj zlecenia TPSL przed zamknięciem
+    for oid, plan_type in [(tp1_oid, "profit_plan"), (tp2_oid, "profit_plan"), (sl_oid, "loss_plan")]:
+        if oid:
+            _cancel_order(client, oid, plan_type)
+
+    close_side = "sell" if direction == "long" else "buy"
+    try:
+        resp = client.post("/api/v2/mix/order/place-order", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "marginCoin":  MARGIN_COIN,
+            "side":        close_side,
+            "tradeSide":   "close",
+            "posSide":     direction,
+            "orderType":   "market",
+            "size":        _fmt_qty(full_qty),
+        })
+        if resp.get("code") == "00000":
+            print(f"[exchange] #{setup_id}: zamknięto pozycję market ({direction.upper()}, {_fmt_qty(full_qty)} SOL)")
+            db.update_setup(setup_id,
+                            exchange_done=True,
+                            exchange_tp1_oid=None,
+                            exchange_tp2_oid=None,
+                            exchange_sl_oid=None)
+            return True
+        log.warning(f"[exchange] close_open_position #{setup_id}: code={resp.get('code')} msg={resp.get('msg')}")
+        return False
+    except Exception as e:
+        log.warning(f"[exchange] close_open_position #{setup_id}: {e}")
+        return False
+
+
+def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
+    """
+    Przesuwa SL do ceny wejścia (break-even) dla otwartej pozycji.
+    Wywoływana przy inwalidacji reżimu gdy setup jest na plusie.
+    Zwraca True jeśli modyfikacja się powiodła.
+    """
+    client = _client()
+    if client is None:
+        log.warning(f"[exchange] move_sl_to_entry #{setup_id}: brak klienta")
+        return False
+
+    setups = db.get_active_setups()
+    s = next((x for x in setups if x["setup_id"] == setup_id), None)
+    if s is None:
+        log.warning(f"[exchange] move_sl_to_entry #{setup_id}: nie znaleziono setupu")
+        return False
+
+    sl_oid       = s.get("exchange_sl_oid")
+    full_qty_str = (s.get("exchange_qty_full") or "0").replace(",", ".")
+    full_qty     = float(full_qty_str)
+
+    if not sl_oid:
+        log.warning(f"[exchange] move_sl_to_entry #{setup_id}: brak sl_oid — nie można zmodyfikować")
+        return False
+
+    _modify_sl(client, sl_oid, new_sl_price, full_qty)
+    return True
+
+
 # ── Monitoring pozycji po TP1 (wirtualna druga połowa) ───────────────────────
 
 def _check_after_tp1_positions(client: BitgetClient) -> None:

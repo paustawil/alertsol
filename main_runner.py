@@ -137,14 +137,14 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
 
-    # Sol alert — co 15 minut (minuty 0, 15, 30, 45)
+    # Sol alert — co 5 minut (wewnętrzny throttle: 15 min RANGE/TREND, 5 min IMPULSE)
     scheduler.add_job(
         run_sol_alert,
-        CronTrigger(minute="0,15,30,45"),
+        "interval",
+        minutes=5,
         id="sol_alert",
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=60,
     )
 
     # Breakout scanner — co 3 minuty (szybki, bez Groka chyba że wykryje breakout)
@@ -188,7 +188,7 @@ async def lifespan(app: FastAPI):
     )
 
     scheduler.start()
-    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 15min | grok_shadow: co 5min | sheets: co 5min | kalkulator: co 1h")
+    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 5min (throttle Algo2: 15min RANGE/TREND, 5min IMPULSE) | grok_shadow: co 5min (throttle: 30min RANGE/TREND, 5min IMPULSE) | sheets: co 5min | kalkulator: co 1h")
 
     yield
 
