@@ -42,7 +42,8 @@ MIN_GROK_BIAS_PROC = 65   # minimalny bias_proc Groka; ponizej = sygnał odrzuco
 ENABLE_CLAUDE        = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT           = False  # wyłączony tymczasowo — kod zachowany
 ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT3
-ENABLE_GPT3          = True   # zweryfikowany backtestem Mar 15-29 (+$19.76 vs Algo2 alone)
+ENABLE_GPT3          = False  # standalone GPT3 detektor — wyłączony
+ENABLE_GPT3_VALIDATOR = True  # GPT3 jako filtr Algo2 setupów — aktywny (backtest Mar 15-29: +$19.76)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
@@ -4006,7 +4007,7 @@ def main():
             log_to_alerty("Algo2", rejection, best_algo2)
         elif not was_alerted("Algo2", level, d):
             # ── GPT3 Validator — walidacja setupu Algo2 przed alertem ──────
-            if ENABLE_GPT3:
+            if ENABLE_GPT3_VALIDATOR:
                 val_atr    = calc_atr(candles_m15)
                 val_sup    = regime.get("support")
                 val_res    = regime.get("resistance")
