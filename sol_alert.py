@@ -1462,6 +1462,17 @@ def detect_market_regime(
                    (recent_dir == "up"   and higher_highs >= lower_lows):
                     trend_dir = recent_dir
 
+        # Fix 3: wykrywanie cofnięcia po spike'u (spike-then-reversal).
+        # change_24h jest pozytywny bo punkt ref. trafił na dołek tuż przed spike'iem,
+        # ale cena jest teraz >3% poniżej 24h szczytu i struktura H1 jest niedźwiedzia.
+        # Odróżnia to od normalnego pullbacku w uptrendzie, gdzie cena jest blisko szczytu
+        # a wyższe szczyty (higher_highs) dominują strukturę.
+        if trend_dir == "up":
+            h1_24 = candles_h1[-24:] if len(candles_h1) >= 24 else candles_h1
+            high_24h = max(c["high"] for c in h1_24)
+            if (high_24h - current_price) / high_24h > 0.03 and lower_lows > higher_highs:
+                trend_dir = "down"
+
         return {
             **base,
             "regime": f"TREND_{trend_dir.upper()}",
