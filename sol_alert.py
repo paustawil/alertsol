@@ -3155,7 +3155,17 @@ def grok_shadow_main() -> None:
         return
 
     _last_grok_detection_ts = now
-    print(f"[grok-shadow] Detekcja | Reżim: {regime['regime']} | Cena: ${current:.2f}")
+
+    # RANGE — Algo2 obsługuje range samodzielnie; oszczędzamy wywołanie Grok API
+    if regime["regime"] == "RANGE":
+        print("[grok] RANGE — pomijam (Algo2 obsługuje range)")
+        _last_feedback["Grok"] = {
+            "time": datetime.now(TZ).isoformat(), "found": False,
+            "text": "RANGE — Grok nieaktywny",
+        }
+        return
+
+    print(f"[grok] Detekcja | Reżim: {regime['regime']} | Cena: ${current:.2f}")
 
     grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
     if not grok_result:
