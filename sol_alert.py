@@ -3155,7 +3155,17 @@ def grok_shadow_main() -> None:
         return
 
     _last_grok_detection_ts = now
-    print(f"[grok-shadow] Detekcja | Reżim: {regime['regime']} | Cena: ${current:.2f}")
+
+    # RANGE — Algo2 obsługuje range samodzielnie; oszczędzamy wywołanie Grok API
+    if regime["regime"] == "RANGE":
+        print("[grok] RANGE — pomijam (Algo2 obsługuje range)")
+        _last_feedback["Grok"] = {
+            "time": datetime.now(TZ).isoformat(), "found": False,
+            "text": "RANGE — Grok nieaktywny",
+        }
+        return
+
+    print(f"[grok] Detekcja | Reżim: {regime['regime']} | Cena: ${current:.2f}")
 
     grok_result = call_grok(candles_m15, candles_h1, current, regime=regime)
     if not grok_result:
@@ -3781,6 +3791,7 @@ def breakout_scan():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    global _last_algo2_ts
     print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
 
     _migrate_setup_ids()
@@ -3961,7 +3972,6 @@ def main():
         _a2_mins = int((_a2_threshold - (_a2_now - _last_algo2_ts)) / 60)
         print(f"[algo2] Za wcześnie — następna detekcja za ~{_a2_mins} min (reżim: {regime['regime']})")
     else:
-        global _last_algo2_ts
         _last_algo2_ts = _a2_now
         algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
         print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
