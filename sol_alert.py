@@ -1407,7 +1407,12 @@ def detect_market_regime(
         impulse_score += 1
         impulse_dir = "up"
 
-    if impulse_score >= 3:
+    # Próg obniżony do 2 gdy ruch 4h jest bardzo silny (>= 3%) —
+    # łapie aktywny impuls w fazie krótkiego pullbacku, gdy vol/bearish_closes
+    # chwilowo nie spełniają pełnego kryterium.
+    impulse_min_score = 2 if abs(change_4h) >= 3.0 else 3
+
+    if impulse_score >= impulse_min_score:
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
         strength = min(10, impulse_score * 2 + imp_str)
@@ -1444,6 +1449,19 @@ def detect_market_regime(
             trend_dir = "down" if change_24h < 0 else "up"
         else:
             trend_dir = "down" if lower_lows > higher_highs else "up"
+
+        # Korekta kierunku: ruch 4h silnie przeczy wyznaczonemu kierunkowi
+        # i struktura (lower_lows/higher_highs) to potwierdza.
+        # Chroni przed TREND_UP gdy price 48h temu był niżej, ale aktualnie
+        # mamy impuls w dół z małym pullbackiem (change_48h pozytywny, ale
+        # change_4h silnie negatywny).
+        if abs(change_4h) >= 2.5:
+            recent_dir = "down" if change_4h < 0 else "up"
+            if recent_dir != trend_dir:
+                if (recent_dir == "down" and lower_lows >= higher_highs) or \
+                   (recent_dir == "up"   and higher_highs >= lower_lows):
+                    trend_dir = recent_dir
+
         return {
             **base,
             "regime": f"TREND_{trend_dir.upper()}",
