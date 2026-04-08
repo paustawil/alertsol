@@ -3791,6 +3791,7 @@ def breakout_scan():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    global _last_algo2_ts
     print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
 
     _migrate_setup_ids()
@@ -3971,7 +3972,6 @@ def main():
         _a2_mins = int((_a2_threshold - (_a2_now - _last_algo2_ts)) / 60)
         print(f"[algo2] Za wcześnie — następna detekcja za ~{_a2_mins} min (reżim: {regime['regime']})")
     else:
-        global _last_algo2_ts
         _last_algo2_ts = _a2_now
         algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
         print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
