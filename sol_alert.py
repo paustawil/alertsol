@@ -2234,7 +2234,7 @@ def log_to_alerty(model: str, rejection: str, setup: dict):
             tps[0] if tps else setup.get("tp1", "") or "",
             tps[1] if len(tps) > 1 else setup.get("tp2", "") or "",
             setup.get("rr", "") or "",
-            setup.get("reasoning", "") or "",
+            (setup.get("reasoning", "") or "")[:500],
         ])
         print(f"[sheets] Alerty: {model} {setup.get('direction')} [{setup.get('total', setup.get('score'))}]")
     except Exception as e:
@@ -3727,8 +3727,8 @@ _last_breakout_tg_ts: float = 0.0
 _last_breakout_tg_regime: str = ""
 
 def breakout_scan():
-    """Szybki skan breakoutowy — sprawdza cenę i volume.
-    Przy IMPULSE: powiadomienie Telegram (z cooldownem) + Algo2 setup."""
+    """Szybki skan co 3 min — inwalidacja setupów + Telegram przy IMPULSE.
+    Detekcja Algo2 odbywa się tylko w main() co 15 min (z GPT3 Validator)."""
     global _last_breakout_tg_ts, _last_breakout_tg_regime
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
@@ -3740,7 +3740,7 @@ def breakout_scan():
     check_stale_setups(regime, current)
     check_open_setups_invalidation(regime, current)
 
-    # Zawsze zapisz feedback z reżimu — nawet gdy RANGE (brak skanowania)
+    # Feedback reżimu dla dashboardu — nawet przy RANGE
     if regime["regime"] == "RANGE":
         _last_feedback["Algo2"] = {
             "time":  datetime.now(TZ).isoformat(),
@@ -3748,7 +3748,7 @@ def breakout_scan():
             "count": 0,
             "text":  f"RANGE — Algo2 nie skanuje w konsolidacji. Support: ${regime.get('support', 0):.2f}, Resistance: ${regime.get('resistance', 0):.2f}. {regime.get('details', '')}",
         }
-        return  # Nic nie rób w RANGE
+        return
 
     # Telegram notification — tylko przy IMPULSE, cooldown 30 min
     is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
@@ -3775,41 +3775,6 @@ def breakout_scan():
             f"Sygnały: {regime['details']}"
         )
         send_telegram(msg)
-
-    # Algo2 przy IMPULSE/TREND — save_pending odrzuci duplikaty
-    print(f"[breakout-scan] {regime['regime']} wykryty — szukam setupu Algo2...")
-    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
-    _last_feedback["Algo2"] = {
-        "time":  datetime.now(TZ).isoformat(),
-        "found": bool(algo2_setups),
-        "count": len(algo2_setups),
-        "text":  _clean_log(algo2_log),
-    }
-
-    if algo2_setups:
-        best = max(algo2_setups, key=lambda s: s["rr"])
-        best["reasoning"] = algo2_log
-        level = best["entries"][0]
-        d = best["direction"]
-        print(f"[breakout-scan] Algo2: {best['type']} {d} W={level:.2f} RR={best['rr']}")
-
-        rejection = validate_setup(best, "Algo2-breakout")
-        if not rejection:
-            save_pending(best, "Algo2", "", current)
-            if best.get("setup_id"):
-                log_to_alerty("Algo2", "", best)
-                send_telegram(format_alert("Algo2", best, current, True))
-            else:
-                print("[breakout-scan] Duplikat — setup już istnieje.")
-        else:
-            log_to_alerty("Algo2", rejection, best)
-            print(f"[breakout-scan] Algo2 odrzucony: {rejection}")
-    else:
-        log_to_alerty("Algo2", "brak_setupu", {
-            "type": "", "direction": "", "reasoning": algo2_log,
-            "kurs": round(current, 2),
-        })
-        print(f"[breakout-scan] Algo2 nie znalazł setupu.")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -4005,8 +3970,9 @@ def main():
         rejection = validate_setup(best_algo2, "Algo2")
         if rejection:
             log_to_alerty("Algo2", rejection, best_algo2)
-        elif not was_alerted("Algo2", level, d):
+        else:
             # ── GPT3 Validator — walidacja setupu Algo2 przed alertem ──────
+            val_result = None
             if ENABLE_GPT3_VALIDATOR:
                 val_atr    = calc_atr(candles_m15)
                 val_sup    = regime.get("support")
@@ -4025,20 +3991,29 @@ def main():
                     print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
                     if not approved:
                         log_to_alerty("Algo2", f"GPT3-val odrzucił: {val_reason}", best_algo2)
+                        # Zapisz odrzucony setup do DB jako shadow (nie idzie na giełdę)
+                        save_pending(best_algo2, "Algo2", f"GPT3-val odrzucił: {val_reason}", current, shadow=True)
+                        if best_algo2.get("setup_id"):
+                            db.update_setup(best_algo2["setup_id"], llm_scores={
+                                "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
+                            })
+                            db.resolve_setup(best_algo2["setup_id"], "odrzucony_validator", None, None, None, None)
                         print(f"[algo2] Setup odrzucony przez GPT3 Validator.")
-                        return  # pomiń alert
+                        return
                 else:
                     print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
             # ── koniec walidatora ─────────────────────────────────────────
             save_pending(best_algo2, "Algo2", "", current)
             if best_algo2.get("setup_id"):
                 log_to_alerty("Algo2", "", best_algo2)
-                save_alerted("Algo2", level, d)
                 send_telegram(format_alert("Algo2", best_algo2, current, True))
+                # Zapisz confidence validatora jeśli dostępny
+                if val_result:
+                    db.update_setup(best_algo2["setup_id"], llm_scores={
+                        "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
+                    })
             else:
                 print("[algo2] Duplikat pominięty — setup już istnieje.")
-        else:
-            print(f"[algo2] Duplikat w cooldown, pomijam.")
     else:
         log_to_alerty("Algo2", "brak_setupu", {
             "type": "", "direction": "", "reasoning": algo2_log,
