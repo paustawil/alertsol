@@ -3212,31 +3212,32 @@ def grok_shadow_main() -> None:
         "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
     }
 
-    # Wykryj sprzeczność z reżimem i zaznacz w reasoning (arkusz wyciągnie prefiks)
+    # Blokuj setupy sprzeczne z dominującym reżimem rynkowym
     regime_conflict = _grok_regime_conflict(bias, regime)
     if regime_conflict:
-        grok_setup["reasoning"] = f"⚠️ SPRZECZNY Z REŻIMEM: {regime_conflict} | " + grok_setup["reasoning"]
+        print(f"[grok] Konflikt reżimu ({regime_conflict}) — setup zablokowany.")
+        log_to_alerty("Grok", f"konflikt_reżimu: {regime_conflict}", grok_setup)
+        return
 
     rejection = validate_setup(grok_setup, "Grok")
     if rejection:
-        print(f"[grok-shadow] Odrzucony walidacją: {rejection}")
+        print(f"[grok] Odrzucony walidacją: {rejection}")
         return
 
-    save_pending(grok_setup, "Grok", "", current, shadow=True)
+    save_pending(grok_setup, "Grok", "", current)
     if grok_setup.get("setup_id"):
-        conflict_note = f" ⚠️ vs {regime_conflict}" if regime_conflict else ""
         send_telegram(format_grok_alert(
             grok_result, current, grok_setup["setup_id"],
-            model_name=f"Grok 👁 (shadow{conflict_note})"
+            model_name="Grok"
         ))
-        print(f"[grok-shadow] Setup #{grok_setup['setup_id']} zapisany | shadow=True | conflict={regime_conflict}")
+        print(f"[grok] Setup #{grok_setup['setup_id']} zapisany")
         _last_feedback["Grok"] = {
             "time": datetime.now(TZ).isoformat(), "found": True,
             "bias": bias, "bias_proc": bias_proc,
-            "text": (("⚠️ SPRZECZNY Z REŻIMEM | " if regime_conflict else "") + feedback_text),
+            "text": feedback_text,
         }
     else:
-        print("[grok-shadow] Błąd zapisu do DB.")
+        print("[grok] Błąd zapisu do DB.")
         _last_feedback["Grok"] = {
             "time": datetime.now(TZ).isoformat(), "found": False,
             "bias": bias, "bias_proc": bias_proc,
