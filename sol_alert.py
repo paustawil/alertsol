@@ -1356,17 +1356,21 @@ def detect_market_regime(
     last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Zmiana cenowa 2h / 4h / 24h / 48h ───────────────────────────────────
+    # ── Zmiana cenowa 2h / 4h / 8h / 12h / 24h / 48h ────────────────────────
     # 24h i 48h: średnia z 3 świec wokół punktu referencyjnego.
     # Eliminuje niestabilność gdy pojedyncza świeca trafia na spike/dno impulsu.
     price_2h  = candles_m15[-8]["close"] if len(candles_m15) >= 8 else candles_m15[0]["close"]
     price_4h  = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
+    price_8h  = candles_h1[-8]["close"]  if len(candles_h1) >= 8  else candles_h1[0]["close"]
+    price_12h = candles_h1[-12]["close"] if len(candles_h1) >= 12 else candles_h1[0]["close"]
     price_24h = (sum(c["close"] for c in candles_h1[-25:-22]) / 3
                  if len(candles_h1) >= 25 else candles_h1[0]["close"])
     price_48h = (sum(c["close"] for c in candles_h1[-49:-46]) / 3
                  if len(candles_h1) >= 49 else candles_h1[0]["close"])
     change_2h  = (current_price - price_2h)  / price_2h  * 100
     change_4h  = (current_price - price_4h)  / price_4h  * 100
+    change_8h  = (current_price - price_8h)  / price_8h  * 100
+    change_12h = (current_price - price_12h) / price_12h * 100
     change_24h = (current_price - price_24h) / price_24h * 100
     change_48h = (current_price - price_48h) / price_48h * 100
 
@@ -1440,7 +1444,7 @@ def detect_market_regime(
 
     has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
 
-    details = f"24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}% trend_score:{trend_score} ll:{lower_lows} hh:{higher_highs}"
+    details = f"4h:{change_4h:+.1f}% 8h:{change_8h:+.1f}% 12h:{change_12h:+.1f}% 24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}% score:{trend_score} ll:{lower_lows} hh:{higher_highs}"
 
     if trend_score >= 3 and has_price_change:
         if abs(change_48h) >= 3.0:
@@ -1450,11 +1454,7 @@ def detect_market_regime(
         else:
             trend_dir = "down" if lower_lows > higher_highs else "up"
 
-        # Korekta kierunku: ruch 4h silnie przeczy wyznaczonemu kierunkowi
-        # i struktura (lower_lows/higher_highs) to potwierdza.
-        # Chroni przed TREND_UP gdy price 48h temu był niżej, ale aktualnie
-        # mamy impuls w dół z małym pullbackiem (change_48h pozytywny, ale
-        # change_4h silnie negatywny).
+        # Fix 2: ruch 4h silnie przeczy wyznaczonemu kierunkowi + struktura potwierdza.
         if abs(change_4h) >= 2.5:
             recent_dir = "down" if change_4h < 0 else "up"
             if recent_dir != trend_dir:
@@ -1462,18 +1462,28 @@ def detect_market_regime(
                    (recent_dir == "up"   and higher_highs >= lower_lows):
                     trend_dir = recent_dir
 
-        # Fix 3: wykrywanie cofnięcia po spike'u (spike-then-reversal).
-        # change_24h jest pozytywny bo punkt ref. trafił na dołek tuż przed spike'iem,
-        # ale cena jest teraz >3% poniżej 24h szczytu i momentum 4h jest negatywne.
-        # Nie używamy lower_lows > higher_highs bo w fazie "wyższe low" po spike'u
-        # ten warunek może nie być spełniony pomimo wyraźnego trendu spadkowego.
-        # False-positive ochrona: w prawdziwym uptrendzie z normalnym pullbackiem,
-        # high_24h jest blisko current (< 3% odległość) bo wyższe szczyty trwają.
+        # Fix 3: multi-timeframe consensus override (spike-then-reversal i inne).
+        # change_24h bywa mylący gdy punkt ref. trafił na lokalne dno/szczyt (np. tuż
+        # przed short squeeze). Jeśli change_4h, change_8h i change_12h wszystkie
+        # zgodnie wskazują w PRZECIWNYM kierunku niż wyznaczony trend_dir — override.
+        # W prawdziwym uptrendzie z normalnym pullbackiem przynajmniej change_12h
+        # pozostaje pozytywny → warunek nie jest spełniony → brak false positive.
         if trend_dir == "up":
-            h1_24 = candles_h1[-24:] if len(candles_h1) >= 24 else candles_h1
-            high_24h = max(c["high"] for c in h1_24)
-            if (high_24h - current_price) / high_24h > 0.03 and change_4h < -0.5:
+            mtf_down = sum([
+                1 if change_4h  < -0.5 else 0,
+                1 if change_8h  < -0.5 else 0,
+                1 if change_12h < -1.0 else 0,
+            ])
+            if mtf_down == 3:
                 trend_dir = "down"
+        elif trend_dir == "down":
+            mtf_up = sum([
+                1 if change_4h  > 0.5 else 0,
+                1 if change_8h  > 0.5 else 0,
+                1 if change_12h > 1.0 else 0,
+            ])
+            if mtf_up == 3:
+                trend_dir = "up"
 
         return {
             **base,
