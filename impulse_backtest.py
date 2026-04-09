@@ -1121,7 +1121,69 @@ def run_h1_scan(from_ts, to_ts, all_m15, all_h1, m15_times, h1_times, stats_algo
     return stats_algo, h1_regime_counts
 
 
-def _month_ranges(from_ts, to_ts):
+def _collect_setups_for_hour(rh, ctx_m15_h, ctx_h1_h, ph):
+    """Zbiera wszystkie valid setupy dla danej H1 godziny. Zwraca listę (key, setup, entry_window_h)."""
+    rh_name = rh["regime"]
+    rh_dir  = rh.get("direction", "none")
+    candidates = []
+    if rh_dir == "down":
+        s = setup_trend_pullback_short(rh, ctx_m15_h, ctx_h1_h, ph)
+        if s: candidates.append(("trend_pb_short", s, 24))
+        if rh_name == "IMPULSE_DOWN":
+            s = setup_impulse_cont_short(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s: candidates.append(("imp_cont_short", s, 24))
+            _, is_spk = compute_spike_filter(ctx_m15_h, "down")
+            if not is_spk:
+                s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
+                if s: candidates.append(("impulse_d_short", s, 1))
+    elif rh_dir == "up":
+        s = setup_trend_pullback_long(rh, ctx_m15_h, ctx_h1_h, ph)
+        if s: candidates.append(("trend_pb_long", s, 24))
+        if rh_name == "IMPULSE_UP":
+            _, is_spk = compute_spike_filter(ctx_m15_h, "up")
+            if not is_spk:
+                s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
+                if s: candidates.append(("impulse_d_long", s, 1))
+    elif rh_name == "RANGE":
+        s = setup_range_short(rh, ctx_m15_h, ctx_h1_h, ph)
+        if s: candidates.append(("range_short", s, 24))
+        s = setup_range_long(rh, ctx_m15_h, ctx_h1_h, ph)
+        if s: candidates.append(("range_long", s, 24))
+    return candidates
+
+
+def run_h1_scan_best(from_ts, to_ts, all_m15, all_h1, m15_times, h1_times):
+    """
+    H1 scan w stylu starego Algo2: per godzina wybiera JEDEN setup z najwyższym RR.
+    Zwraca (stats_algo, h1_regime_counts).
+    """
+    stats_algo = make_algo_stats()
+    h1_regime_counts = {}
+    ts_h1 = from_ts
+    while ts_h1 <= to_ts:
+        idx_m15 = bisect.bisect_left(m15_times, ts_h1)
+        idx_h1  = bisect.bisect_left(h1_times,  ts_h1)
+        ctx_m15_h = all_m15[max(0, idx_m15 - 100):idx_m15]
+        ctx_h1_h  = all_h1[max(0, idx_h1  -  50):idx_h1]
+        if len(ctx_m15_h) < 30 or len(ctx_h1_h) < 10:
+            ts_h1 += 3600
+            continue
+        ph = ctx_m15_h[-1]["close"]
+        rh = detect_regime_new(ctx_m15_h, ctx_h1_h, ph)
+        rh_name = rh["regime"]
+        h1_regime_counts[rh_name] = h1_regime_counts.get(rh_name, 0) + 1
+        fut_h = all_m15[idx_m15:idx_m15 + 200]
+        if not fut_h:
+            ts_h1 += 3600
+            continue
+        candidates = _collect_setups_for_hour(rh, ctx_m15_h, ctx_h1_h, ph)
+        if candidates:
+            # Wybierz setup z najwyższym RR (jak stary Algo2)
+            best_key, best_s, best_ew = max(candidates, key=lambda x: x[1].get("rr", 0))
+            record_algo_outcome(stats_algo, best_key, best_s,
+                                evaluate_setup(best_s, fut_h, entry_window_h=best_ew))
+        ts_h1 += 3600
+    return stats_algo, h1_regime_counts
     """Generator: zwraca (label, month_from_ts, month_to_ts) dla każdego miesiąca w zakresie."""
     from datetime import date
     dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
@@ -1401,13 +1463,20 @@ def main():
     if args.monthly:
         m15_times = [c["time"] for c in all_m15]
         h1_times  = [c["time"] for c in all_h1]
-        monthly_results = []
+        monthly_all  = []   # wariant: wszystkie setupy per H1
+        monthly_best = []   # wariant: najlepszy RR per H1 (jak stary Algo2)
         for m_label, m_from, m_to in _month_ranges(from_ts, to_ts):
             print(f"  Skanuje {m_label} ({_ts_fmt(m_from)} → {_ts_fmt(m_to)})...")
-            m_stats, m_regimes = run_h1_scan(m_from, m_to, all_m15, all_h1,
+            m_all,  m_reg_all  = run_h1_scan(m_from, m_to, all_m15, all_h1,
                                               m15_times, h1_times)
-            monthly_results.append((m_label, m_stats, m_regimes))
-        print_monthly_table(monthly_results)
+            m_best, m_reg_best = run_h1_scan_best(m_from, m_to, all_m15, all_h1,
+                                                   m15_times, h1_times)
+            monthly_all.append((m_label, m_all, m_reg_all))
+            monthly_best.append((m_label, m_best, m_reg_best))
+        print("\n── WARIANT A: wszystkie setupy per H1 (obecna logika) ──")
+        print_monthly_table(monthly_all)
+        print("\n── WARIANT B: najlepszy RR per H1 (logika starego Algo2) ──")
+        print_monthly_table(monthly_best)
         print()
         return
 
