@@ -677,17 +677,14 @@ def setup_version_c(regime, ctx_m15, ctx_h1, price):
     return None
 
 
-def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0):
+def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0,
+                    swing_n=12, atr_fallback=False, label=None):
     """
-    Wersja D/E: AGRESYWNE wejście po aktualnej cenie — bez czekania na pullback.
+    Wersja D/E/G/H/I: AGRESYWNE wejście po aktualnej cenie — bez czekania na pullback.
 
-    Filozofia: skoro pullback albo się nie wydarza, albo oznacza fake impuls,
-    wchodzimy natychmiast przy aktualnej cenie gdy IMPULSE jest potwierdzony
-    przez podwyższony wolumen.
-
-    vol_threshold: minimalny vol_ratio (D=2.0, E=1.7)
-    SL ustawiony na ATR × 1.2 od ceny wejścia.
-    RR minimum 1.2 (nieco złagodzone bo wchodzimy blisko rynku).
+    vol_threshold : minimalny vol_ratio (D/G/H/I=2.0, E=1.7)
+    swing_n       : lookback świec H1 dla swing points (D/E=12, G/I=24)
+    atr_fallback  : gdy swing TP zbyt blisko ceny → użyj ATR×2.0 jako TP1 (H/I=True)
     """
     regime_name = regime["regime"]
     vol_ratio = regime.get("vol_ratio", 1.0)
@@ -699,17 +696,23 @@ def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0):
     if atr <= 0:
         return None
 
-    swing_high, swing_low = find_swing_points(ctx_h1, n=12)
+    swing_high, swing_low = find_swing_points(ctx_h1, n=swing_n)
     swing_low  = min(swing_low,  price)
     swing_high = max(swing_high, price)
 
-    label = "D" if vol_threshold >= 2.0 else "E"
+    if label is None:
+        label = "D" if vol_threshold >= 2.0 else "E"
 
     if regime_name == "IMPULSE_DOWN":
-        w   = price
-        sl  = price + atr * 1.2
-        tp1 = swing_low
-        tp2 = swing_low - atr
+        w  = price
+        sl = price + atr * 1.2
+        # ATR fallback: gdy swing_low zbyt blisko ceny (impuls w toku), użyj ATR
+        if atr_fallback and (w - swing_low) < atr * 1.5:
+            tp1 = price - atr * 2.0
+            tp2 = price - atr * 3.5
+        else:
+            tp1 = swing_low
+            tp2 = swing_low - atr
         if tp1 >= w or sl <= w:
             return None
         risk = sl - w
@@ -723,10 +726,15 @@ def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0):
                 "direction": "short", "type": f"{label}_short", "rr": round(rr, 2)}
 
     elif regime_name == "IMPULSE_UP":
-        w   = price
-        sl  = price - atr * 1.2
-        tp1 = swing_high
-        tp2 = swing_high + atr
+        w  = price
+        sl = price - atr * 1.2
+        # ATR fallback: gdy swing_high zbyt blisko ceny
+        if atr_fallback and (swing_high - w) < atr * 1.5:
+            tp1 = price + atr * 2.0
+            tp2 = price + atr * 3.5
+        else:
+            tp1 = swing_high
+            tp2 = swing_high + atr
         if tp1 <= w or sl >= w:
             return None
         risk = w - sl
@@ -928,6 +936,9 @@ def main():
     stats_d = make_stats()
     stats_e = make_stats()
     stats_f = make_stats()
+    stats_g = make_stats()   # D + swing n=24
+    stats_h = make_stats()   # D + ATR fallback
+    stats_i = make_stats()   # D + swing n=24 + ATR fallback
 
     # Cooldown tracking
     last_impulse_ts_down = 0
@@ -1036,6 +1047,33 @@ def main():
         elif not is_spike_filtered:
             stats_f[direction_key]["total"] += 1
 
+        # Version G: D + swing n=24
+        setup_g = setup_version_d(regime, ctx_m15, ctx_h1, price, swing_n=24, label="G")
+        res_g = None
+        if setup_g:
+            res_g = evaluate_setup(setup_g, future_m15, entry_window_h=1)
+            record_outcome(stats_g, direction_key, res_g, setup_g["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_g[direction_key]["total"] += 1
+
+        # Version H: D + ATR fallback
+        setup_h = setup_version_d(regime, ctx_m15, ctx_h1, price, atr_fallback=True, label="H")
+        res_h = None
+        if setup_h:
+            res_h = evaluate_setup(setup_h, future_m15, entry_window_h=1)
+            record_outcome(stats_h, direction_key, res_h, setup_h["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_h[direction_key]["total"] += 1
+
+        # Version I: D + swing n=24 + ATR fallback (kombinacja)
+        setup_i = setup_version_d(regime, ctx_m15, ctx_h1, price, swing_n=24, atr_fallback=True, label="I")
+        res_i = None
+        if setup_i:
+            res_i = evaluate_setup(setup_i, future_m15, entry_window_h=1)
+            record_outcome(stats_i, direction_key, res_i, setup_i["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_i[direction_key]["total"] += 1
+
         # Print signal line
         def fmt_res(setup, res):
             if setup is None:
@@ -1049,7 +1087,7 @@ def main():
         spk_tag = f" [SPIKE-FILT spk={spike_score}]" if is_spike_filtered else (f" spk={spike_score}" if spike_score > 0 else "")
         print(
             f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} vol={regime.get('vol_ratio',0):.1f}x str={regime['strength']}{spk_tag} | "
-            f"A={fmt_res(setup_a, res_a)} | D={fmt_res(setup_d, res_d)} | F={fmt_res(setup_f, res_f)}"
+            f"D={fmt_res(setup_d, res_d)} | G={fmt_res(setup_g, res_g)} | H={fmt_res(setup_h, res_h)} | I={fmt_res(setup_i, res_i)}"
         )
 
         ts += 900
@@ -1060,11 +1098,19 @@ def main():
     print(f"{'='*70}")
 
     print(f"\n{'─'*70}")
-    print("POROWNANIE STRATEGII (kluczowe 3)")
+    print("POROWNANIE: NAPRAWA TP1 (wszystkie vol>=2.0x, market entry)")
     print(f"{'─'*70}")
-    print_version_stats("STRATEGIA 1 [pullback]",   "czeka na 1-2 swiece odreagowania (Wersja A)", stats_a)
-    print_version_stats("STRATEGIA 2 [agresywna]",  "market entry natychmiast, vol >= 2.0x (Wersja D)", stats_d)
-    print_version_stats("STRATEGIA 3 [switching]",  "vol>=2.0x→market / 1.5-2.0x→pullback (Wersja F)", stats_f)
+    print_version_stats("WERSJA D [oryginalna]", "swing n=12, bez fallback", stats_d)
+    print_version_stats("WERSJA G [swing n=24]", "szerszy lookback swing points", stats_g)
+    print_version_stats("WERSJA H [ATR fallback]", "ATR*2.0 gdy swing zbyt blisko ceny", stats_h)
+    print_version_stats("WERSJA I [G+H]",         "swing n=24 + ATR fallback", stats_i)
+
+    print(f"\n{'─'*70}")
+    print("POROWNANIE STRATEGII WEJSCIA")
+    print(f"{'─'*70}")
+    print_version_stats("STRATEGIA 1 [pullback]",  "czeka na 1-2 swiece odreagowania (Wersja A)", stats_a)
+    print_version_stats("STRATEGIA 2 [agresywna]", "market entry vol>=2.0x (Wersja D)", stats_d)
+    print_version_stats("STRATEGIA 3 [switching]", "vol>=2.0x→market / 1.5-2.0x→pullback (F)", stats_f)
 
     print(f"\n{'─'*70}")
     print("SZCZEGOLY POMOCNICZE")
