@@ -52,8 +52,20 @@ def prod_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         swing_low  = min(swing_low,  current_price)
         swing_high = max(swing_high, current_price)
 
-        # trend_consolidation_short — WYŁĄCZONY (jak w produkcji: if False)
-        # consol = None
+        # trend_consolidation_short — WŁĄCZONY w backteście (testujemy czy nowy reżim go rehabuje)
+        consol = find_consolidation(candles_h1)
+        if consol and consol["high"] >= swing_high * 0.97:
+            w   = round(consol["high"] - consol["range"] * 0.2, 2)
+            sl  = round(consol["high"] + atr * 1.0, 2)
+            tp1 = round(consol["low"] - consol["range"], 2)
+            tp2 = round(consol["low"] - consol["range"] * 1.5, 2)
+            if (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                    and abs(w - current_price) <= max_entry_dist):
+                setups.append({
+                    "type": "trend_consolidation_short", "direction": "short",
+                    "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                    "rr": round((w - tp1) / (sl - w), 1),
+                })
 
         # trend_pullback_short — 38-50% korekty
         if swing_high > swing_low:
@@ -100,7 +112,20 @@ def prod_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         swing_low  = min(swing_low,  current_price)
         swing_high = max(swing_high, current_price)
 
-        # trend_consolidation_long — WYŁĄCZONY (jak w produkcji)
+        # trend_consolidation_long — WŁĄCZONY w backteście (testujemy czy nowy reżim go rehabuje)
+        consol = find_consolidation(candles_h1)
+        if consol and consol["low"] <= swing_low * 1.03:
+            w   = round(consol["low"] + consol["range"] * 0.2, 2)
+            sl  = round(consol["low"] - atr * 1.0, 2)
+            tp1 = round(consol["high"] + consol["range"], 2)
+            tp2 = round(consol["high"] + consol["range"] * 1.5, 2)
+            if (sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                    and abs(w - current_price) <= max_entry_dist):
+                setups.append({
+                    "type": "trend_consolidation_long", "direction": "long",
+                    "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                })
 
         # trend_pullback_long — wymaga strength >= 5
         if swing_high > swing_low and strength >= 5:
