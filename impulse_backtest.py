@@ -8,6 +8,7 @@ Uruchomienie:
 """
 
 import argparse
+import bisect
 from datetime import datetime, timezone
 from statistics import mean
 
@@ -1433,21 +1434,34 @@ def main():
     # ── H1 ALGO SCAN — wszystkie rezimy, bez cooldown ─────────────────────────
     # Skanuje każdą świecę H1 niezależnie (jak poprzedni backtest Algo).
     # Dla każdej H1: generuje wszystkie pasujące setupy i ewaluuje wyniki.
-    print("\nH1 scan — wszystkie rezimy...")
+    # Używa bisect dla O(log N) zamiast O(N) przeszukiwania list.
+    m15_times = [c["time"] for c in all_m15]
+    h1_times  = [c["time"] for c in all_h1]
+    total_h1_iters = max(1, int((to_ts - from_ts) / 3600))
+    h1_iter = 0
+    h1_regime_counts = {}
+
+    print(f"\nH1 scan — wszystkie rezimy ({total_h1_iters} swiece H1)...")
     ts_h1 = from_ts
     while ts_h1 <= to_ts:
-        ctx_m15_h = [c for c in all_m15 if c["time"] < ts_h1][-100:]
-        ctx_h1_h  = [c for c in all_h1  if c["time"] < ts_h1][-50:]
+        # Fast index lookup via bisect
+        idx_m15 = bisect.bisect_left(m15_times, ts_h1)
+        idx_h1  = bisect.bisect_left(h1_times,  ts_h1)
+        ctx_m15_h = all_m15[max(0, idx_m15 - 100):idx_m15]
+        ctx_h1_h  = all_h1[max(0, idx_h1  -  50):idx_h1]
         if len(ctx_m15_h) < 30 or len(ctx_h1_h) < 10:
             ts_h1 += 3600
+            h1_iter += 1
             continue
         ph = ctx_m15_h[-1]["close"]
         rh = detect_regime_new(ctx_m15_h, ctx_h1_h, ph)
         rh_name = rh["regime"]
         rh_dir  = rh.get("direction", "none")
-        fut_h = [c for c in all_m15 if c["time"] >= ts_h1][:200]
+        h1_regime_counts[rh_name] = h1_regime_counts.get(rh_name, 0) + 1
+        fut_h = all_m15[idx_m15:idx_m15 + 200]
         if not fut_h:
             ts_h1 += 3600
+            h1_iter += 1
             continue
 
         if rh_dir == "down":
@@ -1488,6 +1502,16 @@ def main():
                 record_algo_outcome(stats_algo, "range_long", s,
                                     evaluate_setup(s, fut_h, entry_window_h=24))
         ts_h1 += 3600
+        h1_iter += 1
+
+    # Podsumowanie rozkładu reżimów w H1 scan
+    total_h1_scanned = sum(h1_regime_counts.values())
+    if total_h1_scanned > 0:
+        regime_summary = ", ".join(
+            f"{k}:{v}({v/total_h1_scanned*100:.0f}%)"
+            for k, v in sorted(h1_regime_counts.items(), key=lambda x: -x[1])
+        )
+        print(f"  Rezimy H1: {regime_summary}")
 
     # Print final report
     print(f"\n{'='*70}")
