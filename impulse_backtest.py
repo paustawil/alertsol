@@ -1190,8 +1190,10 @@ def run_h1_scan_best(from_ts, to_ts, all_m15, all_h1, m15_times, h1_times):
                                 evaluate_setup(best_s, fut_h, entry_window_h=best_ew))
         ts_h1 += 3600
     return stats_algo, h1_regime_counts
+
+
+def _month_ranges(from_ts, to_ts):
     """Generator: zwraca (label, month_from_ts, month_to_ts) dla każdego miesiąca w zakresie."""
-    from datetime import date
     dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
     while True:
         year, month = dt.year, dt.month
