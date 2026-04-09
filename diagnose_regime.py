@@ -286,56 +286,57 @@ def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_p
         }
 
     # ── TREND: utrzymujący się ruch kierunkowy ────────────────────────────────
+    # Zasada: 24h wyznacza kierunek, 48h potwierdza (+2) lub karze (-1)
     trend_score = 0
     trend_details = []
 
-    if abs(change_24h) >= 3.0:
+    # KROK 1: Kierunek wyłącznie z 24h
+    if abs(change_24h) >= 2.5:
+        primary_dir: str | None = "down" if change_24h < 0 else "up"
         trend_score += 2
         trend_details.append(f"24h:{change_24h:+.1f}%")
     elif abs(change_24h) >= 1.5:
+        primary_dir = "down" if change_24h < 0 else "up"
         trend_score += 1
         trend_details.append(f"24h:{change_24h:+.1f}%")
+    else:
+        primary_dir = None  # brak sygnału 24h → nie ma trendu bez struktury
 
-    if abs(change_48h) >= 5.0:
-        trend_score += 2
-        trend_details.append(f"48h:{change_48h:+.1f}%")
-    elif abs(change_48h) >= 3.0:
-        trend_score += 1
-        trend_details.append(f"48h:{change_48h:+.1f}%")
+    # KROK 2: 48h jako potwierdzenie lub zaprzeczenie
+    if abs(change_48h) >= 2.5:
+        sec_dir = "down" if change_48h < 0 else "up"
+        if primary_dir and sec_dir == primary_dir:
+            trend_score += 2   # 48h potwierdza kierunek
+            trend_details.append(f"48h:{change_48h:+.1f}%✓")
+        elif primary_dir:
+            trend_score -= 1   # 48h przeczy — kara za konflikt
+            trend_details.append(f"48h:{change_48h:+.1f}%✗")
 
-    if lower_lows >= 5:
-        trend_score += 1
-        trend_details.append(f"LL:{lower_lows}/{len(h1_12)-1}")
-    if higher_highs >= 5:
-        trend_score += 1
-        trend_details.append(f"HH:{higher_highs}/{len(h1_12)-1}")
-    if lower_highs >= 5:
-        trend_score += 1
-        trend_details.append(f"LH:{lower_highs}/{len(h1_12)-1}")
-    if higher_lows >= 5:
-        trend_score += 1
-        trend_details.append(f"HL:{higher_lows}/{len(h1_12)-1}")
+    # KROK 3: Struktura H1 — tylko w kierunku primary_dir
+    if primary_dir == "down":
+        if lower_lows >= 5:
+            trend_score += 1
+            trend_details.append(f"LL:{lower_lows}/{len(h1_12)-1}")
+        if lower_highs >= 5:
+            trend_score += 1
+            trend_details.append(f"LH:{lower_highs}/{len(h1_12)-1}")
+    elif primary_dir == "up":
+        if higher_highs >= 5:
+            trend_score += 1
+            trend_details.append(f"HH:{higher_highs}/{len(h1_12)-1}")
+        if higher_lows >= 5:
+            trend_score += 1
+            trend_details.append(f"HL:{higher_lows}/{len(h1_12)-1}")
 
-    if trend != "neutral":
-        trend_score += 1
-        trend_details.append(f"h1:{trend}")
+    # KROK 4: h1_trend tylko jeśli zgodny z primary_dir
+    if primary_dir:
+        h1_dir = {"bullish": "up", "bearish": "down"}.get(trend)
+        if h1_dir == primary_dir:
+            trend_score += 1
+            trend_details.append(f"h1:{trend}")
 
-    # TREND wymaga zmiany cenowej — sama struktura nie wystarczy
-    has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
-
-    if trend_score >= 3 and has_price_change:
-        # Kierunek: 48h ma priorytet nad 24h gdy się kłócą
-        if abs(change_48h) >= 3.0:
-            trend_dir = "down" if change_48h < 0 else "up"
-        elif abs(change_24h) >= 1.5:
-            trend_dir = "down" if change_24h < 0 else "up"
-        elif change_48h < -2.0:
-            trend_dir = "down"
-        elif change_48h > 2.0:
-            trend_dir = "up"
-        else:
-            trend_dir = "down" if lower_lows > higher_highs else "up"
-
+    if trend_score >= 3 and primary_dir:
+        trend_dir = primary_dir  # kierunek zawsze z 24h
         strength = min(10, trend_score + imp_str)
         regime = f"TREND_{trend_dir.upper()}"
         return {
