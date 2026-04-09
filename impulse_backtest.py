@@ -681,22 +681,22 @@ def setup_version_c(regime, ctx_m15, ctx_h1, price):
     return None
 
 
-def setup_version_d(regime, ctx_m15, ctx_h1, price):
+def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0):
     """
-    Wersja D: AGRESYWNE wejście po aktualnej cenie — bez czekania na pullback.
+    Wersja D/E: AGRESYWNE wejście po aktualnej cenie — bez czekania na pullback.
 
     Filozofia: skoro pullback albo się nie wydarza, albo oznacza fake impuls,
     wchodzimy natychmiast przy aktualnej cenie gdy IMPULSE jest potwierdzony
-    przez znacznie podwyższony wolumen (vol_ratio >= 2.0).
+    przez podwyższony wolumen.
 
+    vol_threshold: minimalny vol_ratio (D=2.0, E=1.7)
     SL ustawiony na ATR × 1.2 od ceny wejścia.
     RR minimum 1.2 (nieco złagodzone bo wchodzimy blisko rynku).
     """
     regime_name = regime["regime"]
     vol_ratio = regime.get("vol_ratio", 1.0)
 
-    # Kluczowy warunek: wolumen co najmniej 2× średniej — prawdziwy impuls
-    if vol_ratio < 2.0:
+    if vol_ratio < vol_threshold:
         return None
 
     atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
@@ -707,8 +707,10 @@ def setup_version_d(regime, ctx_m15, ctx_h1, price):
     swing_low  = min(swing_low,  price)
     swing_high = max(swing_high, price)
 
+    label = "D" if vol_threshold >= 2.0 else "E"
+
     if regime_name == "IMPULSE_DOWN":
-        w   = price                    # market entry (short)
+        w   = price
         sl  = price + atr * 1.2
         tp1 = swing_low
         tp2 = swing_low - atr
@@ -722,10 +724,10 @@ def setup_version_d(regime, ctx_m15, ctx_h1, price):
         if rr < 1.2:
             return None
         return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
-                "direction": "short", "type": "D_short", "rr": round(rr, 2)}
+                "direction": "short", "type": f"{label}_short", "rr": round(rr, 2)}
 
     elif regime_name == "IMPULSE_UP":
-        w   = price                    # market entry (long)
+        w   = price
         sl  = price - atr * 1.2
         tp1 = swing_high
         tp2 = swing_high + atr
@@ -739,7 +741,7 @@ def setup_version_d(regime, ctx_m15, ctx_h1, price):
         if rr < 1.2:
             return None
         return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
-                "direction": "long", "type": "D_long", "rr": round(rr, 2)}
+                "direction": "long", "type": f"{label}_long", "rr": round(rr, 2)}
 
     return None
 
@@ -896,6 +898,7 @@ def main():
     stats_b = make_stats()
     stats_c = make_stats()
     stats_d = make_stats()
+    stats_e = make_stats()
 
     # Cooldown tracking
     last_impulse_ts_down = 0
@@ -977,13 +980,22 @@ def main():
             stats_c[direction_key]["total"] += 1
 
         # Version D (market entry, vol_ratio >= 2.0, entry window 1h)
-        setup_d = setup_version_d(regime, ctx_m15, ctx_h1, price)
+        setup_d = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
         res_d = None
         if setup_d:
             res_d = evaluate_setup(setup_d, future_m15, entry_window_h=1)
             record_outcome(stats_d, direction_key, res_d, setup_d["w"], spike_filtered=is_spike_filtered)
         elif not is_spike_filtered:
             stats_d[direction_key]["total"] += 1
+
+        # Version E (market entry, vol_ratio >= 1.7, entry window 1h)
+        setup_e = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=1.7)
+        res_e = None
+        if setup_e:
+            res_e = evaluate_setup(setup_e, future_m15, entry_window_h=1)
+            record_outcome(stats_e, direction_key, res_e, setup_e["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_e[direction_key]["total"] += 1
 
         # Print signal line
         def fmt_res(setup, res):
@@ -998,7 +1010,7 @@ def main():
         spk_tag = f" [SPIKE-FILT spk={spike_score}]" if is_spike_filtered else (f" spk={spike_score}" if spike_score > 0 else "")
         print(
             f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} vol={regime.get('vol_ratio',0):.1f}x str={regime['strength']}{spk_tag} | "
-            f"A={fmt_res(setup_a, res_a)} | B={fmt_res(setup_b, res_b)} | C={fmt_res(setup_c, res_c)} | D={fmt_res(setup_d, res_d)}"
+            f"A={fmt_res(setup_a, res_a)} | B={fmt_res(setup_b, res_b)} | C={fmt_res(setup_c, res_c)} | D={fmt_res(setup_d, res_d)} | E={fmt_res(setup_e, res_e)}"
         )
 
         ts += 900
@@ -1012,6 +1024,7 @@ def main():
     print_version_stats("WERSJA B", "Fibonacci limit, czeka na pullback", stats_b)
     print_version_stats("WERSJA C", "Fibonacci limit, antycypuje", stats_c)
     print_version_stats("WERSJA D", "market entry natychmiast, vol >= 2.0x [AGRESYWNA]", stats_d)
+    print_version_stats("WERSJA E", "market entry natychmiast, vol >= 1.7x [AGRESYWNA-]", stats_e)
 
     print()
 
