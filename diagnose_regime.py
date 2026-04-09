@@ -291,8 +291,13 @@ def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_p
     trend_details = []
 
     # KROK 1: Kierunek wyłącznie z 24h
-    if abs(change_24h) >= 2.5:
+    strong_24h = abs(change_24h) >= 3.0  # mocny sygnał — samowystarczalny, bez kary za 48h
+    if strong_24h:
         primary_dir: str | None = "down" if change_24h < 0 else "up"
+        trend_score += 3
+        trend_details.append(f"24h:{change_24h:+.1f}%")
+    elif abs(change_24h) >= 2.5:
+        primary_dir = "down" if change_24h < 0 else "up"
         trend_score += 2
         trend_details.append(f"24h:{change_24h:+.1f}%")
     elif abs(change_24h) >= 1.5:
@@ -303,14 +308,17 @@ def detect_regime_new(candles_m15: list[dict], candles_h1: list[dict], current_p
         primary_dir = None  # brak sygnału 24h → nie ma trendu bez struktury
 
     # KROK 2: 48h jako potwierdzenie lub zaprzeczenie
+    # Kara za konflikt NIE dotyczy strong_24h (>= 3%) — nie powinien być karani za historię sprzed spajka
     if abs(change_48h) >= 2.5:
         sec_dir = "down" if change_48h < 0 else "up"
         if primary_dir and sec_dir == primary_dir:
             trend_score += 2   # 48h potwierdza kierunek
             trend_details.append(f"48h:{change_48h:+.1f}%✓")
-        elif primary_dir:
-            trend_score -= 1   # 48h przeczy — kara za konflikt
+        elif primary_dir and not strong_24h:
+            trend_score -= 1   # 48h przeczy — kara za konflikt (tylko gdy 24h < 3%)
             trend_details.append(f"48h:{change_48h:+.1f}%✗")
+        elif primary_dir:
+            trend_details.append(f"48h:{change_48h:+.1f}%~")  # konflikt ignorowany (strong_24h)
 
     # KROK 3: Struktura H1 — tylko w kierunku primary_dir
     if primary_dir == "down":
