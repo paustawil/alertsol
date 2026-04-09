@@ -9,13 +9,19 @@ Uruchomienie:
 
 import argparse
 import bisect
+import io
+import sys
 from datetime import datetime, timezone
 from statistics import mean
+
+# Windows cp1250 fix: force UTF-8 output
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import requests
 
 
-# ── Helpers (kopie z gpt3_validator_backtest.py) ──────────────────────────────
+# -- Helpers (kopie z gpt3_validator_backtest.py) ------------------------------
 
 def calc_atr(candles: list[dict], period: int = 14) -> float:
     trs = [max(c["high"] - c["low"], abs(c["high"] - p["close"]), abs(c["low"] - p["close"]))
@@ -256,7 +262,7 @@ def evaluate_setup(setup, future_m15, entry_window_h=24, tp1_only=False, no_be=F
     return {"wynik": "open", "pnl_tp1": 0, "pnl_tp2": 0}
 
 
-# ── Data fetching (kopie z gpt3_validator_backtest.py) ─────────────────────────
+# -- Data fetching (kopie z gpt3_validator_backtest.py) -------------------------
 
 def fetch_klines_binance(symbol, interval, total, end_ts_s=None):
     okx_bar = {"15m": "15m", "1h": "1H"}[interval]
@@ -339,7 +345,7 @@ def _parse_date_only(s):
     raise ValueError(f"Nieprawidlowy format daty: {s!r}. Uzyj YYYY-MM-DD lub YYYY-MM-DD HH:MM")
 
 
-# ── Setup generators ──────────────────────────────────────────────────────────
+# -- Setup generators ----------------------------------------------------------
 
 def setup_version_a(regime, ctx_m15, ctx_h1, price):
     """
@@ -707,7 +713,7 @@ def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0,
 
     vol_threshold : minimalny vol_ratio (D/G/H/I=2.0, E=1.7)
     swing_n       : lookback świec H1 dla swing points (D/E=12, G/I=24)
-    atr_fallback  : gdy swing TP zbyt blisko ceny → użyj ATR×2.0 jako TP1 (H/I=True)
+    atr_fallback  : gdy swing TP zbyt blisko ceny -> użyj ATR×2.0 jako TP1 (H/I=True)
     """
     regime_name = regime["regime"]
     vol_ratio = regime.get("vol_ratio", 1.0)
@@ -778,9 +784,9 @@ def setup_version_f(regime, ctx_m15, ctx_h1, price):
     Wersja F: VOLUME-SWITCHING — strategia mieszana.
 
     Decyzja na podstawie wolumenu:
-      vol >= 2.0x → market entry natychmiast (jak Wersja D)
-      vol 1.5-2.0x → czekaj na pullback 1-2 świece (jak Wersja A)
-      vol < 1.5x   → brak setupu (IMPULSE nie potwierdzony wolumenem)
+      vol >= 2.0x -> market entry natychmiast (jak Wersja D)
+      vol 1.5-2.0x -> czekaj na pullback 1-2 świece (jak Wersja A)
+      vol < 1.5x   -> brak setupu (IMPULSE nie potwierdzony wolumenem)
 
     Filozofia: silny wolumen = impuls ma momentum, nie czekaj.
     Słabszy wolumen = niepewność, poczekaj na lepszą cenę pullbacku.
@@ -805,7 +811,7 @@ def setup_version_f(regime, ctx_m15, ctx_h1, price):
         return setup
 
 
-# ── Setup generators — TREND & RANGE (live algo simulation) ──────────────────
+# -- Setup generators — TREND & RANGE (live algo simulation) ------------------
 
 def setup_trend_pullback_short(regime, ctx_m15, ctx_h1, price):
     """trend_pullback_short: fib 38-50% korekty — short przy pullbacku w dół."""
@@ -980,7 +986,7 @@ def setup_range_long(regime, ctx_m15, ctx_h1, price):
             "rr": round((tp1 - w) / (w - sl), 2)}
 
 
-# ── Statistics helpers ────────────────────────────────────────────────────────
+# -- Statistics helpers --------------------------------------------------------
 
 def make_stats():
     return {
@@ -1335,13 +1341,13 @@ def record_algo_outcome(stats, key, setup, result):
 
 
 _ALGO_KEYS_LABELS = [
-    ("trend_pb_short",  "TREND_DOWN/IMPULSE_DOWN → fib38-50% pullback short"),
-    ("trend_pb_long",   "TREND_UP/IMPULSE_UP    → fib38-50% pullback long (str>=5)"),
-    ("imp_cont_short",  "IMPULSE_DOWN           → continuation (1-2 greens/6 M15)"),
-    ("range_short",     "RANGE                  → resistance short (3 filtry)"),
-    ("range_long",      "RANGE                  → support long (3 filtry)"),
-    ("impulse_d_short", "IMPULSE_DOWN           → Version D market short (vol>=2.0x)"),
-    ("impulse_d_long",  "IMPULSE_UP             → Version D market long  (vol>=2.0x)"),
+    ("trend_pb_short",  "TREND_DOWN/IMPULSE_DOWN -> fib38-50% pullback short"),
+    ("trend_pb_long",   "TREND_UP/IMPULSE_UP    -> fib38-50% pullback long (str>=5)"),
+    ("imp_cont_short",  "IMPULSE_DOWN           -> continuation (1-2 greens/6 M15)"),
+    ("range_short",     "RANGE                  -> resistance short (3 filtry)"),
+    ("range_long",      "RANGE                  -> support long (3 filtry)"),
+    ("impulse_d_short", "IMPULSE_DOWN           -> Version D market short (vol>=2.0x)"),
+    ("impulse_d_long",  "IMPULSE_UP             -> Version D market long  (vol>=2.0x)"),
 ]
 
 
@@ -1372,7 +1378,7 @@ def print_algo_stats(stats):
             f"TP1 {tp1}/{f} ({t1p}), TP2 {tp2}/{f} ({pct(tp2,f)}), "
             f"SL {sl}/{f} ({pct(sl,f)}), open {op}, avg pnl: {sign}${avg_pnl:.2f}"
         )
-        print(f"  {'':18}  → {label}")
+        print(f"  {'':18}  -> {label}")
     ts = "+" if total_pnl >= 0 else ""
     ta = "+" if (total_pnl / total_filled if total_filled else 0) >= 0 else ""
     avg = total_pnl / total_filled if total_filled > 0 else 0.0
@@ -1418,7 +1424,7 @@ def print_version_stats(name, desc, stats):
             )
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Impulse Backtest — 3 wersje logiki impulse trade")
@@ -1441,7 +1447,7 @@ def main():
         from_ts = now_ts - args.days * 86400
         to_ts = now_ts
 
-    print(f"Zakres: {_ts_fmt(from_ts)} → {_ts_fmt(to_ts)}")
+    print(f"Zakres: {_ts_fmt(from_ts)} -> {_ts_fmt(to_ts)}")
     total_days = (to_ts - from_ts) / 86400
     print(f"Lacznie {total_days:.1f} dni")
 
@@ -1459,23 +1465,23 @@ def main():
     all_h1 = fetch_klines_paginated(symbol, "1h", needed_h1, end_ts_s=to_ts + 3600)
     print(f"Pobrano {len(all_h1)} swiec H1\n")
 
-    # ── Tryb MONTHLY — tylko H1 scan, bez M15 signal loop ─────────────────────
+    # -- Tryb MONTHLY — tylko H1 scan, bez M15 signal loop ---------------------
     if args.monthly:
         m15_times = [c["time"] for c in all_m15]
         h1_times  = [c["time"] for c in all_h1]
         monthly_all  = []   # wariant: wszystkie setupy per H1
         monthly_best = []   # wariant: najlepszy RR per H1 (jak stary Algo2)
         for m_label, m_from, m_to in _month_ranges(from_ts, to_ts):
-            print(f"  Skanuje {m_label} ({_ts_fmt(m_from)} → {_ts_fmt(m_to)})...")
+            print(f"  Skanuje {m_label} ({_ts_fmt(m_from)} -> {_ts_fmt(m_to)})...")
             m_all,  m_reg_all  = run_h1_scan(m_from, m_to, all_m15, all_h1,
                                               m15_times, h1_times)
             m_best, m_reg_best = run_h1_scan_best(m_from, m_to, all_m15, all_h1,
                                                    m15_times, h1_times)
             monthly_all.append((m_label, m_all, m_reg_all))
             monthly_best.append((m_label, m_best, m_reg_best))
-        print("\n── WARIANT A: wszystkie setupy per H1 (obecna logika) ──")
+        print("\n-- WARIANT A: wszystkie setupy per H1 (obecna logika) --")
         print_monthly_table(monthly_all)
-        print("\n── WARIANT B: najlepszy RR per H1 (logika starego Algo2) ──")
+        print("\n-- WARIANT B: najlepszy RR per H1 (logika starego Algo2) --")
         print_monthly_table(monthly_best)
         print()
         return
@@ -1528,7 +1534,7 @@ def main():
         regime_name = regime["regime"]
         direction   = regime.get("direction", "none")
 
-        # ── IMPULSE-ONLY analysis (unchanged) ────────────────────────────────
+        # -- IMPULSE-ONLY analysis (unchanged) --------------------------------
         if regime_name not in ("IMPULSE_DOWN", "IMPULSE_UP"):
             ts += 900
             continue
@@ -1619,7 +1625,7 @@ def main():
             stats_e[direction_key]["total"] += 1
             stats_e_tp1[direction_key]["total"] += 1
 
-        # Version F (volume-switching: vol>=2.0x→market, 1.5-2.0x→pullback)
+        # Version F (volume-switching: vol>=2.0x->market, 1.5-2.0x->pullback)
         setup_f = setup_version_f(regime, ctx_m15, ctx_h1, price)
         res_f = None
         entry_window_f = 1 if (setup_f and "mkt" in setup_f.get("type", "")) else 2
@@ -1683,7 +1689,7 @@ def main():
 
         ts += 900
 
-    # ── H1 ALGO SCAN — wszystkie rezimy, bez cooldown ─────────────────────────
+    # -- H1 ALGO SCAN — wszystkie rezimy, bez cooldown -------------------------
     m15_times = [c["time"] for c in all_m15]
     h1_times  = [c["time"] for c in all_h1]
 
@@ -1705,16 +1711,16 @@ def main():
     print(f"PODSUMOWANIE — {signal_count} sygnalow IMPULSE w zakresie")
     print(f"{'='*70}")
 
-    print(f"\n{'─'*70}")
+    print(f"\n{'-'*70}")
     print("POROWNANIE: TP1+TP2 (split 50/50) vs TP1-ONLY (cala pozycja)")
-    print(f"{'─'*70}")
+    print(f"{'-'*70}")
     print_version_stats("WERSJA D [TP1+TP2 split]", "polowa na TP1, polowa na TP2/BE", stats_d)
     print_version_stats("WERSJA D [TP1-ONLY]",       "cala pozycja zamykana na TP1", stats_d_tp1)
     print_version_stats("WERSJA D [split bez BE]",   "polowa na TP1, polowa na TP2 lub ORYGINALNYM SL", stats_d_nobe)
 
-    print(f"\n{'─'*70}")
+    print(f"\n{'-'*70}")
     print("POROWNANIE TP1-ONLY — kto wygrywa przy zamknieciu calej pozycji na TP1?")
-    print(f"{'─'*70}")
+    print(f"{'-'*70}")
     print_version_stats("WERSJA A [pullback, TP1-only]",    "czeka na 1-2 swiece odreagowania", stats_a_tp1)
     print_version_stats("WERSJA D [market vol>=2.0x, TP1-only]", "agresywne wejscie market", stats_d_tp1)
     print_version_stats("WERSJA E [market vol>=1.7x, TP1-only]", "latwiejszy prog wolumenu", stats_e_tp1)
@@ -1722,32 +1728,32 @@ def main():
     print_version_stats("WERSJA H [ATR fallback, TP1-only]","ATR*2.0 gdy swing zbyt blisko ceny", stats_h_tp1)
     print_version_stats("WERSJA I [G+H, TP1-only]",         "swing n=24 + ATR fallback", stats_i_tp1)
 
-    print(f"\n{'─'*70}")
+    print(f"\n{'-'*70}")
     print("SPLIT BEZ BE vs SPLIT Z BE (polowa pozycji, wersja D)")
-    print(f"{'─'*70}")
+    print(f"{'-'*70}")
     print_version_stats("WERSJA D [split z BE]",   "po TP1 SL przesuniete na entry", stats_d)
     print_version_stats("WERSJA D [split bez BE]", "po TP1 SL zostaje na oryg. poziomie", stats_d_nobe)
     print_version_stats("WERSJA A [split z BE]",   "pullback — po TP1 SL na entry", stats_a)
     print_version_stats("WERSJA A [split bez BE]", "pullback — po TP1 SL na oryg.", stats_a_nobe)
 
-    print(f"\n{'─'*70}")
+    print(f"\n{'-'*70}")
     print("POROWNANIE: NAPRAWA TP1 (wszystkie vol>=2.0x, market entry)")
-    print(f"{'─'*70}")
+    print(f"{'-'*70}")
     print_version_stats("WERSJA D [oryginalna]",   "swing n=12, bez fallback", stats_d)
     print_version_stats("WERSJA G [swing n=24]",   "szerszy lookback swing points", stats_g)
     print_version_stats("WERSJA H [ATR fallback]", "ATR*2.0 gdy swing zbyt blisko ceny", stats_h)
     print_version_stats("WERSJA I [G+H]",          "swing n=24 + ATR fallback", stats_i)
 
-    print(f"\n{'─'*70}")
+    print(f"\n{'-'*70}")
     print("POROWNANIE STRATEGII WEJSCIA")
-    print(f"{'─'*70}")
+    print(f"{'-'*70}")
     print_version_stats("STRATEGIA 1 [pullback]",  "czeka na 1-2 swiece odreagowania (Wersja A)", stats_a)
     print_version_stats("STRATEGIA 2 [agresywna]", "market entry vol>=2.0x (Wersja D)", stats_d)
-    print_version_stats("STRATEGIA 3 [switching]", "vol>=2.0x→market / 1.5-2.0x→pullback (F)", stats_f)
+    print_version_stats("STRATEGIA 3 [switching]", "vol>=2.0x->market / 1.5-2.0x->pullback (F)", stats_f)
 
-    print(f"\n{'─'*70}")
+    print(f"\n{'-'*70}")
     print("SZCZEGOLY POMOCNICZE")
-    print(f"{'─'*70}")
+    print(f"{'-'*70}")
     print_version_stats("WERSJA B", "Fibonacci limit, czeka na pullback", stats_b)
     print_version_stats("WERSJA C", "Fibonacci limit, antycypuje", stats_c)
     print_version_stats("WERSJA E", "market entry natychmiast, vol >= 1.7x", stats_e)
