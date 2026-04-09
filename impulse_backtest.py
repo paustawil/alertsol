@@ -742,6 +742,38 @@ def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0):
     return None
 
 
+def setup_version_f(regime, ctx_m15, ctx_h1, price):
+    """
+    Wersja F: VOLUME-SWITCHING — strategia mieszana.
+
+    Decyzja na podstawie wolumenu:
+      vol >= 2.0x → market entry natychmiast (jak Wersja D)
+      vol 1.5-2.0x → czekaj na pullback 1-2 świece (jak Wersja A)
+      vol < 1.5x   → brak setupu (IMPULSE nie potwierdzony wolumenem)
+
+    Filozofia: silny wolumen = impuls ma momentum, nie czekaj.
+    Słabszy wolumen = niepewność, poczekaj na lepszą cenę pullbacku.
+    """
+    regime_name = regime["regime"]
+    vol_ratio = regime.get("vol_ratio", 1.0)
+
+    if vol_ratio < 1.5:
+        return None
+
+    if vol_ratio >= 2.0:
+        # Market entry (jak D)
+        setup = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
+        if setup:
+            setup["type"] = setup["type"].replace("D_", "F_mkt_")
+        return setup
+    else:
+        # Pullback entry (jak A), ale z wymogiem vol >= 1.5x
+        setup = setup_version_a(regime, ctx_m15, ctx_h1, price)
+        if setup:
+            setup["type"] = setup["type"].replace("A_", "F_pb_")
+        return setup
+
+
 # ── Statistics helpers ────────────────────────────────────────────────────────
 
 def make_stats():
@@ -895,6 +927,7 @@ def main():
     stats_c = make_stats()
     stats_d = make_stats()
     stats_e = make_stats()
+    stats_f = make_stats()
 
     # Cooldown tracking
     last_impulse_ts_down = 0
@@ -993,6 +1026,16 @@ def main():
         elif not is_spike_filtered:
             stats_e[direction_key]["total"] += 1
 
+        # Version F (volume-switching: vol>=2.0x→market, 1.5-2.0x→pullback)
+        setup_f = setup_version_f(regime, ctx_m15, ctx_h1, price)
+        res_f = None
+        entry_window_f = 1 if (setup_f and "mkt" in setup_f.get("type", "")) else 2
+        if setup_f:
+            res_f = evaluate_setup(setup_f, future_m15, entry_window_h=entry_window_f)
+            record_outcome(stats_f, direction_key, res_f, setup_f["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_f[direction_key]["total"] += 1
+
         # Print signal line
         def fmt_res(setup, res):
             if setup is None:
@@ -1006,7 +1049,7 @@ def main():
         spk_tag = f" [SPIKE-FILT spk={spike_score}]" if is_spike_filtered else (f" spk={spike_score}" if spike_score > 0 else "")
         print(
             f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} vol={regime.get('vol_ratio',0):.1f}x str={regime['strength']}{spk_tag} | "
-            f"A={fmt_res(setup_a, res_a)} | B={fmt_res(setup_b, res_b)} | C={fmt_res(setup_c, res_c)} | D={fmt_res(setup_d, res_d)} | E={fmt_res(setup_e, res_e)}"
+            f"A={fmt_res(setup_a, res_a)} | D={fmt_res(setup_d, res_d)} | F={fmt_res(setup_f, res_f)}"
         )
 
         ts += 900
@@ -1016,11 +1059,19 @@ def main():
     print(f"PODSUMOWANIE — {signal_count} sygnalow IMPULSE w zakresie")
     print(f"{'='*70}")
 
-    print_version_stats("WERSJA A", "green/red candles (pullback 1-2 swiece)", stats_a)
+    print(f"\n{'─'*70}")
+    print("POROWNANIE STRATEGII (kluczowe 3)")
+    print(f"{'─'*70}")
+    print_version_stats("STRATEGIA 1 [pullback]",   "czeka na 1-2 swiece odreagowania (Wersja A)", stats_a)
+    print_version_stats("STRATEGIA 2 [agresywna]",  "market entry natychmiast, vol >= 2.0x (Wersja D)", stats_d)
+    print_version_stats("STRATEGIA 3 [switching]",  "vol>=2.0x→market / 1.5-2.0x→pullback (Wersja F)", stats_f)
+
+    print(f"\n{'─'*70}")
+    print("SZCZEGOLY POMOCNICZE")
+    print(f"{'─'*70}")
     print_version_stats("WERSJA B", "Fibonacci limit, czeka na pullback", stats_b)
     print_version_stats("WERSJA C", "Fibonacci limit, antycypuje", stats_c)
-    print_version_stats("WERSJA D", "market entry natychmiast, vol >= 2.0x [AGRESYWNA]", stats_d)
-    print_version_stats("WERSJA E", "market entry natychmiast, vol >= 1.7x [AGRESYWNA-]", stats_e)
+    print_version_stats("WERSJA E", "market entry natychmiast, vol >= 1.7x", stats_e)
 
     print()
 
