@@ -3264,6 +3264,13 @@ def grok_shadow_main() -> None:
         "reasoning":    " | ".join(filter(None, [grok_result.get("analiza", ""), grok_result.get("akcja", "")])),
     }
 
+    # Blokuj setupy sprzeczne z dominującym reżimem rynkowym — wyłączone
+    # regime_conflict = _grok_regime_conflict(bias, regime)
+    # if regime_conflict:
+    #     print(f"[grok] Konflikt reżimu ({regime_conflict}) — setup zablokowany.")
+    #     log_to_alerty("Grok", f"konflikt_reżimu: {regime_conflict}", grok_setup)
+    #     return
+
     rejection = validate_setup(grok_setup, "Grok")
     if rejection:
         print(f"[grok] Odrzucony walidacją: {rejection}")
@@ -3463,6 +3470,11 @@ def check_stale_setups(regime: dict, current_price: float):
             reason = f"cena uciekła ({dist_pct:.1%} od entry ${w1:.2f})"
 
         # 2. Reżim zmienił kierunek — wyłączone (algorytm trendu zbyt zawodny)
+        # if not reason and regime_dir != "none":
+        #     if d == "short" and regime_dir == "up":
+        #         reason = f"zmiana reżimu na {regime['regime']} (setup short)"
+        #     elif d == "long" and regime_dir == "down":
+        #         reason = f"zmiana reżimu na {regime['regime']} (setup long)"
 
         # 3. Cena przebiła TP1 bez wejścia w pozycję
         if not reason and s.get("tps"):
@@ -3603,6 +3615,22 @@ def check_open_setups_invalidation(regime: dict, current_price: float) -> None:
 
         # Zasada 1 (reżim): wyłączona — algorytm trendu zbyt zawodny by inwalidować
         # otwarte pozycje. Otwarte setupy żyją do SL/TP/timeout.
+        # regime_conflict = (direction == "short" and regime_dir == "up") or \
+        #                   (direction == "long"  and regime_dir == "down")
+        # if regime_conflict:
+        #     if avg_entry and sl and tp1:
+        #         in_profit = abs(current_price - float(tp1)) < abs(current_price - float(sl))
+        #     elif avg_entry:
+        #         in_profit = (direction == "long"  and current_price >= float(avg_entry)) or \
+        #                     (direction == "short" and current_price <= float(avg_entry))
+        #     else:
+        #         in_profit = False
+        #     if in_profit:
+        #         action = "move_sl_to_entry"
+        #         reason = f"zmiana reżimu na {regime['regime']} (setup {direction.upper()}, na plusie → BE)"
+        #     else:
+        #         action = "close"
+        #         reason = f"zmiana reżimu na {regime['regime']} (setup {direction.upper()}, na minusie → zamknięcie)"
 
         # Zasada 2: Timeout od wejścia
         if age_h > OPEN_TRADE_TIMEOUT_H:
