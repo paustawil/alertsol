@@ -2,8 +2,9 @@
 """
 regime_backtest.py — Porównanie nowej vs starej logiki reżimu pod kątem wyników TP/SL.
 
-Używa tej samej logiki setupów (algo_detect_setups z diagnose_regime.py)
-ale z dwiema różnymi funkcjami detekcji reżimu:
+Obie logiki reżimu testowane są na TYM SAMYM generatorze setupów — wiernej
+kopii algo_detect_setups z sol_alert.py (produkcja), bez sprawdzania świeżości.
+
   - STARA: detect_market_regime z sol_alert.py (produkcja)
   - NOWA:  detect_regime_new   z diagnose_regime.py (prototyp)
 
@@ -18,10 +19,178 @@ import sys
 from collections import defaultdict
 
 from diagnose_regime import (
-    detect_regime_new, algo_detect_setups, evaluate_setup,
+    detect_regime_new, evaluate_setup,
     fetch_klines_paginated, _ts_fmt, _parse_dt,
     calc_atr, h1_trend, impulse_strength, detect_range,
+    find_swing_points, find_consolidation,
 )
+
+
+# ── Generator setupów — wierna kopia algo_detect_setups z sol_alert.py ───────
+# Różnice vs diagnose_regime.py:
+#   - trend_consolidation_short WYŁĄCZONY (if False — identycznie jak produkcja)
+#   - RANGE: filtry momentum, touches, MA alignment — identycznie jak produkcja
+#   - Brak freshness check (zbędny w backteście)
+
+def prod_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[dict],
+                       current_price: float) -> list[dict]:
+    """Produkcyjna logika setupów (sol_alert.algo_detect_setups) bez freshness check."""
+    regime_name = regime["regime"]
+    direction   = regime.get("direction", "none")
+    strength    = regime.get("strength", regime.get("score", 0))
+    atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
+    setups = []
+
+    if atr <= 0:
+        return setups
+
+    max_entry_dist = current_price * 0.03  # 3%
+
+    # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────────
+    if direction == "down":
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+        swing_low  = min(swing_low,  current_price)
+        swing_high = max(swing_high, current_price)
+
+        # trend_consolidation_short — WYŁĄCZONY (jak w produkcji: if False)
+        # consol = None
+
+        # trend_pullback_short — 38-50% korekty
+        if swing_high > swing_low:
+            sr = swing_high - swing_low
+            fib38 = swing_low + sr * 0.38
+            fib50 = swing_low + sr * 0.50
+            fib618 = swing_low + sr * 0.618
+            w  = round((fib38 + fib50) / 2, 2)
+            sl = round(fib618 + atr * 0.3, 2)
+            tp1 = round(swing_low, 2)
+            tp2 = round(swing_low - sr * 0.3, 2)
+            rr_ok    = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+            above_p  = w > current_price * 1.003
+            dist_ok  = w - current_price <= max_entry_dist
+            if rr_ok and above_p and dist_ok:
+                setups.append({
+                    "type": "trend_pullback_short", "direction": "short",
+                    "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                    "rr": round((w - tp1) / (sl - w), 1),
+                })
+
+        # impulse_continuation_short — mini-pullback (tylko IMPULSE)
+        if regime_name.startswith("IMPULSE_"):
+            last6 = candles_m15[-6:]
+            greens = [c for c in last6 if c["close"] > c["open"]]
+            if 1 <= len(greens) <= 2:
+                pb_high = max(c["high"] for c in last6[-2:])
+                w  = round(pb_high, 2)
+                sl = round(pb_high + atr * 0.8, 2)
+                tp1 = round(swing_low, 2)
+                tp2 = round(swing_low - atr, 2)
+                rr_ok   = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                dist_ok = abs(w - current_price) <= max_entry_dist
+                if rr_ok and dist_ok:
+                    setups.append({
+                        "type": "impulse_continuation_short", "direction": "short",
+                        "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                        "rr": round((w - tp1) / (sl - w), 1),
+                    })
+
+    # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────────
+    elif direction == "up":
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+        swing_low  = min(swing_low,  current_price)
+        swing_high = max(swing_high, current_price)
+
+        # trend_consolidation_long — WYŁĄCZONY (jak w produkcji)
+
+        # trend_pullback_long — wymaga strength >= 5
+        if swing_high > swing_low and strength >= 5:
+            sr = swing_high - swing_low
+            fib38 = swing_high - sr * 0.38
+            fib50 = swing_high - sr * 0.50
+            fib618 = swing_high - sr * 0.618
+            w  = round((fib38 + fib50) / 2, 2)
+            sl = round(fib618 - atr * 0.3, 2)
+            tp1 = round(swing_high, 2)
+            tp2 = round(swing_high + sr * 0.3, 2)
+            below_p = w < current_price * 0.997
+            dist_ok = current_price - w <= max_entry_dist
+            if (sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                    and below_p and dist_ok):
+                setups.append({
+                    "type": "trend_pullback_long", "direction": "long",
+                    "w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                })
+
+    # ── RANGE ─────────────────────────────────────────────────────────────────
+    elif regime_name == "RANGE":
+        rng = detect_range(candles_h1)
+        sup, res = rng["support"], rng["resistance"]
+        rng_size = res - sup
+        if rng_size > atr * 1.5:
+            # ── range_resistance_short ────────────────────────────────────────
+            w  = res - rng_size * 0.1
+            sl = res + atr * 1.0
+            tp1 = sup + rng_size * 0.5
+            tp2 = sup + rng_size * 0.1
+            dist_ok = abs(w - current_price) <= max_entry_dist
+            rr_ok   = (w - tp1) / (sl - w) >= 1.5
+
+            # Filtr 1: momentum — nie shortuj przy silnym wzroście
+            last6s = candles_m15[-6:]
+            bull_cnt = sum(1 for c in last6s if c["close"] > c["open"])
+            m15_rise = (last6s[-1]["close"] - last6s[0]["open"]) / last6s[0]["open"] * 100
+            momentum_ok_s = not (bull_cnt >= 5 or m15_rise > 1.5)
+
+            # Filtr 2: touches — opór musi mieć min 2 testy
+            touches_ok_s = rng["r_touches"] >= 2
+
+            # Filtr 3: MA alignment — nie shortuj gdy cena > MA30 > MA60
+            closes_s = [c["close"] for c in candles_m15]
+            ma30_s = sum(closes_s[-30:]) / 30 if len(closes_s) >= 30 else None
+            ma60_s = sum(closes_s[-60:]) / 60 if len(closes_s) >= 60 else None
+            ma_ok_s = not (ma30_s and ma60_s and current_price > ma30_s > ma60_s)
+
+            if rr_ok and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s:
+                setups.append({
+                    "type": "range_resistance_short", "direction": "short",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((w - tp1) / (sl - w), 1),
+                })
+
+            # ── range_support_long ────────────────────────────────────────────
+            w  = sup + rng_size * 0.1
+            sl = sup - atr * 1.0
+            tp1 = sup + rng_size * 0.5
+            tp2 = res - rng_size * 0.1
+            dist_ok = abs(w - current_price) <= max_entry_dist
+            rr_ok   = (tp1 - w) / (w - sl) >= 1.5
+
+            # Filtr 1: momentum — nie kupuj przy silnym spadku
+            last6 = candles_m15[-6:]
+            bear_cnt = sum(1 for c in last6 if c["close"] < c["open"])
+            m15_drop = (last6[-1]["close"] - last6[0]["open"]) / last6[0]["open"] * 100
+            momentum_ok = not (bear_cnt >= 5 or m15_drop < -1.5)
+
+            # Filtr 2: touches — wsparcie musi mieć min 2 odbicia
+            touches_ok = rng["s_touches"] >= 2
+
+            # Filtr 3: MA alignment — nie kupuj gdy cena < MA30 < MA60
+            closes = [c["close"] for c in candles_m15]
+            ma30 = sum(closes[-30:]) / 30 if len(closes) >= 30 else None
+            ma60 = sum(closes[-60:]) / 60 if len(closes) >= 60 else None
+            ma_ok = not (ma30 and ma60 and current_price < ma30 < ma60)
+
+            if rr_ok and dist_ok and momentum_ok and touches_ok and ma_ok:
+                setups.append({
+                    "type": "range_support_long", "direction": "long",
+                    "w": round(w, 2), "sl": round(sl, 2),
+                    "tp1": round(tp1, 2), "tp2": round(tp2, 2),
+                    "rr": round((tp1 - w) / (w - sl), 1),
+                })
+
+    return setups
 
 
 # ── Stara logika reżimu — kopia z sol_alert.py (bez external imports) ────────
@@ -191,7 +360,7 @@ def run_backtest(regime_fn, all_m15: list[dict], all_h1: list[dict],
         regime = regime_fn(ctx_m15, ctx_h1, price)
         stats["regime_counts"][regime["regime"]] += 1
 
-        setups = algo_detect_setups(regime, ctx_m15, ctx_h1, price)
+        setups = prod_detect_setups(regime, ctx_m15, ctx_h1, price)
         if not setups:
             continue
 
