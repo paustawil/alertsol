@@ -804,6 +804,181 @@ def setup_version_f(regime, ctx_m15, ctx_h1, price):
         return setup
 
 
+# ── Setup generators — TREND & RANGE (live algo simulation) ──────────────────
+
+def setup_trend_pullback_short(regime, ctx_m15, ctx_h1, price):
+    """trend_pullback_short: fib 38-50% korekty — short przy pullbacku w dół."""
+    if regime.get("direction", "none") != "down":
+        return None
+    atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
+    if atr <= 0:
+        return None
+    swing_high, swing_low = find_swing_points(ctx_h1, n=12)
+    swing_low = min(swing_low, price)
+    swing_high = max(swing_high, price)
+    if swing_high <= swing_low:
+        return None
+    swing_range = swing_high - swing_low
+    fib38 = swing_low + swing_range * 0.38
+    fib50 = swing_low + swing_range * 0.50
+    fib618 = swing_low + swing_range * 0.618
+    w  = round((fib38 + fib50) / 2, 2)
+    sl = round(fib618 + atr * 0.3, 2)
+    tp1 = round(swing_low, 2)
+    tp2 = round(swing_low - swing_range * 0.3, 2)
+    if not (sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5):
+        return None
+    if not (w > price * 1.003 and w - price <= price * 0.03):
+        return None
+    return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+            "direction": "short", "type": f"TPBS_{regime['regime']}",
+            "rr": round((w - tp1) / (sl - w), 2)}
+
+
+def setup_trend_pullback_long(regime, ctx_m15, ctx_h1, price):
+    """trend_pullback_long: fib 38-50% korekty — long przy pullbacku w górę. Wymaga strength >= 5."""
+    if regime.get("direction", "none") != "up":
+        return None
+    if regime.get("strength", 0) < 5:
+        return None
+    atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
+    if atr <= 0:
+        return None
+    swing_high, swing_low = find_swing_points(ctx_h1, n=12)
+    swing_low = min(swing_low, price)
+    swing_high = max(swing_high, price)
+    if swing_high <= swing_low:
+        return None
+    swing_range = swing_high - swing_low
+    fib38 = swing_high - swing_range * 0.38
+    fib50 = swing_high - swing_range * 0.50
+    fib618 = swing_high - swing_range * 0.618
+    w  = round((fib38 + fib50) / 2, 2)
+    sl = round(fib618 - atr * 0.3, 2)
+    tp1 = round(swing_high, 2)
+    tp2 = round(swing_high + swing_range * 0.3, 2)
+    if not (sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5):
+        return None
+    if not (w < price * 0.997 and price - w <= price * 0.03):
+        return None
+    return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+            "direction": "long", "type": f"TPBL_{regime['regime']}",
+            "rr": round((tp1 - w) / (w - sl), 2)}
+
+
+def setup_impulse_cont_short(regime, ctx_m15, ctx_h1, price):
+    """impulse_continuation_short: mini-pullback w impulsie (1-2 zielone z 6 ostatnich M15)."""
+    if not regime["regime"].startswith("IMPULSE_DOWN"):
+        return None
+    atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
+    if atr <= 0:
+        return None
+    last6 = ctx_m15[-6:]
+    greens = [c for c in last6 if c["close"] > c["open"]]
+    if not (1 <= len(greens) <= 2):
+        return None
+    swing_high, swing_low = find_swing_points(ctx_h1, n=12)
+    swing_low = min(swing_low, price)
+    pullback_high = max(c["high"] for c in last6[-2:])
+    w  = round(pullback_high, 2)
+    sl = round(pullback_high + atr * 0.8, 2)
+    tp1 = round(swing_low, 2)
+    tp2 = round(swing_low - atr, 2)
+    if sl <= w or tp1 >= w:
+        return None
+    if abs(w - price) > price * 0.03:
+        return None
+    risk = sl - w
+    reward = w - tp1
+    if risk <= 0 or reward / risk < 1.5:
+        return None
+    return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+            "direction": "short", "type": "IMP_CONT_short",
+            "rr": round(reward / risk, 2)}
+
+
+def setup_range_short(regime, ctx_m15, ctx_h1, price):
+    """range_resistance_short: short przy górnej granicy range (z 3 filtrami z live algo)."""
+    if regime["regime"] != "RANGE":
+        return None
+    atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
+    if atr <= 0:
+        return None
+    rng = detect_range(ctx_h1)
+    sup, res = rng["support"], rng["resistance"]
+    rng_size = res - sup
+    if rng_size <= atr * 1.5:
+        return None
+    w  = round(res - rng_size * 0.1, 2)
+    sl = round(res + atr * 1.0, 2)
+    tp1 = round(sup + rng_size * 0.5, 2)
+    tp2 = round(sup + rng_size * 0.1, 2)
+    if abs(w - price) > price * 0.03:
+        return None
+    if (sl - w) <= 0 or (w - tp1) / (sl - w) < 1.5:
+        return None
+    # Filtr 1: momentum
+    last6 = ctx_m15[-6:]
+    bullish_count = sum(1 for c in last6 if c["close"] > c["open"])
+    m15_rise = (last6[-1]["close"] - last6[0]["open"]) / last6[0]["open"] * 100
+    if bullish_count >= 5 or m15_rise > 1.5:
+        return None
+    # Filtr 2: touches
+    if rng["r_touches"] < 2:
+        return None
+    # Filtr 3: MA alignment
+    closes = [c["close"] for c in ctx_m15]
+    if len(closes) >= 30:
+        ma30 = sum(closes[-30:]) / 30
+        ma60 = sum(closes[-60:]) / min(60, len(closes))
+        if price > ma30 > ma60:
+            return None
+    return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+            "direction": "short", "type": "RANGE_short",
+            "rr": round((w - tp1) / (sl - w), 2)}
+
+
+def setup_range_long(regime, ctx_m15, ctx_h1, price):
+    """range_support_long: long przy dolnej granicy range (z 3 filtrami z live algo)."""
+    if regime["regime"] != "RANGE":
+        return None
+    atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
+    if atr <= 0:
+        return None
+    rng = detect_range(ctx_h1)
+    sup, res = rng["support"], rng["resistance"]
+    rng_size = res - sup
+    if rng_size <= atr * 1.5:
+        return None
+    w  = round(sup + rng_size * 0.1, 2)
+    sl = round(sup - atr * 1.0, 2)
+    tp1 = round(sup + rng_size * 0.5, 2)
+    tp2 = round(res - rng_size * 0.1, 2)
+    if abs(w - price) > price * 0.03:
+        return None
+    if (w - sl) <= 0 or (tp1 - w) / (w - sl) < 1.5:
+        return None
+    # Filtr 1: momentum
+    last6 = ctx_m15[-6:]
+    bearish_count = sum(1 for c in last6 if c["close"] < c["open"])
+    m15_drop = (last6[-1]["close"] - last6[0]["open"]) / last6[0]["open"] * 100
+    if bearish_count >= 5 or m15_drop < -1.5:
+        return None
+    # Filtr 2: touches
+    if rng["s_touches"] < 2:
+        return None
+    # Filtr 3: MA alignment
+    closes = [c["close"] for c in ctx_m15]
+    if len(closes) >= 30:
+        ma30 = sum(closes[-30:]) / 30
+        ma60 = sum(closes[-60:]) / min(60, len(closes))
+        if price < ma30 < ma60:
+            return None
+    return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+            "direction": "long", "type": "RANGE_long",
+            "rr": round((tp1 - w) / (w - sl), 2)}
+
+
 # ── Statistics helpers ────────────────────────────────────────────────────────
 
 def make_stats():
@@ -879,6 +1054,99 @@ def record_outcome(stats, direction_key, result, entry_price, spike_filtered=Fal
         st["pnl_tp2_sum"] += result["pnl_tp2"] * scale
     elif wynik == "open":
         st["open"] += 1
+
+
+def make_algo_stats():
+    def _entry():
+        return {
+            "total": 0, "filled": 0,
+            "tp1_wins": 0, "tp2_wins": 0, "sl_losses": 0, "open": 0,
+            "pnl_tp1_sum": 0.0, "pnl_tp2_sum": 0.0,
+        }
+    return {
+        "trend_pb_short":  _entry(),  # TREND_DOWN + IMPULSE_DOWN fib pullback
+        "trend_pb_long":   _entry(),  # TREND_UP + IMPULSE_UP fib pullback (str>=5)
+        "imp_cont_short":  _entry(),  # IMPULSE_DOWN continuation (1-2 greens/6)
+        "range_short":     _entry(),  # RANGE resistance short
+        "range_long":      _entry(),  # RANGE support long
+        "impulse_d_short": _entry(),  # IMPULSE_DOWN Version D (vol>=2.0x, spike-filter)
+        "impulse_d_long":  _entry(),  # IMPULSE_UP Version D (vol>=2.0x, spike-filter)
+    }
+
+
+def record_algo_outcome(stats, key, setup, result):
+    """Rejestruje wynik setupu algo — wywoływana tylko gdy setup wygenerowany."""
+    st = stats[key]
+    st["total"] += 1
+    wynik = result["wynik"]
+    if wynik == "no_entry":
+        return
+    st["filled"] += 1
+    scale = 100.0 / setup["w"] if setup["w"] > 0 else 1.0
+    if wynik in ("TP1+TP2", "TP1"):
+        st["tp1_wins"] += 1
+        st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
+        st["pnl_tp2_sum"] += result["pnl_tp2"] * scale
+        if wynik == "TP1+TP2":
+            st["tp2_wins"] += 1
+    elif wynik == "TP1+BE":
+        st["tp1_wins"] += 1
+        st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
+    elif wynik == "TP1+SL":
+        st["tp1_wins"] += 1
+        st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
+        st["pnl_tp2_sum"] += result["pnl_tp2"] * scale
+    elif wynik == "SL":
+        st["sl_losses"] += 1
+        st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
+        st["pnl_tp2_sum"] += result["pnl_tp2"] * scale
+    elif wynik == "open":
+        st["open"] += 1
+
+
+_ALGO_KEYS_LABELS = [
+    ("trend_pb_short",  "TREND_DOWN/IMPULSE_DOWN → fib38-50% pullback short"),
+    ("trend_pb_long",   "TREND_UP/IMPULSE_UP    → fib38-50% pullback long (str>=5)"),
+    ("imp_cont_short",  "IMPULSE_DOWN           → continuation (1-2 greens/6 M15)"),
+    ("range_short",     "RANGE                  → resistance short (3 filtry)"),
+    ("range_long",      "RANGE                  → support long (3 filtry)"),
+    ("impulse_d_short", "IMPULSE_DOWN           → Version D market short (vol>=2.0x)"),
+    ("impulse_d_long",  "IMPULSE_UP             → Version D market long  (vol>=2.0x)"),
+]
+
+
+def print_algo_stats(stats):
+    print(f"\n{'='*70}")
+    print("SYMULACJA LIVE ALGO — WSZYSTKIE REZIMY (split 50/50 z BE)")
+    print("  total = liczba wygenerowanych alertow (po cooldown 4h per kierunek)")
+    print(f"{'='*70}")
+    total_pnl = 0.0
+    total_filled = 0
+    for key, label in _ALGO_KEYS_LABELS:
+        st = stats[key]
+        n = st["total"]
+        f = st["filled"]
+        tp1 = st["tp1_wins"]
+        tp2 = st["tp2_wins"]
+        sl = st["sl_losses"]
+        op = st["open"]
+        avg_pnl = (st["pnl_tp1_sum"] + st["pnl_tp2_sum"]) / f if f > 0 else 0.0
+        total_pnl += st["pnl_tp1_sum"] + st["pnl_tp2_sum"]
+        total_filled += f
+        sign = "+" if avg_pnl >= 0 else ""
+        fp = f"{f/n*100:.0f}%" if n > 0 else "N/A"
+        t1p = f"{tp1/f*100:.0f}%" if f > 0 else "N/A"
+        print(
+            f"  {key:<18}: {n:3d} alertow, fill {f}/{n} ({fp}), "
+            f"TP1 {tp1}/{f} ({t1p}), TP2 {tp2}/{f} ({pct(tp2,f)}), "
+            f"SL {sl}/{f} ({pct(sl,f)}), open {op}, avg pnl: {sign}${avg_pnl:.2f}"
+        )
+        print(f"  {'':18}  → {label}")
+    ts = "+" if total_pnl >= 0 else ""
+    ta = "+" if (total_pnl / total_filled if total_filled else 0) >= 0 else ""
+    avg = total_pnl / total_filled if total_filled > 0 else 0.0
+    print(f"\n  LACZNIE: {total_filled} wejsc, avg: {ta}${avg:.2f}/transakcje, "
+          f"suma pnl: {ts}${total_pnl:.2f}")
 
 
 def pct(num, denom):
@@ -977,10 +1245,19 @@ def main():
     stats_d_nobe = make_stats()  # D  split bez BE (oryg. SL na 2. połowie)
     stats_a_nobe = make_stats()  # A  split bez BE
 
-    # Cooldown tracking
+    # Live algo stats — wszystkie rezimy
+    stats_algo = make_algo_stats()
+
+    # Cooldown tracking — IMPULSE-only analysis
     last_impulse_ts_down = 0
     last_impulse_ts_up = 0
     cooldown_s = 4 * 3600
+
+    # Cooldown tracking — live algo (all regimes), per kierunek
+    last_algo_down_ts  = 0
+    last_algo_up_ts    = 0
+    last_algo_range_ts = 0
+    algo_cooldown_s    = 4 * 3600
 
     signal_count = 0
 
@@ -998,7 +1275,61 @@ def main():
         price = ctx_m15[-1]["close"]
         regime = detect_regime_new(ctx_m15, ctx_h1, price)
         regime_name = regime["regime"]
+        direction   = regime.get("direction", "none")
 
+        # ── LIVE ALGO — wszystkie rezimy ────────────────────────────────────
+        future_m15_algo = [c for c in all_m15 if c["time"] >= ts][:200]
+        if future_m15_algo:
+            if direction == "down" and ts - last_algo_down_ts >= algo_cooldown_s:
+                last_algo_down_ts = ts
+                # Trend/impulse pullback short (fib38-50%)
+                s = setup_trend_pullback_short(regime, ctx_m15, ctx_h1, price)
+                if s:
+                    res = evaluate_setup(s, future_m15_algo, entry_window_h=24)
+                    record_algo_outcome(stats_algo, "trend_pb_short", s, res)
+                if regime_name == "IMPULSE_DOWN":
+                    # Impulse continuation (1-2 greens)
+                    s = setup_impulse_cont_short(regime, ctx_m15, ctx_h1, price)
+                    if s:
+                        res = evaluate_setup(s, future_m15_algo, entry_window_h=24)
+                        record_algo_outcome(stats_algo, "imp_cont_short", s, res)
+                    # Version D market entry (z spike-filter)
+                    _, is_spk = compute_spike_filter(ctx_m15, "down")
+                    if not is_spk:
+                        s = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
+                        if s:
+                            res = evaluate_setup(s, future_m15_algo, entry_window_h=1)
+                            record_algo_outcome(stats_algo, "impulse_d_short", s, res)
+
+            elif direction == "up" and ts - last_algo_up_ts >= algo_cooldown_s:
+                last_algo_up_ts = ts
+                # Trend/impulse pullback long (fib38-50%, strength>=5)
+                s = setup_trend_pullback_long(regime, ctx_m15, ctx_h1, price)
+                if s:
+                    res = evaluate_setup(s, future_m15_algo, entry_window_h=24)
+                    record_algo_outcome(stats_algo, "trend_pb_long", s, res)
+                if regime_name == "IMPULSE_UP":
+                    # Version D market entry (z spike-filter)
+                    _, is_spk = compute_spike_filter(ctx_m15, "up")
+                    if not is_spk:
+                        s = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
+                        if s:
+                            res = evaluate_setup(s, future_m15_algo, entry_window_h=1)
+                            record_algo_outcome(stats_algo, "impulse_d_long", s, res)
+
+            elif regime_name == "RANGE" and ts - last_algo_range_ts >= algo_cooldown_s:
+                s_short = setup_range_short(regime, ctx_m15, ctx_h1, price)
+                s_long  = setup_range_long(regime, ctx_m15, ctx_h1, price)
+                if s_short or s_long:
+                    last_algo_range_ts = ts
+                    if s_short:
+                        res = evaluate_setup(s_short, future_m15_algo, entry_window_h=24)
+                        record_algo_outcome(stats_algo, "range_short", s_short, res)
+                    if s_long:
+                        res = evaluate_setup(s_long, future_m15_algo, entry_window_h=24)
+                        record_algo_outcome(stats_algo, "range_long", s_long, res)
+
+        # ── IMPULSE-ONLY analysis (unchanged) ────────────────────────────────
         if regime_name not in ("IMPULSE_DOWN", "IMPULSE_UP"):
             ts += 900
             continue
@@ -1204,6 +1535,8 @@ def main():
     print_version_stats("WERSJA B", "Fibonacci limit, czeka na pullback", stats_b)
     print_version_stats("WERSJA C", "Fibonacci limit, antycypuje", stats_c)
     print_version_stats("WERSJA E", "market entry natychmiast, vol >= 1.7x", stats_e)
+
+    print_algo_stats(stats_algo)
 
     print()
 
