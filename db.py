@@ -30,12 +30,14 @@ _thread_local = threading.local()
 # Pola exchange_* monitorowane przez exchange_trader.py
 _EXCHANGE_FIELDS = [
     "exchange_plan_oid",
+    "exchange_plan2_oid",
     "exchange_qty_full",
     "exchange_qty_half",
     "exchange_position_opened",
     "exchange_tp1_oid",
     "exchange_tp2_oid",
     "exchange_sl_oid",
+    "exchange_sl2_oid",
     "exchange_tp1_done",
     "exchange_done",
 ]

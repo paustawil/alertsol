@@ -49,12 +49,14 @@ CREATE TABLE IF NOT EXISTS setups (
 
     -- Exchange (Bitget) order tracking
     exchange_plan_oid         TEXT,
+    exchange_plan2_oid        TEXT,
     exchange_qty_full         TEXT,
     exchange_qty_half         TEXT,
     exchange_position_opened  BOOLEAN NOT NULL DEFAULT FALSE,
     exchange_tp1_oid          TEXT,
     exchange_tp2_oid          TEXT,
     exchange_sl_oid           TEXT,
+    exchange_sl2_oid          TEXT,
     exchange_tp1_done         BOOLEAN NOT NULL DEFAULT FALSE,
     exchange_done             BOOLEAN NOT NULL DEFAULT FALSE,
 
@@ -106,12 +108,14 @@ ALTER TABLE setups ADD COLUMN IF NOT EXISTS cancel_reason          TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS cancel_time            TIMESTAMPTZ;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS cancel_price           NUMERIC(10,2);
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_plan_oid      TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_plan2_oid     TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_qty_full      TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_qty_half      TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_position_opened BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_tp1_oid       TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_tp2_oid       TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_sl_oid        TEXT;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_sl2_oid       TEXT;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_tp1_done      BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_done          BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS resolved_at            TIMESTAMPTZ;

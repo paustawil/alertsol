@@ -3,15 +3,19 @@
 Exchange Trader — Bitget USDT-M Futures (SOLUSDT Perpetual)
 
 Flow dla każdego setupu:
-  1. Nowy setup → 1 plan order przy W1 (pełna pozycja, bez presetów TP/SL)
-  2. Plan order wykonany → 3 TPSL ordery:
-       TP1: profit_plan, half_qty SOL, trigger=TP1
-       TP2: profit_plan, half_qty SOL, trigger=TP2
-       SL:  loss_plan,   full_qty SOL, trigger=SL
+  1. Nowy setup → 2 plan ordery przy W1, każdy half_qty z preset TP i SL:
+       Plan 1: half_qty, trigger=W1, preset TP=TP1, preset SL=SL
+       Plan 2: half_qty, trigger=W1, preset TP=TP2, preset SL=SL
+  2. Oba plan ordery wykonane → Bitget tworzy 4 TPSL ordery:
+       TP1: profit_plan, half_qty, trigger=TP1  → exchange_tp1_oid
+       TP2: profit_plan, half_qty, trigger=TP2  → exchange_tp2_oid
+       SL1: loss_plan,   half_qty, trigger=SL   → exchange_sl_oid   (dla pary TP1)
+       SL2: loss_plan,   half_qty, trigger=SL   → exchange_sl2_oid  (dla pary TP2)
   3. Monitoring TPSL:
-       SL wykonany  → anuluj TP1 i TP2
-       TP1 wykonany → zmodyfikuj SL: size=half_qty, trigger=SLpoTP1
-       TP2 wykonany → anuluj SL
+       SL1 lub SL2 wykonany → anuluj TP1, TP2; SL2/SL1 auto-zamyka resztę
+       TP1 wykonany → anuluj SL1; zmodyfikuj SL2: trigger=entry (BE)
+       TP2 wykonany (po TP1) → anuluj SL2 (BE); resolve TP1+TP2
+       SL2-BE wykonany (po TP1) → resolve TP1+BE
 
 Wymagane zmienne środowiskowe:
   BITGET_API_KEY, BITGET_API_SECRET, BITGET_PASSPHRASE
@@ -202,102 +206,125 @@ def _set_leverage(client: BitgetClient):
 
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
-def _place_entry_plan_order(client: BitgetClient, s: dict, full_qty: float) -> str | None:
+def _place_entry_plan_orders(
+    client: BitgetClient, s: dict, half_qty: float
+) -> tuple[str | None, str | None]:
     """
-    Składa plan order przy W1 z preset TP1 i SL (jeśli dostępne).
-    Po triggerze plan order, preset TP/SL stają się osobnymi TPSL orderami na Bitget.
-    Zwraca orderId lub None.
+    Składa DWA plan ordery przy W1, każdy na half_qty z preset TP i SL:
+      Plan 1: half_qty, preset TP=TP1, preset SL=SL
+      Plan 2: half_qty, preset TP=TP2, preset SL=SL
+
+    Po triggerze każdego plan order Bitget automatycznie tworzy odpowiednie
+    TPSL ordery (profit_plan + loss_plan) dla tej połowy pozycji.
+
+    Zwraca (plan1_oid, plan2_oid) lub (None, None) przy błędzie.
     """
     direction = s["direction"]
     w1        = s["entries"][0]
     side      = "buy" if direction == "long" else "sell"
     tps       = s.get("tps", [])
     tp1       = tps[0] if len(tps) > 0 else None
-    sl        = s.get("sl")
-
-    params = {
-        "symbol":       SYMBOL,
-        "productType":  PRODUCT_TYPE,
-        "marginMode":   MARGIN_MODE,
-        "marginCoin":   MARGIN_COIN,
-        "planType":     "normal_plan",
-        "size":         _fmt_qty(full_qty),
-        "triggerPrice": _fmt_price(w1),
-        "triggerType":  "mark_price",
-        "side":         side,
-        "tradeSide":    "open",
-        "posSide":      direction,
-        "orderType":    "market",
-    }
-
-    # Preset TP/SL — aktywują się automatycznie po wejściu w pozycję
-    if tp1 is not None:
-        params["stopSurplusTriggerPrice"] = _fmt_price(tp1)
-        params["stopSurplusTriggerType"]  = "mark_price"
-    if sl is not None:
-        params["stopLossTriggerPrice"] = _fmt_price(sl)
-        params["stopLossTriggerType"]  = "mark_price"
-
-    try:
-        resp = client.post("/api/v2/mix/order/place-plan-order", params)
-        if resp.get("code") == "00000":
-            oid = resp["data"]["orderId"]
-            tp_sl_info = f"TP1={tp1}" if tp1 else ""
-            if sl:
-                tp_sl_info += f" SL={sl}"
-            print(f"[exchange] Plan order złożony: {oid} | {side} {_fmt_qty(full_qty)} SOL @ trigger {w1} | {tp_sl_info}")
-            return oid
-        log.error(f"[exchange] place_entry_plan_order: code={resp.get('code')} msg={resp.get('msg')}")
-    except Exception as e:
-        log.error(f"[exchange] place_entry_plan_order: {e}")
-    return None
-
-
-def _place_tpsl_orders(
-    client: BitgetClient,
-    s: dict,
-    full_qty: float,
-    half_qty: float,
-    skip_sl: bool = False,
-) -> tuple[str | None, str | None, str | None]:
-    """
-    Po wejściu w pozycję składa 2 oddzielne TPSL ordery:
-      TP1: profit_plan, full_qty SOL, trigger=TP1 (zamyka całość)
-      SL:  loss_plan,   full_qty SOL, trigger=SL
-    skip_sl=True — pomija SL (gdy SL już istnieje w Bitget).
-    Zwraca (tp1_id, None, sl_id).  TP2 nie jest składany na giełdzie.
-    """
-    direction = s["direction"]
-    hold_side = direction  # "long" lub "short"
-    tps       = s.get("tps", [])
-    tp1       = tps[0] if len(tps) > 0 else None
+    tp2       = tps[1] if len(tps) > 1 else None
     sl        = s.get("sl")
     sid       = s.get("setup_id", "?")
 
-    tp1_id = sl_id = None
+    def _place_one(tp: float | None, label: str) -> str | None:
+        params = {
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "marginMode":   MARGIN_MODE,
+            "marginCoin":   MARGIN_COIN,
+            "planType":     "normal_plan",
+            "size":         _fmt_qty(half_qty),
+            "triggerPrice": _fmt_price(w1),
+            "triggerType":  "mark_price",
+            "side":         side,
+            "tradeSide":    "open",
+            "posSide":      direction,
+            "orderType":    "market",
+        }
+        if tp is not None:
+            params["stopSurplusTriggerPrice"] = _fmt_price(tp)
+            params["stopSurplusTriggerType"]  = "mark_price"
+        if sl is not None:
+            params["stopLossTriggerPrice"] = _fmt_price(sl)
+            params["stopLossTriggerType"]  = "mark_price"
+        try:
+            resp = client.post("/api/v2/mix/order/place-plan-order", params)
+            if resp.get("code") == "00000":
+                oid = resp["data"]["orderId"]
+                print(f"[exchange] #{sid} Plan {label}: {oid} | {side} {_fmt_qty(half_qty)} SOL"
+                      f" @ W1={w1} | TP={tp} SL={sl}")
+                return oid
+            log.error(f"[exchange] #{sid} place plan {label}: code={resp.get('code')} msg={resp.get('msg')}")
+        except Exception as e:
+            log.error(f"[exchange] #{sid} place plan {label}: {e}")
+        return None
 
-    if tp1 is not None:
+    plan1_oid = _place_one(tp1, "1(TP1)")
+    if not plan1_oid:
+        return None, None
+
+    plan2_oid = _place_one(tp2, "2(TP2)")
+    if not plan2_oid:
+        # Cofnij plan1 żeby nie zostawić samotnego half-qty plan order
+        log.error(f"[exchange] #{sid} plan2 nieudany — anuluję plan1 {plan1_oid}")
+        _cancel_order(client, plan1_oid, "normal_plan")
+        return None, None
+
+    return plan1_oid, plan2_oid
+
+
+def _place_tpsl_orders_split(
+    client: BitgetClient,
+    s: dict,
+    half_qty: float,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """
+    Fallback: ręcznie składa 4 TPSL ordery gdy preset z plan order nie zadziałał.
+      TP1: profit_plan, half_qty, trigger=TP1  → tp1_id
+      TP2: profit_plan, half_qty, trigger=TP2  → tp2_id
+      SL1: loss_plan,   half_qty, trigger=SL   → sl1_id  (para z TP1)
+      SL2: loss_plan,   half_qty, trigger=SL   → sl2_id  (para z TP2, zmodyfikowany na BE po TP1)
+    Zwraca (tp1_id, tp2_id, sl1_id, sl2_id).
+    """
+    direction = s["direction"]
+    hold_side = direction
+    tps       = s.get("tps", [])
+    tp1       = tps[0] if len(tps) > 0 else None
+    tp2       = tps[1] if len(tps) > 1 else None
+    sl        = s.get("sl")
+    sid       = s.get("setup_id", "?")
+
+    tp1_id = tp2_id = sl1_id = sl2_id = None
+
+    def _place_tp(price, label):
+        if price is None:
+            return None
         try:
             resp = client.post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       SYMBOL,
                 "productType":  PRODUCT_TYPE,
                 "marginCoin":   MARGIN_COIN,
                 "planType":     "profit_plan",
-                "triggerPrice": _fmt_price(tp1),
+                "triggerPrice": _fmt_price(price),
                 "triggerType":  "mark_price",
                 "executePrice": "0",
                 "holdSide":     hold_side,
-                "size":         _fmt_qty(full_qty),
+                "size":         _fmt_qty(half_qty),
             })
             if resp.get("code") == "00000":
-                tp1_id = resp["data"]["orderId"]
-                print(f"[exchange] #{sid} TP1 order: {tp1_id} | {_fmt_qty(full_qty)} SOL @ {tp1} (100% pozycji)")
-            else:
-                log.error(f"[exchange] #{sid} place TP1: code={resp.get('code')} msg={resp.get('msg')}")
+                oid = resp["data"]["orderId"]
+                print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(half_qty)} SOL @ {price}")
+                return oid
+            log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
         except Exception as e:
-            log.error(f"[exchange] #{sid} place TP1: {e}")
+            log.error(f"[exchange] #{sid} place {label}: {e}")
+        return None
 
-    if sl is not None and not skip_sl:
+    def _place_sl(label):
+        if sl is None:
+            return None
         try:
             resp = client.post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       SYMBOL,
@@ -308,17 +335,22 @@ def _place_tpsl_orders(
                 "triggerType":  "mark_price",
                 "executePrice": "0",
                 "holdSide":     hold_side,
-                "size":         _fmt_qty(full_qty),
+                "size":         _fmt_qty(half_qty),
             })
             if resp.get("code") == "00000":
-                sl_id = resp["data"]["orderId"]
-                print(f"[exchange] #{sid} SL order:  {sl_id} | {_fmt_qty(full_qty)} SOL @ {sl}")
-            else:
-                log.error(f"[exchange] #{sid} place SL: code={resp.get('code')} msg={resp.get('msg')}")
+                oid = resp["data"]["orderId"]
+                print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(half_qty)} SOL @ {sl}")
+                return oid
+            log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
         except Exception as e:
-            log.error(f"[exchange] #{sid} place SL: {e}")
+            log.error(f"[exchange] #{sid} place {label}: {e}")
+        return None
 
-    return tp1_id, None, sl_id
+    tp1_id = _place_tp(tp1, "TP1")
+    tp2_id = _place_tp(tp2, "TP2")
+    sl1_id = _place_sl("SL1")
+    sl2_id = _place_sl("SL2")
+    return tp1_id, tp2_id, sl1_id, sl2_id
 
 
 # ── Sprawdzanie statusu zleceń ─────────────────────────────────────────────────
@@ -413,12 +445,19 @@ def _cancel_order(client: BitgetClient, order_id: str, plan_type: str):
         log.warning(f"[exchange] cancel {order_id}: {e}")
 
 
-def _find_preset_tpsl(client: BitgetClient, hold_side: str) -> tuple[str | None, str | None]:
+def _find_preset_tpsl_pair(
+    client: BitgetClient,
+    hold_side: str,
+    tp1_price: float,
+    tp2_price: float | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
     """
-    Szuka aktywnych TPSL orderów (z presetu plan order) dla danej strony pozycji.
-    Zwraca (tp_order_id, sl_order_id) lub (None, None).
+    Szuka 4 TPSL orderów (z presetów obu plan orderów) dla danej strony pozycji.
+    Rozróżnia TP1 od TP2 po cenie triggera; SL1/SL2 mają tę samą cenę — bierze pierwsze dwa.
+
+    Zwraca (tp1_oid, tp2_oid, sl1_oid, sl2_oid).
     """
-    tp_id = sl_id = None
+    tp1_id = tp2_id = sl1_id = sl2_id = None
     try:
         resp = client.get("/api/v2/mix/order/orders-plan-pending", {
             "symbol":      SYMBOL,
@@ -427,15 +466,26 @@ def _find_preset_tpsl(client: BitgetClient, hold_side: str) -> tuple[str | None,
         })
         if resp.get("code") == "00000":
             for o in (resp["data"].get("entrustedList") or []):
-                if o.get("posSide", o.get("holdSide", "")) == hold_side:
-                    plan_type = o.get("planType", "")
-                    if plan_type == "profit_plan" and tp_id is None:
-                        tp_id = o["orderId"]
-                    elif plan_type == "loss_plan" and sl_id is None:
-                        sl_id = o["orderId"]
+                if o.get("posSide", o.get("holdSide", "")) != hold_side:
+                    continue
+                plan_type = o.get("planType", "")
+                try:
+                    trig = float(o.get("triggerPrice") or 0)
+                except (ValueError, TypeError):
+                    trig = 0.0
+                if plan_type == "profit_plan":
+                    if tp1_price and abs(trig - tp1_price) < tp1_price * 0.001:
+                        tp1_id = o["orderId"]
+                    elif tp2_price and abs(trig - tp2_price) < tp2_price * 0.001:
+                        tp2_id = o["orderId"]
+                elif plan_type == "loss_plan":
+                    if sl1_id is None:
+                        sl1_id = o["orderId"]
+                    elif sl2_id is None:
+                        sl2_id = o["orderId"]
     except Exception as e:
-        log.warning(f"[exchange] _find_preset_tpsl: {e}")
-    return tp_id, sl_id
+        log.warning(f"[exchange] _find_preset_tpsl_pair: {e}")
+    return tp1_id, tp2_id, sl1_id, sl2_id
 
 
 def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty: float):
@@ -484,6 +534,7 @@ def close_open_position(setup_id: int) -> bool:
     tp1_oid      = s.get("exchange_tp1_oid")
     tp2_oid      = s.get("exchange_tp2_oid")
     sl_oid       = s.get("exchange_sl_oid")
+    sl2_oid      = s.get("exchange_sl2_oid")
     full_qty_str = (s.get("exchange_qty_full") or "0").replace(",", ".")
     full_qty     = float(full_qty_str)
 
@@ -491,8 +542,11 @@ def close_open_position(setup_id: int) -> bool:
         log.warning(f"[exchange] close_open_position #{setup_id}: brak kierunku lub qty=0")
         return False
 
-    # Anuluj zlecenia TPSL przed zamknięciem
-    for oid, plan_type in [(tp1_oid, "profit_plan"), (tp2_oid, "profit_plan"), (sl_oid, "loss_plan")]:
+    # Anuluj wszystkie TPSL przed zamknięciem
+    for oid, plan_type in [
+        (tp1_oid, "profit_plan"), (tp2_oid, "profit_plan"),
+        (sl_oid, "loss_plan"),    (sl2_oid, "loss_plan"),
+    ]:
         if oid:
             _cancel_order(client, oid, plan_type)
 
@@ -556,10 +610,12 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
 
 def _check_after_tp1_positions(client: BitgetClient) -> None:
     """
-    Sprawdza czy cena osiągnęła TP2 lub sl_after_tp1 dla setupów w stanie after_tp1.
-    Wywoływana co 15s w _sync_inner(). Używa aktualnej ceny mark z Bitget.
+    Wirtualne śledzenie drugiej połowy pozycji dla STARYCH setupów (sprzed migracji).
+    Stare setupy: exchange_done=TRUE AND status='after_tp1' — druga połowa nie jest
+    na giełdzie, sprawdzamy cenę mark ręcznie.
+    Nowe setupy (exchange_done=FALSE): obsługuje główna pętla _sync_inner przez TPSL ordery.
     """
-    setups = db.get_after_tp1_setups()
+    setups = [s for s in db.get_after_tp1_setups() if s.get("exchange_done")]
     if not setups:
         return
 
@@ -701,136 +757,143 @@ def _sync_inner():
             modified = True
             continue
 
-        # ── NOWY setup — złóż plan order przy W1 ─────────────────────────────
+        # ── NOWY setup — złóż 2 plan ordery przy W1 (half qty każdy) ────────
         if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
             if exchange_slot_taken:
                 print(f"[exchange] {label}: pominięty — slot zajęty (tryb jedna pozycja na raz)")
                 continue
-            # Atomicznie zarezerwuj slot przed wywołaniem API — chroni przed race condition
-            # gdy Railway (co 15s) i GitHub Actions (co 5min) wywołują sync() równocześnie.
+            # Atomicznie zarezerwuj slot przed wywołaniem API
             if not db.claim_plan_order(s["setup_id"]):
                 print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
                 continue
             w1       = entries[0]
             full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-            oid      = _place_entry_plan_order(client, s, full_qty)
-            if oid:
-                s["exchange_plan_oid"]        = oid
+            half_qty = _round_qty(full_qty / 2)
+            plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, half_qty)
+            if plan1_oid and plan2_oid:
+                s["exchange_plan_oid"]        = plan1_oid
+                s["exchange_plan2_oid"]       = plan2_oid
                 s["exchange_qty_full"]        = _fmt_qty(full_qty)
-                s["exchange_qty_half"]        = _fmt_qty(_round_qty(full_qty / 2))
+                s["exchange_qty_half"]        = _fmt_qty(half_qty)
                 s["exchange_position_opened"] = False
                 modified = True
-                print(f"[exchange] {label}: plan order złożony ({_fmt_qty(full_qty)} SOL @ W1={w1})")
+                print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
             else:
-                # API call nie udał się — zwolnij rezerwację żeby następny sync() mógł spróbować
                 db.release_plan_order_claim(s["setup_id"])
             continue
 
-        # ── Plan order złożony, pozycja jeszcze nie otwarta ───────────────────
+        # ── Plan ordery złożone, pozycja jeszcze nie otwarta ─────────────────
+        plan2_oid = s.get("exchange_plan2_oid")
         if plan_oid and not pos_open:
             if plan_oid == "PENDING":
-                # Stała rezerwacja bez OID — proces poprzedni musiał się wysypać; resetuj
                 print(f"[exchange] {label}: stale PENDING claim — reset, next sync retry")
                 s["exchange_plan_oid"] = None
                 modified = True
                 continue
-            status = _plan_order_status(client, plan_oid)
-            print(f"[exchange] {label}: plan order status = {status}")
+            status1 = _plan_order_status(client, plan_oid)
+            print(f"[exchange] {label}: plan1 status = {status1}")
 
-            if status == "cancelled":
-                print(f"[exchange] {label}: plan order anulowany z zewnątrz")
-                s["exchange_plan_oid"] = None
+            if status1 == "cancelled":
+                print(f"[exchange] {label}: plan1 anulowany z zewnątrz — anuluję plan2 i zamykam")
+                if plan2_oid:
+                    _cancel_order(client, plan2_oid, "normal_plan")
+                s["exchange_plan_oid"]  = None
+                s["exchange_plan2_oid"] = None
                 modified = True
 
-            elif status == "executed":
-                # Entry hit — zweryfikuj rzeczywistą pozycję przed złożeniem TPSL
-                actual_qty = _get_open_position_size(client, direction)
-                calc_qty   = float(s.get("exchange_qty_full", "0").replace(",", ".") or "0")
-                if calc_qty <= 0:
-                    w1       = entries[0]
-                    calc_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+            elif status1 == "executed":
+                # Plan1 wykonany — sprawdź plan2 (ten sam trigger, powinien być executed)
+                status2 = _plan_order_status(client, plan2_oid) if plan2_oid else "executed"
+                print(f"[exchange] {label}: plan2 status = {status2}")
 
+                if status2 not in ("executed", "unknown"):
+                    # Plan2 jeszcze live — poczekaj na następny sync()
+                    print(f"[exchange] {label}: plan2 jeszcze nie wykonany — czekam")
+                    continue
+
+                # Oba wykonane — weryfikuj pozycję
+                calc_full = float(s.get("exchange_qty_full", "0").replace(",", ".") or "0")
+                half_qty  = float(s.get("exchange_qty_half", "0").replace(",", ".") or "0")
+                if calc_full <= 0:
+                    w1        = entries[0]
+                    calc_full = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+                    half_qty  = _round_qty(calc_full / 2)
+
+                actual_qty = _get_open_position_size(client, direction)
                 if actual_qty <= 0:
-                    # Plan order "executed" ale pozycja = 0 — częściowe wypełnienie
-                    # zamknięte natychmiast (SL/liq) lub fałszywy status Bitget
                     log.error(
-                        f"[exchange] {label}: plan order wykonany ale pozycja=0 "
-                        f"(oczekiwano {calc_qty} SOL) — traktuję jako brak wejścia"
+                        f"[exchange] {label}: oba plan ordery wykonane ale pozycja=0 "
+                        f"— traktuję jako brak wejścia"
                     )
-                    s["exchange_plan_oid"] = None
-                    s["exchange_done"]     = True
+                    s["exchange_plan_oid"]  = None
+                    s["exchange_plan2_oid"] = None
+                    s["exchange_done"]      = True
                     modified = True
                     continue
 
-                # actual_qty = cała pozycja na Bitget (może zawierać inne setupy).
-                # Używamy calc_qty — rozmiaru obliczonego dla TEGO setupu przy plan orderze.
-                # actual_qty służy tylko do weryfikacji czy wejście w ogóle nastąpiło.
-                if actual_qty < calc_qty * 0.8:
-                    log.warning(
-                        f"[exchange] {label}: częściowe wypełnienie — "
-                        f"oczekiwano {calc_qty} SOL, otwarto {actual_qty} SOL"
-                    )
+                full_qty = _round_qty(calc_full)
+                half_qty = _round_qty(half_qty or full_qty / 2)
 
-                full_qty = _round_qty(calc_qty)
-                half_qty = _round_qty(full_qty / 2)
+                # Szukaj 4 preset TPSL orderów (z obu plan orderów)
+                tps      = s.get("tps", [])
+                tp1_price = float(tps[0]) if len(tps) > 0 else None
+                tp2_price = float(tps[1]) if len(tps) > 1 else None
+                tp1_id, tp2_id, sl1_id, sl2_id = _find_preset_tpsl_pair(
+                    client, direction, tp1_price, tp2_price
+                )
 
-                # Sprawdź czy preset TP/SL z plan order już istnieją
-                preset_tp, preset_sl = _find_preset_tpsl(client, direction)
-                if preset_tp and preset_sl:
-                    tp1_id, sl_id = preset_tp, preset_sl
-                    print(f"[exchange] {label}: preset TPSL znalezione (TP1={tp1_id} SL={sl_id})")
+                if tp1_id and sl1_id:
+                    print(f"[exchange] {label}: preset TPSL znalezione "
+                          f"(TP1={tp1_id} TP2={tp2_id} SL1={sl1_id} SL2={sl2_id})")
                 else:
-                    # Fallback — złóż TPSL ręcznie
-                    print(f"[exchange] {label}: brak preset TPSL, składam ręcznie...")
-                    tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
+                    # Fallback — złóż 4 TPSL ręcznie
+                    log.warning(f"[exchange] {label}: brak preset TPSL, składam ręcznie...")
+                    tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, half_qty)
 
                 s["exchange_position_opened"] = True
                 s["exchange_qty_full"]        = _fmt_qty(full_qty)
                 s["exchange_qty_half"]        = _fmt_qty(half_qty)
                 s["exchange_tp1_oid"]         = tp1_id
-                s["exchange_tp2_oid"]         = None
-                s["exchange_sl_oid"]          = sl_id
+                s["exchange_tp2_oid"]         = tp2_id
+                s["exchange_sl_oid"]          = sl1_id
+                s["exchange_sl2_oid"]         = sl2_id
+                s["exchange_plan2_oid"]       = None   # plan ordery już wykonane
                 modified = True
-                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL), TPSL aktywne "
-                      f"(TP1={tp1_id} SL={sl_id})")
-            continue
-
-        # ── Pozycja otwarta, SL jest ale brak TP — re-place tylko TP ─────────
-        if pos_open and not ex_done and sl_oid and not tp1_oid and not tp1_done:
-            full_qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
-            half_qty = full_qty  # unused, kept for API compat
-            if full_qty > 0:
-                log.warning(f"[exchange] {label}: brakuje TP przy istniejącym SL — re-place TP")
-                tp1_id, _, _ = _place_tpsl_orders(client, s, full_qty, half_qty, skip_sl=True)
-                s["exchange_tp1_oid"] = tp1_id
-                modified = True
+                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL) | "
+                      f"TP1={tp1_id} TP2={tp2_id} SL1={sl1_id} SL2={sl2_id}")
             continue
 
         # ── Pozycja otwarta, brak TPSL — retry składania zleceń ──────────────
-        if pos_open and not ex_done and not tp1_oid and not sl_oid:
-            full_qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
-            half_qty = full_qty  # unused, kept for API compat
-            if full_qty > 0:
+        sl2_oid = s.get("exchange_sl2_oid")
+        if pos_open and not ex_done and not tp1_oid and not sl_oid and not tp1_done:
+            half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
+            if half_qty_f > 0:
                 log.warning(f"[exchange] {label}: pozycja otwarta bez TPSL — retry składania zleceń")
-                tp1_id, _, sl_id = _place_tpsl_orders(client, s, full_qty, half_qty)
+                tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, half_qty_f)
                 s["exchange_tp1_oid"] = tp1_id
-                s["exchange_sl_oid"]  = sl_id
+                s["exchange_tp2_oid"] = tp2_id
+                s["exchange_sl_oid"]  = sl1_id
+                s["exchange_sl2_oid"] = sl2_id
                 modified = True
             continue
 
-        # ── Pozycja otwarta — monitoruj TPSL ─────────────────────────────────
-        if pos_open and (tp1_oid or tp2_oid or sl_oid):
+        # ── Pozycja otwarta — monitoruj TPSL (faza 1: przed TP1) ─────────────
+        if pos_open and not ex_done and not tp1_done:
+            tp2_oid  = s.get("exchange_tp2_oid")
+            sl2_oid  = s.get("exchange_sl2_oid")
 
-            # Sprawdź SL jako pierwsze — ma priorytet
+            # Sprawdź SL1 jako pierwsze — pełna strata
             if sl_oid:
                 sl_status = _tpsl_order_status(client, sl_oid)
-                print(f"[exchange] {label}: SL status = {sl_status}")
+                print(f"[exchange] {label}: SL1 status = {sl_status}")
 
                 if sl_status == "executed":
-                    # SL zamknął całą pozycję — anuluj TP1
-                    print(f"[exchange] {label}: SL wykonany — anuluj TP1")
-                    if tp1_oid:
-                        _cancel_order(client, tp1_oid, "profit_plan")
+                    # SL1 zamknął pierwszą połowę — anuluj TP1, TP2
+                    # SL2 (ten sam trigger) powinien zamknąć drugą połowę automatycznie
+                    print(f"[exchange] {label}: SL1 wykonany — anuluj TP1, TP2; SL2 zamknie resztę")
+                    for oid, pt in [(tp1_oid, "profit_plan"), (tp2_oid, "profit_plan")]:
+                        if oid:
+                            _cancel_order(client, oid, pt)
                     s["exchange_sl_oid"]  = None
                     s["exchange_tp1_oid"] = None
                     s["exchange_tp2_oid"] = None
@@ -839,95 +902,152 @@ def _sync_inner():
                     if sid and sid != "?":
                         avg_entry = s.get("avg_entry")
                         sl_price  = s.get("sl")
-                        avg_exit  = sl_price
                         pnl_usd   = None
                         if avg_entry and sl_price:
                             fq       = (s.get("exchange_qty_full") or "0").replace(",", ".")
                             full_qty = float(fq)
                             sign     = 1 if s.get("direction") == "long" else -1
                             pnl_usd  = sign * full_qty * (float(sl_price) - float(avg_entry))
-                        db.resolve_setup(int(sid), "SL", avg_entry, avg_exit, pnl_usd, None)
+                        db.resolve_setup(int(sid), "SL", avg_entry, sl_price, pnl_usd, None)
                     continue
 
                 if sl_status == "cancelled":
-                    # SL anulowany — może to Bitget auto-anulował go po TP1.
-                    # Sprawdź TP1 zanim uznamy za nieokreślone.
-                    if tp1_oid:
-                        tp1_check = _tpsl_order_status(client, tp1_oid)
-                        print(f"[exchange] {label}: SL cancelled — sprawdzam TP1: {tp1_check}")
-                        if tp1_check == "executed":
-                            # TP1 zamknął pozycję i Bitget auto-anulował SL
-                            print(f"[exchange] {label}: TP1 wykonany (via SL-cancelled path) — czekamy na TP2/BE")
-                            s["exchange_tp1_oid"]  = None
-                            s["exchange_tp1_done"] = True
-                            s["exchange_sl_oid"]   = None
-                            s["exchange_tp2_oid"]  = None
-                            s["exchange_done"]     = True
-                            modified = True
-                            if sid and sid != "?":
-                                tps       = s.get("tps") or []
-                                tp1_price = float(tps[0]) if tps else None
-                                avg_entry = s.get("avg_entry")
-                                pnl_usd   = None
-                                if avg_entry and tp1_price:
-                                    fq       = (s.get("exchange_qty_full") or "0").replace(",", ".")
-                                    full_qty = float(fq)
-                                    sign     = 1 if s.get("direction") == "long" else -1
-                                    pnl_usd  = sign * full_qty * (tp1_price - float(avg_entry))
-                                db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
-                            continue
-                    # SL anulowany ręcznie — pozycja zamknięta manualnie
-                    log.warning(f"[exchange] {label}: SL anulowany ręcznie (nie TP1) — zwalniam slot i zamykam setup")
-                    if tp1_oid:
-                        _cancel_order(client, tp1_oid, "profit_plan")
-                    s["exchange_sl_oid"]  = None
-                    s["exchange_tp1_oid"] = None
-                    s["exchange_tp2_oid"] = None
-                    s["exchange_done"]    = True
-                    modified = True
-                    if sid and sid != "?":
-                        db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
-                    continue
+                    # SL1 anulowany — sprawdź czy TP1 odpowiedział
+                    tp1_check = _tpsl_order_status(client, tp1_oid) if tp1_oid else "unknown"
+                    print(f"[exchange] {label}: SL1 cancelled — sprawdzam TP1: {tp1_check}")
+                    if tp1_check != "executed":
+                        # Oba anulowane bez TP1 — zamknięcie ręczne
+                        log.warning(f"[exchange] {label}: SL1 i TP1 anulowane ręcznie — zamykam setup")
+                        for oid, pt in [(tp2_oid, "profit_plan"), (sl2_oid, "loss_plan")]:
+                            if oid:
+                                _cancel_order(client, oid, pt)
+                        s["exchange_sl_oid"]  = None
+                        s["exchange_tp1_oid"] = None
+                        s["exchange_tp2_oid"] = None
+                        s["exchange_sl2_oid"] = None
+                        s["exchange_done"]    = True
+                        modified = True
+                        if sid and sid != "?":
+                            db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
+                        continue
+                    # TP1 executed — wpadamy w sekcję poniżej
+                    tp1_oid = None  # czyścimy żeby sekcja TP1 go wykryła jako executed
 
-            # Sprawdź TP1 (zamyka 100% pozycji)
-            if tp1_oid and not tp1_done:
+            # Sprawdź TP1 (zamyka pierwszą połowę)
+            if tp1_oid:
                 tp1_status = _tpsl_order_status(client, tp1_oid)
                 print(f"[exchange] {label}: TP1 status = {tp1_status}")
 
                 if tp1_status == "executed":
-                    # TP1 zamknął całą pozycję — anuluj SL, zostaw setup aktywny (after_tp1)
-                    print(f"[exchange] {label}: TP1 wykonany — anuluj SL, czekamy na TP2/BE")
+                    tps_list  = s.get("tps") or []
+                    tp1_price = float(tps_list[0]) if tps_list else None
+                    avg_entry = s.get("avg_entry")
+                    entry_be  = float(avg_entry) if avg_entry else (float(tps_list[0]) if tp1_price else None)
+                    half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
+
+                    # Anuluj SL1 (Bitget mógł już auto-anulować) i zmodyfikuj SL2 → BE
                     if sl_oid:
                         _cancel_order(client, sl_oid, "loss_plan")
+                    if sl2_oid and entry_be:
+                        _modify_sl(client, sl2_oid, entry_be, half_qty_f)
+                        print(f"[exchange] {label}: SL2 przesunięty na BE={entry_be}")
+
+                    pnl_usd = None
+                    if avg_entry and tp1_price and half_qty_f:
+                        sign    = 1 if s.get("direction") == "long" else -1
+                        pnl_usd = sign * half_qty_f * (tp1_price - float(avg_entry))
+
                     s["exchange_tp1_oid"]  = None
                     s["exchange_tp1_done"] = True
                     s["exchange_sl_oid"]   = None
-                    s["exchange_tp2_oid"]  = None
-                    s["exchange_done"]     = True
+                    # tp2_oid i sl2_oid zostają aktywne — faza 2
                     modified = True
+                    print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub BE (SL2={sl2_oid})")
                     if sid and sid != "?":
-                        tps       = s.get("tps") or []
-                        tp1_price = float(tps[0]) if tps else None
-                        avg_entry = s.get("avg_entry")
-                        pnl_usd   = None
-                        if avg_entry and tp1_price:
-                            fq       = (s.get("exchange_qty_full") or "0").replace(",", ".")
-                            full_qty = float(fq)
-                            sign     = 1 if s.get("direction") == "long" else -1
-                            pnl_usd  = sign * full_qty * (tp1_price - float(avg_entry))
                         db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
+                    continue
 
                 elif tp1_status == "cancelled":
-                    log.warning(f"[exchange] {label}: TP1 anulowany — zostanie ponownie złożony")
+                    log.warning(f"[exchange] {label}: TP1 anulowany ręcznie")
                     s["exchange_tp1_oid"] = None
                     modified = True
 
-            # Jeśli wszystkie TPSL anulowane — zwolnij slot
-            if (not s.get("exchange_sl_oid")
-                    and not s.get("exchange_tp1_oid")
-                    and not s.get("exchange_tp2_oid")
-                    and not s.get("exchange_done")):
+            # Zwolnij slot gdy wszystkie TPSL zniknęły
+            if (not s.get("exchange_sl_oid") and not s.get("exchange_tp1_oid")
+                    and not s.get("exchange_tp2_oid") and not s.get("exchange_done")):
                 log.warning(f"[exchange] {label}: wszystkie TPSL zniknęły — zwalniam slot")
+                s["exchange_done"] = True
+                modified = True
+
+        # ── Pozycja otwarta — monitoruj faza 2 (po TP1: tp2 i sl2-BE) ────────
+        elif pos_open and not ex_done and tp1_done:
+            tp2_oid = s.get("exchange_tp2_oid")
+            sl2_oid = s.get("exchange_sl2_oid")
+
+            if not tp2_oid and not sl2_oid:
+                # Faza 2 bez zleceń — stary setup wirtualnie trackowany (exchange_done=True)
+                # lub błąd — zamykamy
+                if not s.get("exchange_done"):
+                    log.warning(f"[exchange] {label}: po TP1 brak tp2/sl2 — zamykam")
+                    s["exchange_done"] = True
+                    modified = True
+                continue
+
+            # Sprawdź TP2
+            if tp2_oid:
+                tp2_status = _tpsl_order_status(client, tp2_oid)
+                print(f"[exchange] {label}: TP2 status = {tp2_status}")
+                if tp2_status == "executed":
+                    tps_list  = s.get("tps") or []
+                    tp2_price = float(tps_list[1]) if len(tps_list) > 1 else None
+                    if sl2_oid:
+                        _cancel_order(client, sl2_oid, "loss_plan")
+                    s["exchange_tp2_oid"] = None
+                    s["exchange_sl2_oid"] = None
+                    s["exchange_done"]    = True
+                    modified = True
+                    if sid and sid != "?":
+                        pnl_tp1 = s.get("pnl_usd") or 0
+                        half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
+                        avg_entry  = s.get("avg_entry")
+                        pnl_tp2 = None
+                        if avg_entry and tp2_price and half_qty_f:
+                            sign    = 1 if s.get("direction") == "long" else -1
+                            pnl_tp2 = sign * half_qty_f * (tp2_price - float(avg_entry))
+                        total_pnl = (pnl_tp1 or 0) + (pnl_tp2 or 0)
+                        db.resolve_setup(int(sid), "TP1+TP2", s.get("avg_entry"), tp2_price, total_pnl, None)
+                        print(f"[exchange] {label}: TP1+TP2 — total pnl={total_pnl:.2f}")
+                    continue
+                elif tp2_status == "cancelled":
+                    log.warning(f"[exchange] {label}: TP2 anulowany ręcznie")
+                    s["exchange_tp2_oid"] = None
+                    modified = True
+
+            # Sprawdź SL2 (teraz na BE)
+            if sl2_oid:
+                sl2_status = _tpsl_order_status(client, sl2_oid)
+                print(f"[exchange] {label}: SL2-BE status = {sl2_status}")
+                if sl2_status == "executed":
+                    if tp2_oid:
+                        _cancel_order(client, tp2_oid, "profit_plan")
+                    s["exchange_tp2_oid"] = None
+                    s["exchange_sl2_oid"] = None
+                    s["exchange_done"]    = True
+                    modified = True
+                    if sid and sid != "?":
+                        pnl_tp1  = s.get("pnl_usd") or 0
+                        avg_entry = s.get("avg_entry")
+                        db.resolve_setup(int(sid), "TP1+BE", avg_entry, avg_entry, pnl_tp1, None)
+                        print(f"[exchange] {label}: TP1+BE — pnl tp1={pnl_tp1:.2f}")
+                    continue
+                elif sl2_status == "cancelled":
+                    log.warning(f"[exchange] {label}: SL2-BE anulowany ręcznie")
+                    s["exchange_sl2_oid"] = None
+                    modified = True
+
+            # Zwolnij slot gdy faza 2 bez zleceń
+            if not s.get("exchange_tp2_oid") and not s.get("exchange_sl2_oid") and not s.get("exchange_done"):
+                log.warning(f"[exchange] {label}: faza 2 — wszystkie zlecenia zniknęły — zwalniam slot")
                 s["exchange_done"] = True
                 modified = True
 

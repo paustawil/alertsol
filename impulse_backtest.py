@@ -140,12 +140,69 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
     }
 
 
+def compute_spike_filter(candles_m15: list[dict], impulse_dir: str) -> tuple[int, bool]:
+    """
+    Sprawdza czy sygnał IMPULSE wygląda jak spike-then-reversal.
+    Zwraca (spike_score, is_filtered).
+    is_filtered=True gdy spike_score >= 2 i impulse_min_score zostałby podniesiony do 4.
+
+    Sygnały:
+      1. change_1h silnie przeciwny do kierunku impulsu
+      2. change_2h też pod prąd
+      3. Rejection wicks na ostatnich 3 świecach M15
+    """
+    if len(candles_m15) < 8:
+        return 0, False
+
+    current_price = candles_m15[-1]["close"]
+    price_1h = candles_m15[-4]["close"] if len(candles_m15) >= 4 else candles_m15[0]["close"]
+    price_2h = candles_m15[-8]["close"] if len(candles_m15) >= 8 else candles_m15[0]["close"]
+    change_1h = (current_price - price_1h) / price_1h * 100
+    change_2h  = (current_price - price_2h)  / price_2h  * 100
+
+    spike_score = 0
+
+    # Sygnał 1: 1h silnie przeciwny
+    if impulse_dir == "up"   and change_1h < -0.8:
+        spike_score += 1
+    elif impulse_dir == "down" and change_1h >  0.8:
+        spike_score += 1
+
+    # Sygnał 2: 2h też pod prąd
+    if impulse_dir == "up"   and change_2h < -0.6:
+        spike_score += 1
+    elif impulse_dir == "down" and change_2h >  0.6:
+        spike_score += 1
+
+    # Sygnał 3: rejection wicks na ostatnich 3 M15
+    recent3 = candles_m15[-3:]
+    bodies = [abs(c["close"] - c["open"]) + 0.001 for c in recent3]
+    if impulse_dir == "up":
+        wicks = [c["high"] - max(c["open"], c["close"]) for c in recent3]
+    else:
+        wicks = [min(c["open"], c["close"]) - c["low"] for c in recent3]
+    if sum(w / b for w, b in zip(wicks, bodies)) / 3 > 1.5:
+        spike_score += 1
+
+    return spike_score, spike_score >= 2
+
+
 def find_swing_points(candles_h1, n=12):
     recent = candles_h1[-n:]
     return max(c["high"] for c in recent), min(c["low"] for c in recent)
 
 
-def evaluate_setup(setup, future_m15, entry_window_h=24):
+def evaluate_setup(setup, future_m15, entry_window_h=24, tp1_only=False, no_be=False):
+    """
+    tp1_only=False, no_be=False  (domyślnie):
+        pozycja podzielona 50/50 — połowa zamykana na TP1, połowa na TP2
+        lub BE (SL przesunięty na entry po TP1).
+    tp1_only=True:
+        CAŁA pozycja zamykana na TP1. SL=1× strata, brak premii TP2.
+    no_be=True (split bez BE):
+        pozycja podzielona 50/50 — połowa na TP1, połowa czeka na TP2
+        lub ORYGINALNY SL (brak przesunięcia na BE). Prostsze w ustawieniu.
+    """
     w = setup["w"]; sl = setup["sl"]; tp1 = setup["tp1"]; tp2 = setup["tp2"]
     direction = setup["direction"]
     entry_window_s = entry_window_h * 3600
@@ -174,14 +231,26 @@ def evaluate_setup(setup, future_m15, entry_window_h=24):
             if c["high"] >= tp2: tp2_hit = True
             if c["low"] <= sl: sl_hit = True
 
-        if tp1_hit and not sl_hit:
-            if tp2_hit:
-                pnl = abs(w - tp2) if direction == "short" else abs(tp2 - w)
-                return {"wynik": "TP1+TP2", "pnl_tp1": abs(w - tp1), "pnl_tp2": pnl}
-        if sl_hit and not tp1_hit:
-            return {"wynik": "SL", "pnl_tp1": -abs(sl - w), "pnl_tp2": -abs(sl - w)}
-        if sl_hit and tp1_hit:
-            return {"wynik": "TP1+BE", "pnl_tp1": abs(w - tp1), "pnl_tp2": 0}
+        if tp1_only:
+            # Cała pozycja na TP1 — SL strata 1×, TP1 zysk 1×
+            if tp1_hit and not sl_hit:
+                return {"wynik": "TP1", "pnl_tp1": abs(w - tp1), "pnl_tp2": 0}
+            if sl_hit and not tp1_hit:
+                return {"wynik": "SL", "pnl_tp1": -abs(sl - w), "pnl_tp2": 0}
+            if sl_hit and tp1_hit:
+                return {"wynik": "TP1", "pnl_tp1": abs(w - tp1), "pnl_tp2": 0}
+        else:
+            if tp1_hit and not sl_hit:
+                if tp2_hit:
+                    pnl = abs(w - tp2) if direction == "short" else abs(tp2 - w)
+                    return {"wynik": "TP1+TP2", "pnl_tp1": abs(w - tp1), "pnl_tp2": pnl}
+            if sl_hit and not tp1_hit:
+                return {"wynik": "SL", "pnl_tp1": -abs(sl - w), "pnl_tp2": -abs(sl - w)}
+            if sl_hit and tp1_hit:
+                if no_be:
+                    # Bez przesunięcia SL: połowa na TP1 (zysk), połowa na oryginalnym SL (strata)
+                    return {"wynik": "TP1+SL", "pnl_tp1": abs(w - tp1), "pnl_tp2": -abs(sl - w)}
+                return {"wynik": "TP1+BE", "pnl_tp1": abs(w - tp1), "pnl_tp2": 0}
 
     return {"wynik": "open", "pnl_tp1": 0, "pnl_tp2": 0}
 
@@ -247,11 +316,7 @@ def fetch_klines_bitget(symbol, interval, total, end_ts_s=None):
 
 
 def fetch_klines_paginated(symbol, interval, total, end_ts_s=None):
-    result = fetch_klines_bitget(symbol, interval, total, end_ts_s)
-    if len(result) >= total * 0.5:
-        print(f"  [zrodlo: Bitget]")
-        return result
-    print(f"  [Bitget: za malo danych ({len(result)}), probe OKX...]")
+    print(f"  [zrodlo: OKX]")
     return fetch_klines_binance(symbol, interval, total, end_ts_s)
 
 
@@ -634,6 +699,111 @@ def setup_version_c(regime, ctx_m15, ctx_h1, price):
     return None
 
 
+def setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0,
+                    swing_n=12, atr_fallback=False, label=None):
+    """
+    Wersja D/E/G/H/I: AGRESYWNE wejście po aktualnej cenie — bez czekania na pullback.
+
+    vol_threshold : minimalny vol_ratio (D/G/H/I=2.0, E=1.7)
+    swing_n       : lookback świec H1 dla swing points (D/E=12, G/I=24)
+    atr_fallback  : gdy swing TP zbyt blisko ceny → użyj ATR×2.0 jako TP1 (H/I=True)
+    """
+    regime_name = regime["regime"]
+    vol_ratio = regime.get("vol_ratio", 1.0)
+
+    if vol_ratio < vol_threshold:
+        return None
+
+    atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
+    if atr <= 0:
+        return None
+
+    swing_high, swing_low = find_swing_points(ctx_h1, n=swing_n)
+    swing_low  = min(swing_low,  price)
+    swing_high = max(swing_high, price)
+
+    if label is None:
+        label = "D" if vol_threshold >= 2.0 else "E"
+
+    if regime_name == "IMPULSE_DOWN":
+        w  = price
+        sl = price + atr * 1.2
+        # ATR fallback: gdy swing_low zbyt blisko ceny (impuls w toku), użyj ATR
+        if atr_fallback and (w - swing_low) < atr * 1.5:
+            tp1 = price - atr * 2.0
+            tp2 = price - atr * 3.5
+        else:
+            tp1 = swing_low
+            tp2 = swing_low - atr
+        if tp1 >= w or sl <= w:
+            return None
+        risk = sl - w
+        reward = w - tp1
+        if risk <= 0:
+            return None
+        rr = reward / risk
+        if rr < 1.2:
+            return None
+        return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                "direction": "short", "type": f"{label}_short", "rr": round(rr, 2)}
+
+    elif regime_name == "IMPULSE_UP":
+        w  = price
+        sl = price - atr * 1.2
+        # ATR fallback: gdy swing_high zbyt blisko ceny
+        if atr_fallback and (swing_high - w) < atr * 1.5:
+            tp1 = price + atr * 2.0
+            tp2 = price + atr * 3.5
+        else:
+            tp1 = swing_high
+            tp2 = swing_high + atr
+        if tp1 <= w or sl >= w:
+            return None
+        risk = w - sl
+        reward = tp1 - w
+        if risk <= 0:
+            return None
+        rr = reward / risk
+        if rr < 1.2:
+            return None
+        return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                "direction": "long", "type": f"{label}_long", "rr": round(rr, 2)}
+
+    return None
+
+
+def setup_version_f(regime, ctx_m15, ctx_h1, price):
+    """
+    Wersja F: VOLUME-SWITCHING — strategia mieszana.
+
+    Decyzja na podstawie wolumenu:
+      vol >= 2.0x → market entry natychmiast (jak Wersja D)
+      vol 1.5-2.0x → czekaj na pullback 1-2 świece (jak Wersja A)
+      vol < 1.5x   → brak setupu (IMPULSE nie potwierdzony wolumenem)
+
+    Filozofia: silny wolumen = impuls ma momentum, nie czekaj.
+    Słabszy wolumen = niepewność, poczekaj na lepszą cenę pullbacku.
+    """
+    regime_name = regime["regime"]
+    vol_ratio = regime.get("vol_ratio", 1.0)
+
+    if vol_ratio < 1.5:
+        return None
+
+    if vol_ratio >= 2.0:
+        # Market entry (jak D)
+        setup = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
+        if setup:
+            setup["type"] = setup["type"].replace("D_", "F_mkt_")
+        return setup
+    else:
+        # Pullback entry (jak A), ale z wymogiem vol >= 1.5x
+        setup = setup_version_a(regime, ctx_m15, ctx_h1, price)
+        if setup:
+            setup["type"] = setup["type"].replace("A_", "F_pb_")
+        return setup
+
+
 # ── Statistics helpers ────────────────────────────────────────────────────────
 
 def make_stats():
@@ -642,32 +812,67 @@ def make_stats():
             "total": 0, "filled": 0,
             "tp1_wins": 0, "tp2_wins": 0, "sl_losses": 0, "open": 0,
             "pnl_tp1_sum": 0.0, "pnl_tp2_sum": 0.0,
+            # Spike-filter tracking
+            "spike_filtered": 0,        # ile odrzucone przez filtr
+            "spike_tp1_wins": 0,        # ile z odrzuconych trafiło TP1
+            "spike_tp2_wins": 0,        # ile z odrzuconych trafiło TP2
+            "spike_sl_losses": 0,       # ile z odrzuconych uderzyło SL
+            "spike_pnl_sum": 0.0,       # zsumowany pnl odrzuconych
         },
         "IMPULSE_UP": {
             "total": 0, "filled": 0,
             "tp1_wins": 0, "tp2_wins": 0, "sl_losses": 0, "open": 0,
             "pnl_tp1_sum": 0.0, "pnl_tp2_sum": 0.0,
+            "spike_filtered": 0,
+            "spike_tp1_wins": 0,
+            "spike_tp2_wins": 0,
+            "spike_sl_losses": 0,
+            "spike_pnl_sum": 0.0,
         },
     }
 
 
-def record_outcome(stats, direction_key, result, entry_price):
+def record_outcome(stats, direction_key, result, entry_price, spike_filtered=False):
     st = stats[direction_key]
-    st["total"] += 1
     wynik = result["wynik"]
+    scale = 100.0 / entry_price if entry_price > 0 else 1.0
+
+    if spike_filtered:
+        # Śledzimy co by się stało z odrzuconymi setupami
+        st["spike_filtered"] += 1
+        if wynik == "no_entry":
+            return
+        pnl = (result["pnl_tp1"] + result["pnl_tp2"]) * scale
+        st["spike_pnl_sum"] += pnl
+        if wynik in ("TP1+TP2", "TP1"):
+            st["spike_tp1_wins"] += 1
+            if wynik == "TP1+TP2":
+                st["spike_tp2_wins"] += 1
+        elif wynik in ("TP1+BE", "TP1+SL"):
+            st["spike_tp1_wins"] += 1
+        elif wynik == "SL":
+            st["spike_sl_losses"] += 1
+        return
+
+    st["total"] += 1
     if wynik == "no_entry":
         return
     st["filled"] += 1
     # Normalize pnl to $100 per trade (pnl expressed as fraction of entry)
-    scale = 100.0 / entry_price if entry_price > 0 else 1.0
-    if wynik == "TP1+TP2":
+    if wynik in ("TP1+TP2", "TP1"):
         st["tp1_wins"] += 1
-        st["tp2_wins"] += 1
         st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
         st["pnl_tp2_sum"] += result["pnl_tp2"] * scale
+        if wynik == "TP1+TP2":
+            st["tp2_wins"] += 1
     elif wynik == "TP1+BE":
         st["tp1_wins"] += 1
         st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
+    elif wynik == "TP1+SL":
+        # Połowa na TP1 (zysk), połowa na oryginalnym SL (strata) — bez przesunięcia BE
+        st["tp1_wins"] += 1
+        st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
+        st["pnl_tp2_sum"] += result["pnl_tp2"] * scale  # ujemne
     elif wynik == "SL":
         st["sl_losses"] += 1
         st["pnl_tp1_sum"] += result["pnl_tp1"] * scale
@@ -699,6 +904,19 @@ def print_version_stats(name, desc, stats):
             f"SL {sl}/{f} ({pct(sl, f)}), open {op}, "
             f"avg pnl: {sign}${avg_pnl:.2f}"
         )
+        # Spike filter summary
+        spk = st["spike_filtered"]
+        if spk > 0:
+            spk_tp1 = st["spike_tp1_wins"]
+            spk_sl  = st["spike_sl_losses"]
+            spk_pnl = st["spike_pnl_sum"]
+            spk_sign = "+" if spk_pnl >= 0 else ""
+            print(
+                f"  {'':14}  [SPIKE-FILTER] zablokowano {spk} setupow: "
+                f"TP1 {spk_tp1}/{spk} ({pct(spk_tp1, spk)}), "
+                f"SL {spk_sl}/{spk} ({pct(spk_sl, spk)}), "
+                f"pnl gdyby weszly: {spk_sign}${spk_pnl:.2f}"
+            )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -744,6 +962,20 @@ def main():
     stats_a = make_stats()
     stats_b = make_stats()
     stats_c = make_stats()
+    stats_d = make_stats()
+    stats_e = make_stats()
+    stats_f = make_stats()
+    stats_g = make_stats()   # D + swing n=24
+    stats_h = make_stats()   # D + ATR fallback
+    stats_i = make_stats()   # D + swing n=24 + ATR fallback
+    stats_d_tp1  = make_stats()  # D  tp1_only
+    stats_a_tp1  = make_stats()  # A  tp1_only
+    stats_e_tp1  = make_stats()  # E  tp1_only (vol>=1.7x)
+    stats_g_tp1  = make_stats()  # G  tp1_only (swing n=24)
+    stats_h_tp1  = make_stats()  # H  tp1_only (ATR fallback)
+    stats_i_tp1  = make_stats()  # I  tp1_only (G+H)
+    stats_d_nobe = make_stats()  # D  split bez BE (oryg. SL na 2. połowie)
+    stats_a_nobe = make_stats()  # A  split bez BE
 
     # Cooldown tracking
     last_impulse_ts_down = 0
@@ -787,6 +1019,9 @@ def main():
 
         signal_count += 1
 
+        # Spike-reversal filter
+        spike_score, is_spike_filtered = compute_spike_filter(ctx_m15, regime["direction"])
+
         # Future candles for evaluation
         future_m15 = [c for c in all_m15 if c["time"] >= ts][:200]
 
@@ -799,17 +1034,23 @@ def main():
         res_a = None
         if setup_a:
             res_a = evaluate_setup(setup_a, future_m15, entry_window_h=2)
-            record_outcome(stats_a, direction_key, res_a, setup_a["w"])
-        else:
+            record_outcome(stats_a, direction_key, res_a, setup_a["w"], spike_filtered=is_spike_filtered)
+            res_a_tp1 = evaluate_setup(setup_a, future_m15, entry_window_h=2, tp1_only=True)
+            record_outcome(stats_a_tp1, direction_key, res_a_tp1, setup_a["w"], spike_filtered=is_spike_filtered)
+            res_a_nobe = evaluate_setup(setup_a, future_m15, entry_window_h=2, no_be=True)
+            record_outcome(stats_a_nobe, direction_key, res_a_nobe, setup_a["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
             stats_a[direction_key]["total"] += 1
+            stats_a_tp1[direction_key]["total"] += 1
+            stats_a_nobe[direction_key]["total"] += 1
 
         # Version B (entry window 2h)
         setup_b = setup_version_b(regime, ctx_m15, ctx_h1, price)
         res_b = None
         if setup_b:
             res_b = evaluate_setup(setup_b, future_m15, entry_window_h=2)
-            record_outcome(stats_b, direction_key, res_b, setup_b["w"])
-        else:
+            record_outcome(stats_b, direction_key, res_b, setup_b["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
             stats_b[direction_key]["total"] += 1
 
         # Version C (entry window 4h)
@@ -817,9 +1058,82 @@ def main():
         res_c = None
         if setup_c:
             res_c = evaluate_setup(setup_c, future_m15, entry_window_h=4)
-            record_outcome(stats_c, direction_key, res_c, setup_c["w"])
-        else:
+            record_outcome(stats_c, direction_key, res_c, setup_c["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
             stats_c[direction_key]["total"] += 1
+
+        # Version D (market entry, vol_ratio >= 2.0, entry window 1h)
+        setup_d = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
+        res_d = None
+        if setup_d:
+            res_d = evaluate_setup(setup_d, future_m15, entry_window_h=1)
+            record_outcome(stats_d, direction_key, res_d, setup_d["w"], spike_filtered=is_spike_filtered)
+            res_d_tp1 = evaluate_setup(setup_d, future_m15, entry_window_h=1, tp1_only=True)
+            record_outcome(stats_d_tp1, direction_key, res_d_tp1, setup_d["w"], spike_filtered=is_spike_filtered)
+            res_d_nobe = evaluate_setup(setup_d, future_m15, entry_window_h=1, no_be=True)
+            record_outcome(stats_d_nobe, direction_key, res_d_nobe, setup_d["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_d[direction_key]["total"] += 1
+            stats_d_tp1[direction_key]["total"] += 1
+            stats_d_nobe[direction_key]["total"] += 1
+
+        # Version E (market entry, vol_ratio >= 1.7, entry window 1h)
+        setup_e = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=1.7)
+        res_e = None
+        if setup_e:
+            res_e = evaluate_setup(setup_e, future_m15, entry_window_h=1)
+            record_outcome(stats_e, direction_key, res_e, setup_e["w"], spike_filtered=is_spike_filtered)
+            res_e_tp1 = evaluate_setup(setup_e, future_m15, entry_window_h=1, tp1_only=True)
+            record_outcome(stats_e_tp1, direction_key, res_e_tp1, setup_e["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_e[direction_key]["total"] += 1
+            stats_e_tp1[direction_key]["total"] += 1
+
+        # Version F (volume-switching: vol>=2.0x→market, 1.5-2.0x→pullback)
+        setup_f = setup_version_f(regime, ctx_m15, ctx_h1, price)
+        res_f = None
+        entry_window_f = 1 if (setup_f and "mkt" in setup_f.get("type", "")) else 2
+        if setup_f:
+            res_f = evaluate_setup(setup_f, future_m15, entry_window_h=entry_window_f)
+            record_outcome(stats_f, direction_key, res_f, setup_f["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_f[direction_key]["total"] += 1
+
+        # Version G: D + swing n=24
+        setup_g = setup_version_d(regime, ctx_m15, ctx_h1, price, swing_n=24, label="G")
+        res_g = None
+        if setup_g:
+            res_g = evaluate_setup(setup_g, future_m15, entry_window_h=1)
+            record_outcome(stats_g, direction_key, res_g, setup_g["w"], spike_filtered=is_spike_filtered)
+            res_g_tp1 = evaluate_setup(setup_g, future_m15, entry_window_h=1, tp1_only=True)
+            record_outcome(stats_g_tp1, direction_key, res_g_tp1, setup_g["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_g[direction_key]["total"] += 1
+            stats_g_tp1[direction_key]["total"] += 1
+
+        # Version H: D + ATR fallback
+        setup_h = setup_version_d(regime, ctx_m15, ctx_h1, price, atr_fallback=True, label="H")
+        res_h = None
+        if setup_h:
+            res_h = evaluate_setup(setup_h, future_m15, entry_window_h=1)
+            record_outcome(stats_h, direction_key, res_h, setup_h["w"], spike_filtered=is_spike_filtered)
+            res_h_tp1 = evaluate_setup(setup_h, future_m15, entry_window_h=1, tp1_only=True)
+            record_outcome(stats_h_tp1, direction_key, res_h_tp1, setup_h["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_h[direction_key]["total"] += 1
+            stats_h_tp1[direction_key]["total"] += 1
+
+        # Version I: D + swing n=24 + ATR fallback (kombinacja)
+        setup_i = setup_version_d(regime, ctx_m15, ctx_h1, price, swing_n=24, atr_fallback=True, label="I")
+        res_i = None
+        if setup_i:
+            res_i = evaluate_setup(setup_i, future_m15, entry_window_h=1)
+            record_outcome(stats_i, direction_key, res_i, setup_i["w"], spike_filtered=is_spike_filtered)
+            res_i_tp1 = evaluate_setup(setup_i, future_m15, entry_window_h=1, tp1_only=True)
+            record_outcome(stats_i_tp1, direction_key, res_i_tp1, setup_i["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_i[direction_key]["total"] += 1
+            stats_i_tp1[direction_key]["total"] += 1
 
         # Print signal line
         def fmt_res(setup, res):
@@ -831,9 +1145,10 @@ def main():
             w = res["wynik"]
             return f"{t}:{w}"
 
+        spk_tag = f" [SPIKE-FILT spk={spike_score}]" if is_spike_filtered else (f" spk={spike_score}" if spike_score > 0 else "")
         print(
-            f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} str={regime['strength']} | "
-            f"A={fmt_res(setup_a, res_a)} | B={fmt_res(setup_b, res_b)} | C={fmt_res(setup_c, res_c)}"
+            f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} vol={regime.get('vol_ratio',0):.1f}x str={regime['strength']}{spk_tag} | "
+            f"D={fmt_res(setup_d, res_d)} | G={fmt_res(setup_g, res_g)} | H={fmt_res(setup_h, res_h)} | I={fmt_res(setup_i, res_i)}"
         )
 
         ts += 900
@@ -843,9 +1158,52 @@ def main():
     print(f"PODSUMOWANIE — {signal_count} sygnalow IMPULSE w zakresie")
     print(f"{'='*70}")
 
-    print_version_stats("WERSJA A", "green/red candles", stats_a)
+    print(f"\n{'─'*70}")
+    print("POROWNANIE: TP1+TP2 (split 50/50) vs TP1-ONLY (cala pozycja)")
+    print(f"{'─'*70}")
+    print_version_stats("WERSJA D [TP1+TP2 split]", "polowa na TP1, polowa na TP2/BE", stats_d)
+    print_version_stats("WERSJA D [TP1-ONLY]",       "cala pozycja zamykana na TP1", stats_d_tp1)
+    print_version_stats("WERSJA D [split bez BE]",   "polowa na TP1, polowa na TP2 lub ORYGINALNYM SL", stats_d_nobe)
+
+    print(f"\n{'─'*70}")
+    print("POROWNANIE TP1-ONLY — kto wygrywa przy zamknieciu calej pozycji na TP1?")
+    print(f"{'─'*70}")
+    print_version_stats("WERSJA A [pullback, TP1-only]",    "czeka na 1-2 swiece odreagowania", stats_a_tp1)
+    print_version_stats("WERSJA D [market vol>=2.0x, TP1-only]", "agresywne wejscie market", stats_d_tp1)
+    print_version_stats("WERSJA E [market vol>=1.7x, TP1-only]", "latwiejszy prog wolumenu", stats_e_tp1)
+    print_version_stats("WERSJA G [swing n=24, TP1-only]",  "szerszy lookback swing points", stats_g_tp1)
+    print_version_stats("WERSJA H [ATR fallback, TP1-only]","ATR*2.0 gdy swing zbyt blisko ceny", stats_h_tp1)
+    print_version_stats("WERSJA I [G+H, TP1-only]",         "swing n=24 + ATR fallback", stats_i_tp1)
+
+    print(f"\n{'─'*70}")
+    print("SPLIT BEZ BE vs SPLIT Z BE (polowa pozycji, wersja D)")
+    print(f"{'─'*70}")
+    print_version_stats("WERSJA D [split z BE]",   "po TP1 SL przesuniete na entry", stats_d)
+    print_version_stats("WERSJA D [split bez BE]", "po TP1 SL zostaje na oryg. poziomie", stats_d_nobe)
+    print_version_stats("WERSJA A [split z BE]",   "pullback — po TP1 SL na entry", stats_a)
+    print_version_stats("WERSJA A [split bez BE]", "pullback — po TP1 SL na oryg.", stats_a_nobe)
+
+    print(f"\n{'─'*70}")
+    print("POROWNANIE: NAPRAWA TP1 (wszystkie vol>=2.0x, market entry)")
+    print(f"{'─'*70}")
+    print_version_stats("WERSJA D [oryginalna]",   "swing n=12, bez fallback", stats_d)
+    print_version_stats("WERSJA G [swing n=24]",   "szerszy lookback swing points", stats_g)
+    print_version_stats("WERSJA H [ATR fallback]", "ATR*2.0 gdy swing zbyt blisko ceny", stats_h)
+    print_version_stats("WERSJA I [G+H]",          "swing n=24 + ATR fallback", stats_i)
+
+    print(f"\n{'─'*70}")
+    print("POROWNANIE STRATEGII WEJSCIA")
+    print(f"{'─'*70}")
+    print_version_stats("STRATEGIA 1 [pullback]",  "czeka na 1-2 swiece odreagowania (Wersja A)", stats_a)
+    print_version_stats("STRATEGIA 2 [agresywna]", "market entry vol>=2.0x (Wersja D)", stats_d)
+    print_version_stats("STRATEGIA 3 [switching]", "vol>=2.0x→market / 1.5-2.0x→pullback (F)", stats_f)
+
+    print(f"\n{'─'*70}")
+    print("SZCZEGOLY POMOCNICZE")
+    print(f"{'─'*70}")
     print_version_stats("WERSJA B", "Fibonacci limit, czeka na pullback", stats_b)
     print_version_stats("WERSJA C", "Fibonacci limit, antycypuje", stats_c)
+    print_version_stats("WERSJA E", "market entry natychmiast, vol >= 1.7x", stats_e)
 
     print()
 
