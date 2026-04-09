@@ -294,11 +294,7 @@ def fetch_klines_bitget(symbol, interval, total, end_ts_s=None):
 
 
 def fetch_klines_paginated(symbol, interval, total, end_ts_s=None):
-    result = fetch_klines_bitget(symbol, interval, total, end_ts_s)
-    if len(result) >= total * 0.5:
-        print(f"  [zrodlo: Bitget]")
-        return result
-    print(f"  [Bitget: za malo danych ({len(result)}), probe OKX...]")
+    print(f"  [zrodlo: OKX]")
     return fetch_klines_binance(symbol, interval, total, end_ts_s)
 
 
