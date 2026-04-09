@@ -4008,14 +4008,15 @@ def breakout_scan():
     check_stale_setups(regime, current)
     check_open_setups_invalidation(regime, current)
 
-    # Feedback reżimu dla dashboardu — nawet przy RANGE
+    # Feedback reżimu dla dashboardu — tylko przy RANGE gdy main() nie znalazł setupu
     if regime["regime"] == "RANGE":
-        _last_feedback["Algo2"] = {
-            "time":  datetime.now(TZ).isoformat(),
-            "found": False,
-            "count": 0,
-            "text":  f"RANGE — Algo2 nie skanuje w konsolidacji. Support: ${regime.get('support', 0):.2f}, Resistance: ${regime.get('resistance', 0):.2f}. {regime.get('details', '')}",
-        }
+        if not _last_feedback.get("Algo2", {}).get("found"):
+            _last_feedback["Algo2"] = {
+                "time":  datetime.now(TZ).isoformat(),
+                "found": False,
+                "count": 0,
+                "text":  f"RANGE | Support: ${regime.get('support', 0):.2f}, Resistance: ${regime.get('resistance', 0):.2f}. {regime.get('details', '')}",
+            }
         return
 
     is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
