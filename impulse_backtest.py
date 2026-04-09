@@ -1057,6 +1057,173 @@ def record_outcome(stats, direction_key, result, entry_price, spike_filtered=Fal
         st["open"] += 1
 
 
+def run_h1_scan(from_ts, to_ts, all_m15, all_h1, m15_times, h1_times, stats_algo=None):
+    """Uruchamia H1 scan dla zadanego zakresu. Zwraca (stats_algo, h1_regime_counts)."""
+    if stats_algo is None:
+        stats_algo = make_algo_stats()
+    h1_regime_counts = {}
+    ts_h1 = from_ts
+    while ts_h1 <= to_ts:
+        idx_m15 = bisect.bisect_left(m15_times, ts_h1)
+        idx_h1  = bisect.bisect_left(h1_times,  ts_h1)
+        ctx_m15_h = all_m15[max(0, idx_m15 - 100):idx_m15]
+        ctx_h1_h  = all_h1[max(0, idx_h1  -  50):idx_h1]
+        if len(ctx_m15_h) < 30 or len(ctx_h1_h) < 10:
+            ts_h1 += 3600
+            continue
+        ph = ctx_m15_h[-1]["close"]
+        rh = detect_regime_new(ctx_m15_h, ctx_h1_h, ph)
+        rh_name = rh["regime"]
+        rh_dir  = rh.get("direction", "none")
+        h1_regime_counts[rh_name] = h1_regime_counts.get(rh_name, 0) + 1
+        fut_h = all_m15[idx_m15:idx_m15 + 200]
+        if not fut_h:
+            ts_h1 += 3600
+            continue
+        if rh_dir == "down":
+            s = setup_trend_pullback_short(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "trend_pb_short", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+            if rh_name == "IMPULSE_DOWN":
+                s = setup_impulse_cont_short(rh, ctx_m15_h, ctx_h1_h, ph)
+                if s:
+                    record_algo_outcome(stats_algo, "imp_cont_short", s,
+                                        evaluate_setup(s, fut_h, entry_window_h=24))
+                _, is_spk = compute_spike_filter(ctx_m15_h, "down")
+                if not is_spk:
+                    s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
+                    if s:
+                        record_algo_outcome(stats_algo, "impulse_d_short", s,
+                                            evaluate_setup(s, fut_h, entry_window_h=1))
+        elif rh_dir == "up":
+            s = setup_trend_pullback_long(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "trend_pb_long", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+            if rh_name == "IMPULSE_UP":
+                _, is_spk = compute_spike_filter(ctx_m15_h, "up")
+                if not is_spk:
+                    s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
+                    if s:
+                        record_algo_outcome(stats_algo, "impulse_d_long", s,
+                                            evaluate_setup(s, fut_h, entry_window_h=1))
+        elif rh_name == "RANGE":
+            s = setup_range_short(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "range_short", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+            s = setup_range_long(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "range_long", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+        ts_h1 += 3600
+    return stats_algo, h1_regime_counts
+
+
+def _month_ranges(from_ts, to_ts):
+    """Generator: zwraca (label, month_from_ts, month_to_ts) dla każdego miesiąca w zakresie."""
+    from datetime import date
+    dt = datetime.fromtimestamp(from_ts, tz=timezone.utc)
+    while True:
+        year, month = dt.year, dt.month
+        # Pierwszy dzień miesiąca
+        m_start = int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp())
+        # Pierwszy dzień następnego miesiąca
+        if month == 12:
+            m_end = int(datetime(year + 1, 1, 1, tzinfo=timezone.utc).timestamp()) - 1
+        else:
+            m_end = int(datetime(year, month + 1, 1, tzinfo=timezone.utc).timestamp()) - 1
+        # Przytnij do zakresu
+        chunk_from = max(from_ts, m_start)
+        chunk_to   = min(to_ts,   m_end)
+        label = f"{year}-{month:02d}"
+        yield label, chunk_from, chunk_to
+        # Następny miesiąc
+        if month == 12:
+            dt = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            dt = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        if int(dt.timestamp()) > to_ts:
+            break
+
+
+def print_monthly_table(monthly_results):
+    """
+    Drukuje tabelę miesięczną.
+    monthly_results: lista (label, stats_algo, h1_regime_counts)
+    """
+    _SETUP_COLS = [
+        ("trend_pb_short",  "tpb_s"),
+        ("trend_pb_long",   "tpb_l"),
+        ("imp_cont_short",  "imc_s"),
+        ("range_short",     "rng_s"),
+        ("range_long",      "rng_l"),
+        ("impulse_d_short", "impD_s"),
+        ("impulse_d_long",  "impD_l"),
+    ]
+    header_keys = ["miesiąc", "rezimy(%)", *[c[1] for c in _SETUP_COLS], "wejść", "avg$/tx"]
+    print(f"\n{'='*90}")
+    print("WYNIKI MIESIĘCZNE — SYMULACJA LIVE ALGO (split 50/50 z BE)")
+    print(f"{'='*90}")
+    # nagłówek
+    print(f"  {'Miesiąc':<9}  {'Reżimy (ImpD/ImpU/TrD/TrU/Rng%)':<32}  "
+          + "  ".join(f"{c[1]:>6}" for c in _SETUP_COLS)
+          + f"  {'wejść':>5}  {'avg$/tx':>8}")
+    print(f"  {'-'*9}  {'-'*32}  " + "  ".join("-" * 6 for _ in _SETUP_COLS) + f"  {'-----':>5}  {'--------':>8}")
+
+    totals = make_algo_stats()
+
+    for label, stats_algo, h1_regime_counts in monthly_results:
+        total_h1 = sum(h1_regime_counts.values()) or 1
+        def rp(k):
+            return f"{h1_regime_counts.get(k,0)/total_h1*100:.0f}"
+        regime_str = (f"ID:{rp('IMPULSE_DOWN')} IU:{rp('IMPULSE_UP')} "
+                      f"TD:{rp('TREND_DOWN')} TU:{rp('TREND_UP')} R:{rp('RANGE')}")
+
+        month_filled = 0
+        month_pnl = 0.0
+        col_strs = []
+        for key, _ in _SETUP_COLS:
+            st = stats_algo[key]
+            f  = st["filled"]
+            tp1 = st["tp1_wins"]
+            month_filled += f
+            month_pnl += st["pnl_tp1_sum"] + st["pnl_tp2_sum"]
+            wr = f"{tp1/f*100:.0f}%" if f > 0 else "  —"
+            col_strs.append(f"{f:>2}/{wr:>4}")
+            # akumuluj w totals
+            for field in ("total","filled","tp1_wins","tp2_wins","sl_losses","open",
+                          "pnl_tp1_sum","pnl_tp2_sum"):
+                totals[key][field] += st[field]
+
+        avg = month_pnl / month_filled if month_filled > 0 else 0.0
+        sign = "+" if avg >= 0 else ""
+        print(f"  {label:<9}  {regime_str:<32}  "
+              + "  ".join(col_strs)
+              + f"  {month_filled:>5}  {sign}${avg:>6.2f}")
+
+    # Wiersz sumaryczny
+    tot_filled = sum(totals[k]["filled"] for k in totals)
+    tot_pnl    = sum(totals[k]["pnl_tp1_sum"] + totals[k]["pnl_tp2_sum"] for k in totals)
+    avg_tot    = tot_pnl / tot_filled if tot_filled > 0 else 0.0
+    sign_tot   = "+" if avg_tot >= 0 else ""
+    tot_cols   = []
+    for key, _ in _SETUP_COLS:
+        st = totals[key]
+        f  = st["filled"]
+        tp1 = st["tp1_wins"]
+        wr = f"{tp1/f*100:.0f}%" if f > 0 else "  —"
+        tot_cols.append(f"{f:>2}/{wr:>4}")
+    print(f"  {'-'*9}  {'-'*32}  " + "  ".join("-" * 6 for _ in _SETUP_COLS) + f"  {'-----':>5}  {'--------':>8}")
+    print(f"  {'RAZEM':<9}  {'':32}  "
+          + "  ".join(tot_cols)
+          + f"  {tot_filled:>5}  {sign_tot}${avg_tot:>6.2f}")
+    print(f"\n  Legenda kolumn: tpb_s=trend_pb_short  tpb_l=trend_pb_long  imc_s=imp_cont_short")
+    print(f"                  rng_s=range_short  rng_l=range_long  impD_s/l=impulse_D short/long")
+    print(f"  Format komórki: wejść/WR%")
+
+
 def make_algo_stats():
     def _entry():
         return {
@@ -1196,6 +1363,8 @@ def main():
     parser.add_argument("--from", dest="from_dt", help='Data poczatkowa, np. "2025-08-01 00:00"')
     parser.add_argument("--to", dest="to_dt", help='Data koncowa, np. "2025-09-30 23:59"')
     parser.add_argument("--days", type=int, default=90, help="Liczba dni wstecz (domyslnie 90)")
+    parser.add_argument("--monthly", action="store_true",
+                        help="Podziel zakres na miesiace i pokaz wyniki miesiac po miesiacu")
     args = parser.parse_args()
 
     now_ts = int(datetime.now(tz=timezone.utc).timestamp())
@@ -1227,6 +1396,20 @@ def main():
     print(f"\nPobieram swiece H1 ({needed_h1} sztuk)...")
     all_h1 = fetch_klines_paginated(symbol, "1h", needed_h1, end_ts_s=to_ts + 3600)
     print(f"Pobrano {len(all_h1)} swiec H1\n")
+
+    # ── Tryb MONTHLY — tylko H1 scan, bez M15 signal loop ─────────────────────
+    if args.monthly:
+        m15_times = [c["time"] for c in all_m15]
+        h1_times  = [c["time"] for c in all_h1]
+        monthly_results = []
+        for m_label, m_from, m_to in _month_ranges(from_ts, to_ts):
+            print(f"  Skanuje {m_label} ({_ts_fmt(m_from)} → {_ts_fmt(m_to)})...")
+            m_stats, m_regimes = run_h1_scan(m_from, m_to, all_m15, all_h1,
+                                              m15_times, h1_times)
+            monthly_results.append((m_label, m_stats, m_regimes))
+        print_monthly_table(monthly_results)
+        print()
+        return
 
     # Statistics per version
     stats_a = make_stats()
@@ -1432,79 +1615,14 @@ def main():
         ts += 900
 
     # ── H1 ALGO SCAN — wszystkie rezimy, bez cooldown ─────────────────────────
-    # Skanuje każdą świecę H1 niezależnie (jak poprzedni backtest Algo).
-    # Dla każdej H1: generuje wszystkie pasujące setupy i ewaluuje wyniki.
-    # Używa bisect dla O(log N) zamiast O(N) przeszukiwania list.
     m15_times = [c["time"] for c in all_m15]
     h1_times  = [c["time"] for c in all_h1]
-    total_h1_iters = max(1, int((to_ts - from_ts) / 3600))
-    h1_iter = 0
-    h1_regime_counts = {}
 
-    print(f"\nH1 scan — wszystkie rezimy ({total_h1_iters} swiece H1)...")
-    ts_h1 = from_ts
-    while ts_h1 <= to_ts:
-        # Fast index lookup via bisect
-        idx_m15 = bisect.bisect_left(m15_times, ts_h1)
-        idx_h1  = bisect.bisect_left(h1_times,  ts_h1)
-        ctx_m15_h = all_m15[max(0, idx_m15 - 100):idx_m15]
-        ctx_h1_h  = all_h1[max(0, idx_h1  -  50):idx_h1]
-        if len(ctx_m15_h) < 30 or len(ctx_h1_h) < 10:
-            ts_h1 += 3600
-            h1_iter += 1
-            continue
-        ph = ctx_m15_h[-1]["close"]
-        rh = detect_regime_new(ctx_m15_h, ctx_h1_h, ph)
-        rh_name = rh["regime"]
-        rh_dir  = rh.get("direction", "none")
-        h1_regime_counts[rh_name] = h1_regime_counts.get(rh_name, 0) + 1
-        fut_h = all_m15[idx_m15:idx_m15 + 200]
-        if not fut_h:
-            ts_h1 += 3600
-            h1_iter += 1
-            continue
+    print(f"\nH1 scan — wszystkie rezimy ({int((to_ts - from_ts)/3600)} swiece H1)...")
+    stats_algo, h1_regime_counts = run_h1_scan(
+        from_ts, to_ts, all_m15, all_h1, m15_times, h1_times, stats_algo
+    )
 
-        if rh_dir == "down":
-            s = setup_trend_pullback_short(rh, ctx_m15_h, ctx_h1_h, ph)
-            if s:
-                record_algo_outcome(stats_algo, "trend_pb_short", s,
-                                    evaluate_setup(s, fut_h, entry_window_h=24))
-            if rh_name == "IMPULSE_DOWN":
-                s = setup_impulse_cont_short(rh, ctx_m15_h, ctx_h1_h, ph)
-                if s:
-                    record_algo_outcome(stats_algo, "imp_cont_short", s,
-                                        evaluate_setup(s, fut_h, entry_window_h=24))
-                _, is_spk = compute_spike_filter(ctx_m15_h, "down")
-                if not is_spk:
-                    s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
-                    if s:
-                        record_algo_outcome(stats_algo, "impulse_d_short", s,
-                                            evaluate_setup(s, fut_h, entry_window_h=1))
-        elif rh_dir == "up":
-            s = setup_trend_pullback_long(rh, ctx_m15_h, ctx_h1_h, ph)
-            if s:
-                record_algo_outcome(stats_algo, "trend_pb_long", s,
-                                    evaluate_setup(s, fut_h, entry_window_h=24))
-            if rh_name == "IMPULSE_UP":
-                _, is_spk = compute_spike_filter(ctx_m15_h, "up")
-                if not is_spk:
-                    s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
-                    if s:
-                        record_algo_outcome(stats_algo, "impulse_d_long", s,
-                                            evaluate_setup(s, fut_h, entry_window_h=1))
-        elif rh_name == "RANGE":
-            s = setup_range_short(rh, ctx_m15_h, ctx_h1_h, ph)
-            if s:
-                record_algo_outcome(stats_algo, "range_short", s,
-                                    evaluate_setup(s, fut_h, entry_window_h=24))
-            s = setup_range_long(rh, ctx_m15_h, ctx_h1_h, ph)
-            if s:
-                record_algo_outcome(stats_algo, "range_long", s,
-                                    evaluate_setup(s, fut_h, entry_window_h=24))
-        ts_h1 += 3600
-        h1_iter += 1
-
-    # Podsumowanie rozkładu reżimów w H1 scan
     total_h1_scanned = sum(h1_regime_counts.values())
     if total_h1_scanned > 0:
         regime_summary = ", ".join(
