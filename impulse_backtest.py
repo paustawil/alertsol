@@ -1117,8 +1117,9 @@ _ALGO_KEYS_LABELS = [
 
 def print_algo_stats(stats):
     print(f"\n{'='*70}")
-    print("SYMULACJA LIVE ALGO — WSZYSTKIE REZIMY (split 50/50 z BE)")
-    print("  total = liczba wygenerowanych alertow (po cooldown 4h per kierunek)")
+    print("SYMULACJA LIVE ALGO — WSZYSTKIE REZIMY (split 50/50 z BE, H1 scan)")
+    print("  total = wygenerowane setupy na kazdej swiece H1 (bez cooldown)")
+    print("  Uwaga: ta sama okazja moze byc liczona wielokrotnie gdy utrzymuje sie >1h")
     print(f"{'='*70}")
     total_pnl = 0.0
     total_filled = 0
@@ -1254,10 +1255,7 @@ def main():
     cooldown_s = 4 * 3600
 
     # Cooldown tracking — live algo (all regimes), per kierunek
-    last_algo_down_ts  = 0
-    last_algo_up_ts    = 0
-    last_algo_range_ts = 0
-    algo_cooldown_s    = 4 * 3600
+    # USUNIĘTE — cooldown zastąpiony osobną pętlą H1 poniżej
 
     signal_count = 0
 
@@ -1276,58 +1274,6 @@ def main():
         regime = detect_regime_new(ctx_m15, ctx_h1, price)
         regime_name = regime["regime"]
         direction   = regime.get("direction", "none")
-
-        # ── LIVE ALGO — wszystkie rezimy ────────────────────────────────────
-        future_m15_algo = [c for c in all_m15 if c["time"] >= ts][:200]
-        if future_m15_algo:
-            if direction == "down" and ts - last_algo_down_ts >= algo_cooldown_s:
-                last_algo_down_ts = ts
-                # Trend/impulse pullback short (fib38-50%)
-                s = setup_trend_pullback_short(regime, ctx_m15, ctx_h1, price)
-                if s:
-                    res = evaluate_setup(s, future_m15_algo, entry_window_h=24)
-                    record_algo_outcome(stats_algo, "trend_pb_short", s, res)
-                if regime_name == "IMPULSE_DOWN":
-                    # Impulse continuation (1-2 greens)
-                    s = setup_impulse_cont_short(regime, ctx_m15, ctx_h1, price)
-                    if s:
-                        res = evaluate_setup(s, future_m15_algo, entry_window_h=24)
-                        record_algo_outcome(stats_algo, "imp_cont_short", s, res)
-                    # Version D market entry (z spike-filter)
-                    _, is_spk = compute_spike_filter(ctx_m15, "down")
-                    if not is_spk:
-                        s = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
-                        if s:
-                            res = evaluate_setup(s, future_m15_algo, entry_window_h=1)
-                            record_algo_outcome(stats_algo, "impulse_d_short", s, res)
-
-            elif direction == "up" and ts - last_algo_up_ts >= algo_cooldown_s:
-                last_algo_up_ts = ts
-                # Trend/impulse pullback long (fib38-50%, strength>=5)
-                s = setup_trend_pullback_long(regime, ctx_m15, ctx_h1, price)
-                if s:
-                    res = evaluate_setup(s, future_m15_algo, entry_window_h=24)
-                    record_algo_outcome(stats_algo, "trend_pb_long", s, res)
-                if regime_name == "IMPULSE_UP":
-                    # Version D market entry (z spike-filter)
-                    _, is_spk = compute_spike_filter(ctx_m15, "up")
-                    if not is_spk:
-                        s = setup_version_d(regime, ctx_m15, ctx_h1, price, vol_threshold=2.0)
-                        if s:
-                            res = evaluate_setup(s, future_m15_algo, entry_window_h=1)
-                            record_algo_outcome(stats_algo, "impulse_d_long", s, res)
-
-            elif regime_name == "RANGE" and ts - last_algo_range_ts >= algo_cooldown_s:
-                s_short = setup_range_short(regime, ctx_m15, ctx_h1, price)
-                s_long  = setup_range_long(regime, ctx_m15, ctx_h1, price)
-                if s_short or s_long:
-                    last_algo_range_ts = ts
-                    if s_short:
-                        res = evaluate_setup(s_short, future_m15_algo, entry_window_h=24)
-                        record_algo_outcome(stats_algo, "range_short", s_short, res)
-                    if s_long:
-                        res = evaluate_setup(s_long, future_m15_algo, entry_window_h=24)
-                        record_algo_outcome(stats_algo, "range_long", s_long, res)
 
         # ── IMPULSE-ONLY analysis (unchanged) ────────────────────────────────
         if regime_name not in ("IMPULSE_DOWN", "IMPULSE_UP"):
@@ -1483,6 +1429,65 @@ def main():
         )
 
         ts += 900
+
+    # ── H1 ALGO SCAN — wszystkie rezimy, bez cooldown ─────────────────────────
+    # Skanuje każdą świecę H1 niezależnie (jak poprzedni backtest Algo).
+    # Dla każdej H1: generuje wszystkie pasujące setupy i ewaluuje wyniki.
+    print("\nH1 scan — wszystkie rezimy...")
+    ts_h1 = from_ts
+    while ts_h1 <= to_ts:
+        ctx_m15_h = [c for c in all_m15 if c["time"] < ts_h1][-100:]
+        ctx_h1_h  = [c for c in all_h1  if c["time"] < ts_h1][-50:]
+        if len(ctx_m15_h) < 30 or len(ctx_h1_h) < 10:
+            ts_h1 += 3600
+            continue
+        ph = ctx_m15_h[-1]["close"]
+        rh = detect_regime_new(ctx_m15_h, ctx_h1_h, ph)
+        rh_name = rh["regime"]
+        rh_dir  = rh.get("direction", "none")
+        fut_h = [c for c in all_m15 if c["time"] >= ts_h1][:200]
+        if not fut_h:
+            ts_h1 += 3600
+            continue
+
+        if rh_dir == "down":
+            s = setup_trend_pullback_short(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "trend_pb_short", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+            if rh_name == "IMPULSE_DOWN":
+                s = setup_impulse_cont_short(rh, ctx_m15_h, ctx_h1_h, ph)
+                if s:
+                    record_algo_outcome(stats_algo, "imp_cont_short", s,
+                                        evaluate_setup(s, fut_h, entry_window_h=24))
+                _, is_spk = compute_spike_filter(ctx_m15_h, "down")
+                if not is_spk:
+                    s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
+                    if s:
+                        record_algo_outcome(stats_algo, "impulse_d_short", s,
+                                            evaluate_setup(s, fut_h, entry_window_h=1))
+        elif rh_dir == "up":
+            s = setup_trend_pullback_long(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "trend_pb_long", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+            if rh_name == "IMPULSE_UP":
+                _, is_spk = compute_spike_filter(ctx_m15_h, "up")
+                if not is_spk:
+                    s = setup_version_d(rh, ctx_m15_h, ctx_h1_h, ph, vol_threshold=2.0)
+                    if s:
+                        record_algo_outcome(stats_algo, "impulse_d_long", s,
+                                            evaluate_setup(s, fut_h, entry_window_h=1))
+        elif rh_name == "RANGE":
+            s = setup_range_short(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "range_short", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+            s = setup_range_long(rh, ctx_m15_h, ctx_h1_h, ph)
+            if s:
+                record_algo_outcome(stats_algo, "range_long", s,
+                                    evaluate_setup(s, fut_h, entry_window_h=24))
+        ts_h1 += 3600
 
     # Print final report
     print(f"\n{'='*70}")
