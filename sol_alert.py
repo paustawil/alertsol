@@ -1356,9 +1356,10 @@ def detect_market_regime(
     last_vol = sum(c["volume"] for c in recent_m15[-2:]) / 2
     vol_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
 
-    # ── Zmiana cenowa 2h / 4h / 8h / 12h / 24h / 48h ────────────────────────
+    # ── Zmiana cenowa 1h / 2h / 4h / 8h / 12h / 24h / 48h ──────────────────
     # 24h i 48h: średnia z 3 świec wokół punktu referencyjnego.
     # Eliminuje niestabilność gdy pojedyncza świeca trafia na spike/dno impulsu.
+    price_1h  = candles_m15[-4]["close"]  if len(candles_m15) >= 4  else candles_m15[0]["close"]
     price_2h  = candles_m15[-8]["close"] if len(candles_m15) >= 8 else candles_m15[0]["close"]
     price_4h  = candles_m15[-16]["close"] if len(candles_m15) >= 16 else candles_m15[0]["close"]
     price_8h  = candles_h1[-8]["close"]  if len(candles_h1) >= 8  else candles_h1[0]["close"]
@@ -1367,6 +1368,7 @@ def detect_market_regime(
                  if len(candles_h1) >= 25 else candles_h1[0]["close"])
     price_48h = (sum(c["close"] for c in candles_h1[-49:-46]) / 3
                  if len(candles_h1) >= 49 else candles_h1[0]["close"])
+    change_1h  = (current_price - price_1h)  / price_1h  * 100
     change_2h  = (current_price - price_2h)  / price_2h  * 100
     change_4h  = (current_price - price_4h)  / price_4h  * 100
     change_8h  = (current_price - price_8h)  / price_8h  * 100
@@ -1416,11 +1418,47 @@ def detect_market_regime(
     # chwilowo nie spełniają pełnego kryterium.
     impulse_min_score = 2 if abs(change_4h) >= 3.0 else 3
 
+    # ── SPIKE-REVERSAL FILTER ────────────────────────────────────────────────
+    # Wykrywa sytuacje gdy change_4h sugeruje impuls, ale krótkoterminowe dane
+    # wskazują że ruch już się odwraca (spike pump-and-dump / wick rejection).
+    # Jeśli ≥ 2 sygnały aktywne → podnosimy próg do 4 (trudniejsze wejście).
+    spike_reversal_score = 0
+    _idir = impulse_dir if impulse_dir != "none" else ("down" if change_4h < 0 else "up")
+
+    # Sygnał 1: zmiana 1h silnie przeciwna do kierunku impulsu (odwrót już trwa)
+    if _idir == "up"   and change_1h < -0.8:
+        spike_reversal_score += 1
+    elif _idir == "down" and change_1h >  0.8:
+        spike_reversal_score += 1
+
+    # Sygnał 2: zmiana 2h też już pod prąd (odwrót trwa dłużej)
+    if _idir == "up"   and change_2h < -0.6:
+        spike_reversal_score += 1
+    elif _idir == "down" and change_2h >  0.6:
+        spike_reversal_score += 1
+
+    # Sygnał 3: rejection wicks na ostatnich 3 świecach M15
+    # (cień po stronie impulsu > 1.5× ciało → odrzucenie poziomu)
+    _recent3 = candles_m15[-3:]
+    _bodies  = [abs(c["close"] - c["open"]) + 0.001 for c in _recent3]
+    if _idir == "up":
+        _wicks = [c["high"] - max(c["open"], c["close"]) for c in _recent3]
+    else:
+        _wicks = [min(c["open"], c["close"]) - c["low"]  for c in _recent3]
+    if sum(w / b for w, b in zip(_wicks, _bodies)) / 3 > 1.5:
+        spike_reversal_score += 1
+
+    if spike_reversal_score >= 2:
+        impulse_min_score = max(impulse_min_score, 4)
+        log.info(f"[REGIME] Spike-reversal filter: score={spike_reversal_score}, "
+                 f"1h:{change_1h:+.1f}% 2h:{change_2h:+.1f}%, min_score→{impulse_min_score}")
+
     if impulse_score >= impulse_min_score:
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
         strength = min(10, impulse_score * 2 + imp_str)
-        details = f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6"
+        details = (f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; "
+                   f"vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6; spk:{spike_reversal_score}")
         return {
             **base,
             "regime": f"IMPULSE_{impulse_dir.upper()}",

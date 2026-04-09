@@ -140,6 +140,53 @@ def detect_regime_new(candles_m15, candles_h1, current_price):
     }
 
 
+def compute_spike_filter(candles_m15: list[dict], impulse_dir: str) -> tuple[int, bool]:
+    """
+    Sprawdza czy sygnał IMPULSE wygląda jak spike-then-reversal.
+    Zwraca (spike_score, is_filtered).
+    is_filtered=True gdy spike_score >= 2 i impulse_min_score zostałby podniesiony do 4.
+
+    Sygnały:
+      1. change_1h silnie przeciwny do kierunku impulsu
+      2. change_2h też pod prąd
+      3. Rejection wicks na ostatnich 3 świecach M15
+    """
+    if len(candles_m15) < 8:
+        return 0, False
+
+    current_price = candles_m15[-1]["close"]
+    price_1h = candles_m15[-4]["close"] if len(candles_m15) >= 4 else candles_m15[0]["close"]
+    price_2h = candles_m15[-8]["close"] if len(candles_m15) >= 8 else candles_m15[0]["close"]
+    change_1h = (current_price - price_1h) / price_1h * 100
+    change_2h  = (current_price - price_2h)  / price_2h  * 100
+
+    spike_score = 0
+
+    # Sygnał 1: 1h silnie przeciwny
+    if impulse_dir == "up"   and change_1h < -0.8:
+        spike_score += 1
+    elif impulse_dir == "down" and change_1h >  0.8:
+        spike_score += 1
+
+    # Sygnał 2: 2h też pod prąd
+    if impulse_dir == "up"   and change_2h < -0.6:
+        spike_score += 1
+    elif impulse_dir == "down" and change_2h >  0.6:
+        spike_score += 1
+
+    # Sygnał 3: rejection wicks na ostatnich 3 M15
+    recent3 = candles_m15[-3:]
+    bodies = [abs(c["close"] - c["open"]) + 0.001 for c in recent3]
+    if impulse_dir == "up":
+        wicks = [c["high"] - max(c["open"], c["close"]) for c in recent3]
+    else:
+        wicks = [min(c["open"], c["close"]) - c["low"] for c in recent3]
+    if sum(w / b for w, b in zip(wicks, bodies)) / 3 > 1.5:
+        spike_score += 1
+
+    return spike_score, spike_score >= 2
+
+
 def find_swing_points(candles_h1, n=12):
     recent = candles_h1[-n:]
     return max(c["high"] for c in recent), min(c["low"] for c in recent)
@@ -642,24 +689,52 @@ def make_stats():
             "total": 0, "filled": 0,
             "tp1_wins": 0, "tp2_wins": 0, "sl_losses": 0, "open": 0,
             "pnl_tp1_sum": 0.0, "pnl_tp2_sum": 0.0,
+            # Spike-filter tracking
+            "spike_filtered": 0,        # ile odrzucone przez filtr
+            "spike_tp1_wins": 0,        # ile z odrzuconych trafiło TP1
+            "spike_tp2_wins": 0,        # ile z odrzuconych trafiło TP2
+            "spike_sl_losses": 0,       # ile z odrzuconych uderzyło SL
+            "spike_pnl_sum": 0.0,       # zsumowany pnl odrzuconych
         },
         "IMPULSE_UP": {
             "total": 0, "filled": 0,
             "tp1_wins": 0, "tp2_wins": 0, "sl_losses": 0, "open": 0,
             "pnl_tp1_sum": 0.0, "pnl_tp2_sum": 0.0,
+            "spike_filtered": 0,
+            "spike_tp1_wins": 0,
+            "spike_tp2_wins": 0,
+            "spike_sl_losses": 0,
+            "spike_pnl_sum": 0.0,
         },
     }
 
 
-def record_outcome(stats, direction_key, result, entry_price):
+def record_outcome(stats, direction_key, result, entry_price, spike_filtered=False):
     st = stats[direction_key]
-    st["total"] += 1
     wynik = result["wynik"]
+    scale = 100.0 / entry_price if entry_price > 0 else 1.0
+
+    if spike_filtered:
+        # Śledzimy co by się stało z odrzuconymi setupami
+        st["spike_filtered"] += 1
+        if wynik == "no_entry":
+            return
+        pnl = (result["pnl_tp1"] + result["pnl_tp2"]) * scale
+        st["spike_pnl_sum"] += pnl
+        if wynik == "TP1+TP2":
+            st["spike_tp1_wins"] += 1
+            st["spike_tp2_wins"] += 1
+        elif wynik == "TP1+BE":
+            st["spike_tp1_wins"] += 1
+        elif wynik == "SL":
+            st["spike_sl_losses"] += 1
+        return
+
+    st["total"] += 1
     if wynik == "no_entry":
         return
     st["filled"] += 1
     # Normalize pnl to $100 per trade (pnl expressed as fraction of entry)
-    scale = 100.0 / entry_price if entry_price > 0 else 1.0
     if wynik == "TP1+TP2":
         st["tp1_wins"] += 1
         st["tp2_wins"] += 1
@@ -699,6 +774,19 @@ def print_version_stats(name, desc, stats):
             f"SL {sl}/{f} ({pct(sl, f)}), open {op}, "
             f"avg pnl: {sign}${avg_pnl:.2f}"
         )
+        # Spike filter summary
+        spk = st["spike_filtered"]
+        if spk > 0:
+            spk_tp1 = st["spike_tp1_wins"]
+            spk_sl  = st["spike_sl_losses"]
+            spk_pnl = st["spike_pnl_sum"]
+            spk_sign = "+" if spk_pnl >= 0 else ""
+            print(
+                f"  {'':14}  [SPIKE-FILTER] zablokowano {spk} setupow: "
+                f"TP1 {spk_tp1}/{spk} ({pct(spk_tp1, spk)}), "
+                f"SL {spk_sl}/{spk} ({pct(spk_sl, spk)}), "
+                f"pnl gdyby weszly: {spk_sign}${spk_pnl:.2f}"
+            )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -787,6 +875,9 @@ def main():
 
         signal_count += 1
 
+        # Spike-reversal filter
+        spike_score, is_spike_filtered = compute_spike_filter(ctx_m15, regime["direction"])
+
         # Future candles for evaluation
         future_m15 = [c for c in all_m15 if c["time"] >= ts][:200]
 
@@ -799,8 +890,8 @@ def main():
         res_a = None
         if setup_a:
             res_a = evaluate_setup(setup_a, future_m15, entry_window_h=2)
-            record_outcome(stats_a, direction_key, res_a, setup_a["w"])
-        else:
+            record_outcome(stats_a, direction_key, res_a, setup_a["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
             stats_a[direction_key]["total"] += 1
 
         # Version B (entry window 2h)
@@ -808,8 +899,8 @@ def main():
         res_b = None
         if setup_b:
             res_b = evaluate_setup(setup_b, future_m15, entry_window_h=2)
-            record_outcome(stats_b, direction_key, res_b, setup_b["w"])
-        else:
+            record_outcome(stats_b, direction_key, res_b, setup_b["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
             stats_b[direction_key]["total"] += 1
 
         # Version C (entry window 4h)
@@ -817,8 +908,8 @@ def main():
         res_c = None
         if setup_c:
             res_c = evaluate_setup(setup_c, future_m15, entry_window_h=4)
-            record_outcome(stats_c, direction_key, res_c, setup_c["w"])
-        else:
+            record_outcome(stats_c, direction_key, res_c, setup_c["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
             stats_c[direction_key]["total"] += 1
 
         # Print signal line
@@ -831,8 +922,9 @@ def main():
             w = res["wynik"]
             return f"{t}:{w}"
 
+        spk_tag = f" [SPIKE-FILT spk={spike_score}]" if is_spike_filtered else (f" spk={spike_score}" if spike_score > 0 else "")
         print(
-            f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} str={regime['strength']} | "
+            f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} str={regime['strength']}{spk_tag} | "
             f"A={fmt_res(setup_a, res_a)} | B={fmt_res(setup_b, res_b)} | C={fmt_res(setup_c, res_c)}"
         )
 
