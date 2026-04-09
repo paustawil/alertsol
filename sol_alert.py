@@ -3462,12 +3462,7 @@ def check_stale_setups(regime: dict, current_price: float):
         if dist_pct > STALE_DIST_PCT:
             reason = f"cena uciekła ({dist_pct:.1%} od entry ${w1:.2f})"
 
-        # 2. Reżim zmienił kierunek
-        if not reason and regime_dir != "none":
-            if d == "short" and regime_dir == "up":
-                reason = f"zmiana reżimu na {regime['regime']} (setup short)"
-            elif d == "long" and regime_dir == "down":
-                reason = f"zmiana reżimu na {regime['regime']} (setup long)"
+        # 2. Reżim zmienił kierunek — wyłączone (algorytm trendu zbyt zawodny)
 
         # 3. Cena przebiła TP1 bez wejścia w pozycję
         if not reason and s.get("tps"):
