@@ -518,6 +518,29 @@ def print_diff(old_stats: dict, new_stats: dict) -> None:
     print(f"\n  Łącznie różnic: {diffs}")
 
 
+def print_detail(label: str, stats: dict) -> None:
+    """Wypisuje każdy setup z wynikiem — do diagnozy."""
+    rows = stats["detail_rows"]
+    if not rows:
+        print(f"\n  {label}: brak setupów")
+        return
+
+    print(f"\n{'='*110}")
+    print(f"  {label} — szczegóły każdego setupu")
+    print(f"{'='*110}")
+    print(f"{'Czas':<18} {'Cena':>8}  {'Reżim':<18} {'Typ setupu':<32} "
+          f"{'Dir':<6} {'W':>7} {'TP1':>7} {'SL':>7} {'Wynik':<10} {'PnL':>7}")
+    print("-" * 110)
+
+    pnl_running = 0.0
+    for r in sorted(rows, key=lambda x: x["ts"]):
+        pnl_running += r["pnl"]
+        print(f"{_ts_fmt(r['ts']):<18} ${r['price']:>7.2f}  "
+              f"{r['regime']:<18} {r['setup_type']:<32} "
+              f"{r['direction']:<6} ${r['w']:>6.2f} ${r['tp1']:>6.2f} ${r['sl']:>6.2f}  "
+              f"{r['wynik']:<10} {r['pnl']:>+6.2f}  [running: {pnl_running:>+6.2f}]")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Backtest: stara vs nowa logika reżimu"
@@ -526,6 +549,8 @@ def main():
     parser.add_argument("--to",   dest="dt_to",   default="2026-04-09 23:00")
     parser.add_argument("--diff", action="store_true",
                         help="Wypisz godziny z różnicą reżimu/wyniku")
+    parser.add_argument("--detail", action="store_true",
+                        help="Wypisz każdy setup z wynikiem (do diagnozy)")
     args = parser.parse_args()
 
     from_ts   = _parse_dt(args.dt_from)
@@ -563,6 +588,10 @@ def main():
 
     if args.diff:
         print_diff(old_stats, new_stats)
+
+    if args.detail:
+        print_detail("STARA logika", old_stats)
+        print_detail("NOWA logika",  new_stats)
 
 
 if __name__ == "__main__":
