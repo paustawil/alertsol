@@ -6,7 +6,7 @@ Użycie:
 import argparse
 import sys
 from diagnose_regime import (
-    detect_regime_new, fetch_klines_paginated,
+    detect_regime_new, detect_range, fetch_klines_paginated,
     _ts_fmt, _parse_dt,
 )
 
@@ -35,8 +35,8 @@ def main():
 
     test_hours = [from_ts + i * 3600 for i in range(num_hours + 1)]
 
-    print(f"{'Czas':<18} {'Cena':>8}  {'Reżim':<16}  {'4h':>6}  {'24h':>6}  {'48h':>6}  {'ll':>3}  {'hh':>3}  {'details'}")
-    print("-" * 110)
+    print(f"{'Czas':<18} {'Cena':>8}  {'Reżim':<16}  {'4h':>6}  {'24h':>6}  {'48h':>6}  {'ll':>3}  {'hh':>3}  {'S/R lub details'}")
+    print("-" * 120)
 
     for signal_ts in test_hours:
         ctx_m15 = [c for c in all_m15 if c["time"] <= signal_ts - 900][-100:]
@@ -54,10 +54,18 @@ def main():
 
         r = detect_regime_new(ctx_m15, ctx_h1, price)
 
+        if r["regime"] == "RANGE":
+            rng = detect_range(ctx_h1)
+            extra = (f"S=${rng['support']:.2f}  R=${rng['resistance']:.2f}  "
+                     f"zakres=${rng['range_size']:.2f}  "
+                     f"dotknięć S:{rng['s_touches']} R:{rng['r_touches']}")
+        else:
+            extra = r.get("details", "")
+
         print(
             f"{_ts_fmt(signal_ts):<18} ${price:>7.2f}  {r['regime']:<16}  "
             f"{r['change_4h']:>+5.1f}%  {r['change_24h']:>+5.1f}%  {r['change_48h']:>+5.1f}%  "
-            f"{ll:>3}  {hh:>3}  {r.get('details','')}"
+            f"{ll:>3}  {hh:>3}  {extra}"
         )
 
 
