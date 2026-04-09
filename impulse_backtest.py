@@ -681,6 +681,69 @@ def setup_version_c(regime, ctx_m15, ctx_h1, price):
     return None
 
 
+def setup_version_d(regime, ctx_m15, ctx_h1, price):
+    """
+    Wersja D: AGRESYWNE wejście po aktualnej cenie — bez czekania na pullback.
+
+    Filozofia: skoro pullback albo się nie wydarza, albo oznacza fake impuls,
+    wchodzimy natychmiast przy aktualnej cenie gdy IMPULSE jest potwierdzony
+    przez znacznie podwyższony wolumen (vol_ratio >= 2.0).
+
+    SL ustawiony na ATR × 1.2 od ceny wejścia.
+    RR minimum 1.2 (nieco złagodzone bo wchodzimy blisko rynku).
+    """
+    regime_name = regime["regime"]
+    vol_ratio = regime.get("vol_ratio", 1.0)
+
+    # Kluczowy warunek: wolumen co najmniej 2× średniej — prawdziwy impuls
+    if vol_ratio < 2.0:
+        return None
+
+    atr = calc_atr(ctx_h1[-20:]) if len(ctx_h1) >= 20 else calc_atr(ctx_h1)
+    if atr <= 0:
+        return None
+
+    swing_high, swing_low = find_swing_points(ctx_h1, n=12)
+    swing_low  = min(swing_low,  price)
+    swing_high = max(swing_high, price)
+
+    if regime_name == "IMPULSE_DOWN":
+        w   = price                    # market entry (short)
+        sl  = price + atr * 1.2
+        tp1 = swing_low
+        tp2 = swing_low - atr
+        if tp1 >= w or sl <= w:
+            return None
+        risk = sl - w
+        reward = w - tp1
+        if risk <= 0:
+            return None
+        rr = reward / risk
+        if rr < 1.2:
+            return None
+        return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                "direction": "short", "type": "D_short", "rr": round(rr, 2)}
+
+    elif regime_name == "IMPULSE_UP":
+        w   = price                    # market entry (long)
+        sl  = price - atr * 1.2
+        tp1 = swing_high
+        tp2 = swing_high + atr
+        if tp1 <= w or sl >= w:
+            return None
+        risk = w - sl
+        reward = tp1 - w
+        if risk <= 0:
+            return None
+        rr = reward / risk
+        if rr < 1.2:
+            return None
+        return {"w": w, "sl": sl, "tp1": tp1, "tp2": tp2,
+                "direction": "long", "type": "D_long", "rr": round(rr, 2)}
+
+    return None
+
+
 # ── Statistics helpers ────────────────────────────────────────────────────────
 
 def make_stats():
@@ -832,6 +895,7 @@ def main():
     stats_a = make_stats()
     stats_b = make_stats()
     stats_c = make_stats()
+    stats_d = make_stats()
 
     # Cooldown tracking
     last_impulse_ts_down = 0
@@ -912,6 +976,15 @@ def main():
         elif not is_spike_filtered:
             stats_c[direction_key]["total"] += 1
 
+        # Version D (market entry, vol_ratio >= 2.0, entry window 1h)
+        setup_d = setup_version_d(regime, ctx_m15, ctx_h1, price)
+        res_d = None
+        if setup_d:
+            res_d = evaluate_setup(setup_d, future_m15, entry_window_h=1)
+            record_outcome(stats_d, direction_key, res_d, setup_d["w"], spike_filtered=is_spike_filtered)
+        elif not is_spike_filtered:
+            stats_d[direction_key]["total"] += 1
+
         # Print signal line
         def fmt_res(setup, res):
             if setup is None:
@@ -924,8 +997,8 @@ def main():
 
         spk_tag = f" [SPIKE-FILT spk={spike_score}]" if is_spike_filtered else (f" spk={spike_score}" if spike_score > 0 else "")
         print(
-            f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} str={regime['strength']}{spk_tag} | "
-            f"A={fmt_res(setup_a, res_a)} | B={fmt_res(setup_b, res_b)} | C={fmt_res(setup_c, res_c)}"
+            f"[{_ts_fmt(ts)}] {regime_name} price={price:.2f} vol={regime.get('vol_ratio',0):.1f}x str={regime['strength']}{spk_tag} | "
+            f"A={fmt_res(setup_a, res_a)} | B={fmt_res(setup_b, res_b)} | C={fmt_res(setup_c, res_c)} | D={fmt_res(setup_d, res_d)}"
         )
 
         ts += 900
@@ -935,9 +1008,10 @@ def main():
     print(f"PODSUMOWANIE — {signal_count} sygnalow IMPULSE w zakresie")
     print(f"{'='*70}")
 
-    print_version_stats("WERSJA A", "green/red candles", stats_a)
+    print_version_stats("WERSJA A", "green/red candles (pullback 1-2 swiece)", stats_a)
     print_version_stats("WERSJA B", "Fibonacci limit, czeka na pullback", stats_b)
     print_version_stats("WERSJA C", "Fibonacci limit, antycypuje", stats_c)
+    print_version_stats("WERSJA D", "market entry natychmiast, vol >= 2.0x [AGRESYWNA]", stats_d)
 
     print()
 
