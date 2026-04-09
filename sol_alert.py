@@ -9,6 +9,7 @@ import os
 import json
 import re
 import time
+import threading
 import requests
 import anthropic
 import openai
@@ -1463,6 +1464,7 @@ def detect_market_regime(
             **base,
             "regime": f"IMPULSE_{impulse_dir.upper()}",
             "direction": impulse_dir, "score": strength,
+            "spike_score": spike_reversal_score,
             "pct_outside": 0, "details": details,
         }
 
@@ -1802,10 +1804,13 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
 
         # impulse_continuation_short — mini-pullback w impulsie
         if regime_name.startswith("IMPULSE_"):
+            _cont_spike = regime.get("spike_score", 0)
             last6 = candles_m15[-6:]
             greens = [c for c in last6 if c["close"] > c["open"]]
-            log_lines.append(f"  → impulse_cont: greens={len(greens)}/6 (need 1-2)")
-            if len(greens) >= 1 and len(greens) <= 2:
+            log_lines.append(f"  → impulse_cont: greens={len(greens)}/6 (need 1-2) spike={_cont_spike}")
+            if _cont_spike >= 2:
+                log_lines.append(f"    ✗ SKIP: spike_score={_cont_spike}>=2 (odwrót)")
+            elif len(greens) >= 1 and len(greens) <= 2:
                 pullback_high = max(c["high"] for c in last6[-2:])
                 w = round(pullback_high, 2)
                 sl = round(pullback_high + atr * 0.8, 2)
@@ -1823,6 +1828,35 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "score": strength,
                         "reasoning": f"{regime_name}({strength}); pullback M15",
                     })
+
+        # impulse_aggressive_short — market entry natychmiast, vol >= 2.0x (force_shadow — tryb testowy)
+        if regime_name.startswith("IMPULSE_"):
+            _agg_vol   = regime.get("vol_ratio", 1.0)
+            _agg_spike = regime.get("spike_score", 0)
+            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike}")
+            if _agg_spike >= 2:
+                log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
+            elif _agg_vol < 2.0:
+                log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
+            else:
+                w   = round(current_price, 2)
+                sl  = round(current_price + atr * 1.2, 2)
+                tp1 = round(swing_low, 2)
+                tp2 = round(swing_low - atr, 2)
+                rr_ok = tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} rr_ok={rr_ok}")
+                if rr_ok:
+                    log_lines.append(f"    ✓ ACCEPTED (force_shadow — tryb testowy)")
+                    setups.append({
+                        "type": "impulse_aggressive_short", "direction": "short",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
+                        "score": strength,
+                        "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive",
+                        "force_shadow": True,
+                    })
+                else:
+                    log_lines.append(f"    ✗ REJECTED: RR<1.5")
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
@@ -1860,6 +1894,35 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 })
         else:
             log_lines.append(f"  → pullback_long: SKIP (strength={strength}<5 lub brak swing)")
+
+        # impulse_aggressive_long — market entry natychmiast, vol >= 2.0x (force_shadow — tryb testowy)
+        if regime_name.startswith("IMPULSE_"):
+            _agg_vol   = regime.get("vol_ratio", 1.0)
+            _agg_spike = regime.get("spike_score", 0)
+            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike}")
+            if _agg_spike >= 2:
+                log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
+            elif _agg_vol < 2.0:
+                log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
+            else:
+                w   = round(current_price, 2)
+                sl  = round(current_price - atr * 1.2, 2)
+                tp1 = round(swing_high, 2)
+                tp2 = round(swing_high + atr, 2)
+                rr_ok = tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} rr_ok={rr_ok}")
+                if rr_ok:
+                    log_lines.append(f"    ✓ ACCEPTED (force_shadow — tryb testowy)")
+                    setups.append({
+                        "type": "impulse_aggressive_long", "direction": "long",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
+                        "score": strength,
+                        "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive",
+                        "force_shadow": True,
+                    })
+                else:
+                    log_lines.append(f"    ✗ REJECTED: RR<1.5")
 
     # ── RANGE ─────────────────────────────────────────────────────────────
     elif regime_name == "RANGE":
@@ -3198,6 +3261,7 @@ def _grok_regime_conflict(grok_direction: str, regime: dict) -> str | None:
 
 _last_grok_detection_ts: float = 0.0
 _last_algo2_ts:          float = 0.0
+_algo2_lock:             threading.Lock = threading.Lock()  # chroni _last_algo2_ts przed race condition
 
 
 def grok_shadow_main() -> None:
@@ -3815,10 +3879,125 @@ def _migrate_setup_ids():
 _last_breakout_tg_ts: float = 0.0
 _last_breakout_tg_regime: str = ""
 
+def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float, is_impulse: bool) -> str:
+    """
+    Wykonuje detekcję Algo2 i zapis setupów. Wywoływana z main() i breakout_scan().
+    Zakłada, że throttle został już sprawdzony i _last_algo2_ts zaktualizowany przez wywołującego.
+
+    Logika zapisu:
+    - force_shadow (np. impulse_aggressive): zawsze shadow=True, bez GPT3, bez Telegrama.
+    - regularne (pozostałe): najlepszy RR → walidacja → GPT3 → real order;
+      gorsze RR → shadow=True dla analizy porównawczej.
+
+    Zwraca: 'rejected' gdy GPT3 Validator odrzucił best (main() powinien wtedy return),
+            'saved' / 'no_setups' / 'skipped' / 'duplicate' w pozostałych przypadkach.
+    """
+    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    n_total = len(algo2_setups)
+    print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {n_total}")
+    _last_feedback["Algo2"] = {
+        "time":  datetime.now(TZ).isoformat(),
+        "found": bool(algo2_setups),
+        "count": n_total,
+        "text":  _clean_log(algo2_log),
+    }
+
+    if not algo2_setups:
+        log_to_alerty("Algo2", "brak_setupu", {
+            "type": "", "direction": "", "reasoning": algo2_log,
+            "kurs": round(current, 2),
+        })
+        return "no_setups"
+
+    # Podziel na force_shadow (testy) i regularne
+    force_shadow_setups = [s for s in algo2_setups if s.get("force_shadow")]
+    regular_setups = sorted(
+        [s for s in algo2_setups if not s.get("force_shadow")],
+        key=lambda s: s["rr"], reverse=True,
+    )
+
+    # ── Force-shadow setups — zapis bez GPT3 i bez Telegrama ─────────────
+    for s in force_shadow_setups:
+        s["reasoning"] = algo2_log
+        if not validate_setup(s, "Algo2"):
+            save_pending(s, "Algo2", "", current, shadow=True)
+            if s.get("setup_id"):
+                print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
+
+    if not regular_setups:
+        return "saved" if any(s.get("setup_id") for s in force_shadow_setups) else "no_setups"
+
+    # ── Regularne: najlepszy RR → real, gorsze → shadow dla analizy ──────
+    best = regular_setups[0]
+    best["reasoning"] = algo2_log
+
+    for s in regular_setups[1:]:
+        s["reasoning"] = algo2_log
+        if not validate_setup(s, "Algo2"):
+            save_pending(s, "Algo2", "", current, shadow=True)
+            if s.get("setup_id"):
+                print(f"[algo2] Shadow (gorszy RR): {s['type']} #{s['setup_id']} RR={s['rr']}")
+
+    level = best["entries"][0]
+    dist  = abs(current - level)
+    print(f"[algo2] Best: {best['type']} {best['direction']} W=${level:.2f} (dist=${dist:.2f}) RR={best['rr']}")
+
+    rejection = validate_setup(best, "Algo2")
+    if rejection:
+        log_to_alerty("Algo2", rejection, best)
+        return "skipped"
+
+    # ── GPT3 Validator — pomijany w IMPULSE (szybkość > jakość) ──────────
+    val_result = None
+    if ENABLE_GPT3_VALIDATOR and not is_impulse:
+        val_atr    = calc_atr(candles_m15)
+        val_sup    = regime.get("support")
+        val_res    = regime.get("resistance")
+        val_rng    = regime.get("range_size", 0)
+        val_pct    = max(0.0, min(100.0, (current - val_sup) / val_rng * 100)) if val_rng and val_sup else 50.0
+        val_result = call_gpt3_validator(
+            best, candles_m15, candles_h1, current,
+            atr=val_atr, support=val_sup, resistance=val_res,
+            price_pct_in_range=val_pct,
+        )
+        if val_result:
+            approved   = val_result.get("approve", True)
+            val_reason = val_result.get("reason", "")
+            val_conf   = val_result.get("confidence", 0)
+            print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
+            if not approved:
+                log_to_alerty("Algo2", f"GPT3-val odrzucił: {val_reason}", best)
+                save_pending(best, "Algo2", f"GPT3-val odrzucił: {val_reason}", current, shadow=True)
+                if best.get("setup_id"):
+                    db.update_setup(best["setup_id"], llm_scores={
+                        "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
+                    })
+                    db.resolve_setup(best["setup_id"], "odrzucony_validator", None, None, None, None)
+                print(f"[algo2] Setup odrzucony przez GPT3 Validator.")
+                return "rejected"
+        else:
+            print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
+    elif is_impulse:
+        print("[algo2] IMPULSE — GPT3 Validator pominięty.")
+    # ── koniec walidatora ─────────────────────────────────────────────────
+
+    save_pending(best, "Algo2", "", current)
+    if best.get("setup_id"):
+        log_to_alerty("Algo2", "", best)
+        send_telegram(format_alert("Algo2", best, current, True))
+        if val_result:
+            db.update_setup(best["setup_id"], llm_scores={
+                "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
+            })
+        return "saved"
+    else:
+        print("[algo2] Duplikat pominięty — setup już istnieje.")
+        return "duplicate"
+
+
 def breakout_scan():
-    """Szybki skan co 3 min — inwalidacja setupów + Telegram przy IMPULSE.
-    Detekcja Algo2 odbywa się tylko w main() co 15 min (z GPT3 Validator)."""
-    global _last_breakout_tg_ts, _last_breakout_tg_regime
+    """Szybki skan co 3 min — inwalidacja setupów + Telegram przy IMPULSE + Algo2 przy IMPULSE."""
+    global _last_breakout_tg_ts, _last_breakout_tg_regime, _last_algo2_ts
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
@@ -3839,9 +4018,10 @@ def breakout_scan():
         }
         return
 
-    # Telegram notification — tylko przy IMPULSE, cooldown 30 min
     is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
     now = time.time()
+
+    # Telegram notification — tylko przy IMPULSE, cooldown 30 min
     if is_impulse and not (regime["regime"] == _last_breakout_tg_regime
                            and now - _last_breakout_tg_ts < 1800):
         _last_breakout_tg_ts = now
@@ -3864,6 +4044,17 @@ def breakout_scan():
             f"Sygnały: {regime['details']}"
         )
         send_telegram(msg)
+
+    # Algo2 detekcja — natychmiast gdy IMPULSE, throttle 3 min (wspólny lock z main())
+    if is_impulse:
+        _bs_should_run = False
+        with _algo2_lock:
+            if now - _last_algo2_ts >= 3 * 60:
+                _last_algo2_ts = now
+                _bs_should_run = True
+        if _bs_should_run:
+            print("[algo2] IMPULSE w breakout_scan — uruchamiam detekcję Algo2.")
+            _algo2_run(regime, candles_m15, candles_h1, current, is_impulse=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -4041,85 +4232,23 @@ def main():
         # Nie nadpisuj _last_feedback["Grok"] — grok_shadow_main() aktualizuje go samodzielnie
 
     # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
-    # Internal throttle: 5 min w IMPULSE (bez GPT3 Validator), 15 min w pozostałych reżimach
+    # Internal throttle: 3 min w IMPULSE (bez GPT3 Validator), 15 min w pozostałych reżimach.
+    # Lock chroni _last_algo2_ts przed race condition z breakout_scan().
     _a2_now      = time.time()
     _a2_impulse  = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
-    _a2_threshold = 5 * 60 if _a2_impulse else 15 * 60
-    if _a2_now - _last_algo2_ts < _a2_threshold:
-        _a2_mins = int((_a2_threshold - (_a2_now - _last_algo2_ts)) / 60)
+    _a2_threshold = 3 * 60 if _a2_impulse else 15 * 60
+    _a2_should_run = False
+    with _algo2_lock:
+        if _a2_now - _last_algo2_ts >= _a2_threshold:
+            _last_algo2_ts = _a2_now
+            _a2_should_run = True
+    if not _a2_should_run:
+        _a2_mins = round((_a2_threshold - (_a2_now - _last_algo2_ts)) / 60, 1)
         print(f"[algo2] Za wcześnie — następna detekcja za ~{_a2_mins} min (reżim: {regime['regime']})")
     else:
-        _last_algo2_ts = _a2_now
-        algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
-        print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {len(algo2_setups)}")
-        _last_feedback["Algo2"] = {
-            "time":  datetime.now(TZ).isoformat(),
-            "found": bool(algo2_setups),
-            "count": len(algo2_setups),
-            "text":  _clean_log(algo2_log),
-        }
-
-        if algo2_setups:
-            best_algo2 = max(algo2_setups, key=lambda s: s["rr"])
-            best_algo2["reasoning"] = algo2_log
-            level = best_algo2["entries"][0]
-            d = best_algo2["direction"]
-            dist = abs(current - level)
-            print(f"[algo2] Best: {best_algo2['type']} {d} W=${level:.2f} (dist=${dist:.2f}) RR={best_algo2['rr']}")
-            rejection = validate_setup(best_algo2, "Algo2")
-            if rejection:
-                log_to_alerty("Algo2", rejection, best_algo2)
-            else:
-                # ── GPT3 Validator — pomijany w IMPULSE (szybkość > jakość) ──────
-                val_result = None
-                if ENABLE_GPT3_VALIDATOR and not _a2_impulse:
-                    val_atr    = calc_atr(candles_m15)
-                    val_sup    = regime.get("support")
-                    val_res    = regime.get("resistance")
-                    val_rng    = regime.get("range_size", 0)
-                    val_pct    = max(0.0, min(100.0, (current - val_sup) / val_rng * 100)) if val_rng and val_sup else 50.0
-                    val_result = call_gpt3_validator(
-                        best_algo2, candles_m15, candles_h1, current,
-                        atr=val_atr, support=val_sup, resistance=val_res,
-                        price_pct_in_range=val_pct,
-                    )
-                    if val_result:
-                        approved   = val_result.get("approve", True)
-                        val_reason = val_result.get("reason", "")
-                        val_conf   = val_result.get("confidence", 0)
-                        print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
-                        if not approved:
-                            log_to_alerty("Algo2", f"GPT3-val odrzucił: {val_reason}", best_algo2)
-                            # Zapisz odrzucony setup do DB jako shadow (nie idzie na giełdę)
-                            save_pending(best_algo2, "Algo2", f"GPT3-val odrzucił: {val_reason}", current, shadow=True)
-                            if best_algo2.get("setup_id"):
-                                db.update_setup(best_algo2["setup_id"], llm_scores={
-                                    "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
-                                })
-                                db.resolve_setup(best_algo2["setup_id"], "odrzucony_validator", None, None, None, None)
-                            print(f"[algo2] Setup odrzucony przez GPT3 Validator.")
-                            return
-                    else:
-                        print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
-                elif _a2_impulse:
-                    print("[algo2] IMPULSE — GPT3 Validator pominięty.")
-                # ── koniec walidatora ─────────────────────────────────────────
-                save_pending(best_algo2, "Algo2", "", current)
-                if best_algo2.get("setup_id"):
-                    log_to_alerty("Algo2", "", best_algo2)
-                    send_telegram(format_alert("Algo2", best_algo2, current, True))
-                    # Zapisz confidence validatora jeśli dostępny
-                    if val_result:
-                        db.update_setup(best_algo2["setup_id"], llm_scores={
-                            "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
-                        })
-                else:
-                    print("[algo2] Duplikat pominięty — setup już istnieje.")
-        else:
-            log_to_alerty("Algo2", "brak_setupu", {
-                "type": "", "direction": "", "reasoning": algo2_log,
-                "kurs": round(current, 2),
-            })
+        _a2_result = _algo2_run(regime, candles_m15, candles_h1, current, _a2_impulse)
+        if _a2_result == "rejected":
+            return
 
     # ── 5. GPT Relaxed (live search — sam pobiera BTC/ETH/F&G) ──────────────
     if ENABLE_GPT_RELAXED:
