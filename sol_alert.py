@@ -1541,6 +1541,56 @@ def detect_market_regime(
     }
 
 
+# ── Hystereza reżimu ──────────────────────────────────────────────────────────
+# Stabilizuje wykryty reżim: zmiana kierunku (UP↔DOWN) wymaga 2 kolejnych
+# potwierdzających detekcji. Zmiana typu w tym samym kierunku (np. TREND_UP →
+# IMPULSE_UP) oraz przejście do/z RANGE są natychmiastowe.
+
+_confirmed_regime: dict | None = None
+_pending_regime:   dict | None = None
+_pending_count:    int         = 0
+REGIME_CONFIRM_COUNT = 2
+
+
+def get_stable_regime(detected: dict) -> dict:
+    """Zwraca stabilny reżim z histerezą — blokuje jednorazowe flips kierunku."""
+    global _confirmed_regime, _pending_regime, _pending_count
+
+    if _confirmed_regime is None:
+        _confirmed_regime = detected
+        return detected
+
+    confirmed_dir = _confirmed_regime.get("direction", "none")
+    detected_dir  = detected.get("direction", "none")
+
+    # Nie zmiana kierunku (ten sam, lub przejście do/z RANGE) → natychmiastowo
+    if detected_dir == confirmed_dir or confirmed_dir == "none" or detected_dir == "none":
+        _confirmed_regime = detected
+        _pending_regime   = None
+        _pending_count    = 0
+        return detected
+
+    # Przeciwny kierunek (UP↔DOWN) → zbieraj potwierdzenia
+    if _pending_regime is not None and _pending_regime.get("direction") == detected_dir:
+        _pending_count += 1
+    else:
+        _pending_regime = detected
+        _pending_count  = 1
+
+    if _pending_count >= REGIME_CONFIRM_COUNT:
+        log.info(f"[REGIME] Zmiana potwierdzona: {_confirmed_regime['regime']} → "
+                 f"{detected['regime']} ({_pending_count}x)")
+        _confirmed_regime = detected
+        _pending_regime   = None
+        _pending_count    = 0
+        return detected
+
+    log.info(f"[REGIME] Hystereza: {detected['regime']} czeka "
+             f"({_pending_count}/{REGIME_CONFIRM_COUNT}), "
+             f"trzymam {_confirmed_regime['regime']}")
+    return {**detected, "regime": _confirmed_regime["regime"], "direction": confirmed_dir}
+
+
 # ── Punktacja algorytmu ───────────────────────────────────────────────────────
 def score_range_size(size: float) -> int:
     if 1.2 <= size <= 2.0: return 3
@@ -3286,7 +3336,7 @@ def grok_shadow_main() -> None:
         print("[grok-shadow] Brak danych — pomijam.")
         return
 
-    regime     = detect_market_regime(candles_m15, candles_h1, current)
+    regime     = get_stable_regime(detect_market_regime(candles_m15, candles_h1, current))
     is_impulse = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
 
     now       = time.time()
@@ -4002,7 +4052,7 @@ def breakout_scan():
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
     current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
-    regime      = detect_market_regime(candles_m15, candles_h1, current)
+    regime      = get_stable_regime(detect_market_regime(candles_m15, candles_h1, current))
 
     # Anuluj przestarzałe setupy (co 3 min — szybciej niż main)
     check_stale_setups(regime, current)
@@ -4062,7 +4112,7 @@ def main():
     current     = fetch_current_price(SYMBOL) or candles_m15[-1]["close"]
     rng         = detect_range(candles_m15)
     trend       = h1_trend(candles_h1)
-    regime      = detect_market_regime(candles_m15, candles_h1, current)
+    regime      = get_stable_regime(detect_market_regime(candles_m15, candles_h1, current))
 
     print(f"SOL: ${current:.2f} | Zakres: ${rng['support']}-${rng['resistance']} (${rng['range_size']:.2f}) | H1: {trend} | Reżim: {regime['regime']}")
 
