@@ -1987,7 +1987,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             tp1 = sup + rng_size * 0.5
             tp2 = sup + rng_size * 0.1
             dist_ok = abs(w - current_price) <= max_entry_dist
-            log_lines.append(f"  → range_short: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok}")
+            tp1_margin_ok_s = current_price >= tp1 + rng_size * 0.15
+            log_lines.append(f"  → range_short: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok} tp1_margin={'OK' if tp1_margin_ok_s else f'BLOCKED (cena ${current_price:.2f} zbyt blisko TP1 ${tp1:.2f})'}")
 
             # ── Filtr 1: Bullish momentum – nie shortuj na oporze podczas silnego wzrostu
             last6_m15_s = candles_m15[-6:]
@@ -2014,7 +2015,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_str = f"${ma60_s2:.2f}" if ma60_s2 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_str} MA60={ma60_str} → {'OK' if ma_ok_s else 'BLOCKED (bullish MA)'}")
 
-            if (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s:
+            if (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s and tp1_margin_ok_s:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
@@ -2031,7 +2032,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             tp1 = sup + rng_size * 0.5
             tp2 = res - rng_size * 0.1
             dist_ok = abs(w - current_price) <= max_entry_dist
-            log_lines.append(f"  → range_long: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok}")
+            tp1_margin_ok = current_price <= tp1 - rng_size * 0.15
+            log_lines.append(f"  → range_long: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok} tp1_margin={'OK' if tp1_margin_ok else f'BLOCKED (cena ${current_price:.2f} zbyt blisko TP1 ${tp1:.2f})'}")
 
             # ── Filtr 1: Bearish momentum – nie kupuj na wsparciu podczas silnego spadku
             last6_m15 = candles_m15[-6:]
@@ -2058,7 +2060,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_s = f"${ma60:.2f}" if ma60 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_s} MA60={ma60_s} → {'OK' if ma_ok else 'BLOCKED (bearish MA)'}")
 
-            if (tp1 - w) / (w - sl) >= 1.5 and dist_ok and momentum_ok and touches_ok and ma_ok:
+            if (tp1 - w) / (w - sl) >= 1.5 and dist_ok and momentum_ok and touches_ok and ma_ok and tp1_margin_ok:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_support_long", "direction": "long",
