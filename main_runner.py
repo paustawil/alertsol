@@ -580,8 +580,8 @@ function refreshAllCells(tr, pnl) {{
   var altCell = tr.querySelector('.alt-pnl-cell');
   var deltaCell = tr.querySelector('.delta-cell');
   var alt = null;
-  if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && d.tp1 && d.avg_entry && d.half_qty) {{
-    alt = Math.round((d.direction === 'long' ? 1 : -1) * d.half_qty * (d.tp1 - d.avg_entry) * 100) / 100;
+  if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && d.tp1 && d.avg_entry && d.full_qty) {{
+    alt = Math.round((d.direction === 'long' ? 1 : -1) * d.full_qty * (d.tp1 - d.avg_entry) * 100) / 100;
   }}
   altCell.textContent = alt != null ? fmt(alt) : '—';
   altCell.style.color = clr(alt);
@@ -930,8 +930,8 @@ function buildHistRow(s) {{
   var alt = null, dlt = null;
   if (result === 'SL') {{
     alt = pnl;
-  }} else if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && tp1p && efc && hq) {{
-    alt = Math.round(sign * hq * (tp1p - efc) * 100) / 100;
+  }} else if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && tp1p && efc && fq) {{
+    alt = Math.round(sign * fq * (tp1p - efc) * 100) / 100;
   }}
   var altPct = alt != null && rowTU ? Math.round(alt / rowTU * 10000) / 100 : null;
   if (alt != null && pnl != null) dlt = Math.round((pnl - alt) * 100) / 100;
