@@ -545,10 +545,19 @@ function calcAvgExit(result, d) {{
 }}
 
 function calcPnl(result, d, avgExit) {{
-  if (!d.avg_entry || !d.full_qty || avgExit == null || isNaN(avgExit)) return null;
+  if (!d.avg_entry) return null;
   if (!['TP1','TP1+TP2','TP2','TP1+BE','TP1+SL','SL'].includes(result)) return null;
   var sign = d.direction === 'long' ? 1 : -1;
-  return sign * d.full_qty * (avgExit - d.avg_entry);
+  if (result === 'TP1+BE' && d.tp1 && d.half_qty) {{
+    return Math.round(sign * d.half_qty * (d.tp1 - d.avg_entry) * 100) / 100;
+  }}
+  if (result === 'TP1+SL' && d.tp1 && d.half_qty) {{
+    var tp1Pnl = sign * d.half_qty * (d.tp1 - d.avg_entry);
+    var slPnl  = (avgExit != null && !isNaN(avgExit)) ? sign * d.half_qty * (avgExit - d.avg_entry) : 0;
+    return Math.round((tp1Pnl + slPnl) * 100) / 100;
+  }}
+  if (!d.full_qty || avgExit == null || isNaN(avgExit)) return null;
+  return Math.round(sign * d.full_qty * (avgExit - d.avg_entry) * 100) / 100;
 }}
 
 function refreshAllCells(tr, pnl) {{
@@ -572,7 +581,7 @@ function refreshAllCells(tr, pnl) {{
   var deltaCell = tr.querySelector('.delta-cell');
   var alt = null;
   if ((result === 'TP2' || result === 'TP1+BE' || result === 'TP1+SL') && d.tp1 && d.avg_entry && d.full_qty) {{
-    alt = (d.direction === 'long' ? 1 : -1) * d.full_qty * (d.tp1 - d.avg_entry);
+    alt = Math.round((d.direction === 'long' ? 1 : -1) * d.full_qty * (d.tp1 - d.avg_entry) * 100) / 100;
   }}
   altCell.textContent = alt != null ? fmt(alt) : '—';
   altCell.style.color = clr(alt);
@@ -2158,7 +2167,7 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         float(s["avg_entry"]) if s.get("avg_entry") else None
     )
 
-    if avg_exit is not None and avg_entry and body.result in ("TP1", "TP2", "TP1+BE", "TP1+SL", "SL"):
+    if avg_entry and body.result in ("TP1", "TP2", "TP1+BE", "TP1+SL", "SL"):
         direction = s.get("direction", "long")
         sign      = 1 if direction == "long" else -1
 
@@ -2175,12 +2184,18 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         if not half_qty:
             half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
 
-        if body.result == "SL":
+        tps_list  = s.get("tps") or []
+        tp1_setup = float(tps_list[0]) if tps_list else None
+
+        if body.result in ("SL", "TP1", "TP2") and avg_exit is not None:
             pnl_usd = sign * full_qty * (avg_exit - avg_entry)
-        elif body.result == "TP1":
-            pnl_usd = sign * full_qty * (avg_exit - avg_entry)
-        elif body.result in ("TP2", "TP1+BE", "TP1+SL"):
-            pnl_usd = sign * full_qty * (avg_exit - avg_entry)
+        elif body.result == "TP1+BE" and tp1_setup:
+            # Pierwsza połowa wychodzi na TP1, druga na BE (avg_entry) → PnL tylko z TP1
+            pnl_usd = sign * half_qty * (tp1_setup - avg_entry)
+        elif body.result == "TP1+SL" and tp1_setup:
+            # Pierwsza połowa na TP1, druga na SL (avg_exit)
+            sl_pnl  = sign * half_qty * (avg_exit - avg_entry) if avg_exit is not None else 0
+            pnl_usd = sign * half_qty * (tp1_setup - avg_entry) + sl_pnl
 
     db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)
     return {
