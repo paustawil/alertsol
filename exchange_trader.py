@@ -1011,6 +1011,7 @@ def _sync_inner():
                     if avg_entry and tp1_price and half_qty_f:
                         sign    = 1 if s.get("direction") == "long" else -1
                         pnl_usd = sign * half_qty_f * (tp1_price - float(avg_entry))
+                    s["pnl_usd"] = pnl_usd  # zachowaj w pamięci dla późniejszego TP1+BE/TP1+TP2
 
                     s["exchange_tp1_oid"]  = None
                     s["exchange_tp1_done"] = True
