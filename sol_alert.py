@@ -1492,6 +1492,31 @@ def detect_market_regime(
     if higher_highs >= 5: trend_score += 1
     if trend != "neutral": trend_score += 1
 
+    # ── SPIKE-REVERSAL FILTER dla TREND ──────────────────────────────────────
+    # change_24h/48h mogą być sztucznie duże gdy referencja trafiła na szczyt
+    # lub dołek spike'a. Filtr jest kierunkowy:
+    # - negatywna zmiana (potencjalny TREND_DOWN): sprawdź czy był spike UP
+    #   (max_high_48h >> price_48h) — to spike zainfekował referencję, nie trend
+    # - pozytywna zmiana (potencjalny TREND_UP): sprawdź czy był spike DOWN
+    #   (min_low_48h << price_48h)
+    # Uzasadnienie: spike trwający > 48h to już nowy range, więc 48h okno jest właściwe.
+    if len(candles_h1) >= 48:
+        h1_48        = candles_h1[-48:]
+        max_high_48h = max(c["high"] for c in h1_48)
+        min_low_48h  = min(c["low"]  for c in h1_48)
+        spike_up_pct   = (max_high_48h - price_48h) / price_48h * 100 if price_48h > 0 else 0
+        spike_down_pct = (price_48h - min_low_48h)  / price_48h * 100 if price_48h > 0 else 0
+        net_negative = change_48h < 0 or change_24h < 0
+        net_positive = change_48h > 0 or change_24h > 0
+        spike_infected = (net_negative and spike_up_pct   > 3.0) or \
+                         (net_positive and spike_down_pct > 3.0)
+        if spike_infected:
+            _spike_info = (f"+{spike_up_pct:.1f}% up" if net_negative
+                           else f"-{spike_down_pct:.1f}% down")
+            trend_score = max(0, trend_score - 2)
+            log.info(f"[REGIME] Spike-reversal TREND filter: spike {_spike_info} "
+                     f"vs ref48h=${price_48h:.2f} → trend_score-=2 ({trend_score})")
+
     has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
 
     details = f"4h:{change_4h:+.1f}% 8h:{change_8h:+.1f}% 12h:{change_12h:+.1f}% 24h:{change_24h:+.1f}% 48h:{change_48h:+.1f}% score:{trend_score} ll:{lower_lows} hh:{higher_highs}"
