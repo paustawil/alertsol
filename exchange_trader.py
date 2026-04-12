@@ -743,19 +743,24 @@ def _sync_inner():
     pending  = _load_pending()
     modified = False
 
-    # Guard: maksymalnie MAX_POSITIONS aktywnych pozycji na raz.
-    # Liczymy tylko pozycje realnie otwarte na Bitget — bez shadow i bez po-TP1
-    # (po TP1 pozycja jest już zamknięta połowicznie i trackowana tylko wirtualnie).
-    active_count = sum(
-        1 for s in pending
-        if s.get("exchange_position_opened")
-        and not s.get("exchange_done", False)
-        and not s.get("shadow", False)
-        and not s.get("exchange_tp1_done", False)
-    )
-    exchange_slot_taken = active_count >= MAX_POSITIONS
-    if exchange_slot_taken:
-        print(f"[exchange] Limit pozycji osiągnięty ({active_count}/{MAX_POSITIONS}) — nowe wstrzymane.")
+    # Guard: maksymalnie MAX_POSITIONS aktywnych pozycji na raz PER KIERUNEK.
+    # Liczymy osobno long i short — pozwala na jednoczesne pozycje w obu kierunkach
+    # (hedge mode na Bitget), np. range long + range short równocześnie.
+    def _active_for_dir(d: str) -> int:
+        return sum(
+            1 for s in pending
+            if s.get("exchange_position_opened")
+            and s.get("direction") == d
+            and not s.get("exchange_done", False)
+            and not s.get("shadow", False)
+            and not s.get("exchange_tp1_done", False)
+        )
+    active_longs  = _active_for_dir("long")
+    active_shorts = _active_for_dir("short")
+    if active_longs >= MAX_POSITIONS:
+        print(f"[exchange] Limit LONG pozycji osiągnięty ({active_longs}/{MAX_POSITIONS}) — nowe long wstrzymane.")
+    if active_shorts >= MAX_POSITIONS:
+        print(f"[exchange] Limit SHORT pozycji osiągnięty ({active_shorts}/{MAX_POSITIONS}) — nowe short wstrzymane.")
 
     for s in pending:
         sid       = s.get("setup_id", "?")
@@ -798,8 +803,9 @@ def _sync_inner():
 
         # ── NOWY setup — złóż 2 plan ordery przy W1 (half qty każdy) ────────
         if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
-            if exchange_slot_taken:
-                print(f"[exchange] {label}: pominięty — slot zajęty (tryb jedna pozycja na raz)")
+            dir_active = active_longs if direction == "long" else active_shorts
+            if dir_active >= MAX_POSITIONS:
+                print(f"[exchange] {label}: pominięty — limit {direction} pozycji ({dir_active}/{MAX_POSITIONS})")
                 continue
             # Atomicznie zarezerwuj slot przed wywołaniem API
             if not db.claim_plan_order(s["setup_id"]):
