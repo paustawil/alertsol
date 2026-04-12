@@ -1457,16 +1457,22 @@ def detect_market_regime(
     if impulse_score >= impulse_min_score:
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
-        strength = min(10, impulse_score * 2 + imp_str)
-        details = (f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; "
-                   f"vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6; spk:{spike_reversal_score}")
-        return {
-            **base,
-            "regime": f"IMPULSE_{impulse_dir.upper()}",
-            "direction": impulse_dir, "score": strength,
-            "spike_score": spike_reversal_score,
-            "pct_outside": 0, "details": details,
-        }
+        # Guard: impuls tylko po faktycznym przekroczeniu granicy range'a
+        if (impulse_dir == "up"   and current_price >= rng["resistance"]) or \
+           (impulse_dir == "down" and current_price <= rng["support"]):
+            strength = min(10, impulse_score * 2 + imp_str)
+            details = (f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; "
+                       f"vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6; spk:{spike_reversal_score}")
+            return {
+                **base,
+                "regime": f"IMPULSE_{impulse_dir.upper()}",
+                "direction": impulse_dir, "score": strength,
+                "spike_score": spike_reversal_score,
+                "pct_outside": 0, "details": details,
+            }
+        log.info(f"[REGIME] IMPULSE_{impulse_dir.upper()} zablokowany — "
+                 f"cena ${current_price:.2f} wewnątrz range "
+                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] → fallback RANGE")
 
     # ── TREND: change_24h / change_48h (wygładzone) + lower_lows/higher_highs ──
     h1_12 = candles_h1[-12:]
@@ -1525,12 +1531,18 @@ def detect_market_regime(
             if mtf_up == 3:
                 trend_dir = "up"
 
-        return {
-            **base,
-            "regime": f"TREND_{trend_dir.upper()}",
-            "direction": trend_dir, "score": trend_score,
-            "pct_outside": 0, "details": details,
-        }
+        # Guard: trend tylko po faktycznym przekroczeniu granicy range'a
+        if (trend_dir == "up"   and current_price >= rng["resistance"]) or \
+           (trend_dir == "down" and current_price <= rng["support"]):
+            return {
+                **base,
+                "regime": f"TREND_{trend_dir.upper()}",
+                "direction": trend_dir, "score": trend_score,
+                "pct_outside": 0, "details": details,
+            }
+        log.info(f"[REGIME] TREND_{trend_dir.upper()} zablokowany — "
+                 f"cena ${current_price:.2f} wewnątrz range "
+                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] → fallback RANGE")
 
     # ── RANGE ────────────────────────────────────────────────────────────────
     return {
