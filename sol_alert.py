@@ -1473,10 +1473,10 @@ def detect_market_regime(
                 "spike_score": spike_reversal_score,
                 "pct_outside": 0, "details": details,
             }
-        log.info(f"[REGIME] IMPULSE_{impulse_dir.upper()} zablokowany — "
-                 f"cena ${current_price:.2f} wewnątrz range "
-                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] "
-                 f"(r_touches={rng['r_touches']} s_touches={rng['s_touches']}) → fallback RANGE")
+        print(f"[REGIME] IMPULSE_{impulse_dir.upper()} zablokowany — "
+              f"cena ${current_price:.2f} wewnątrz range "
+              f"[{rng['support']:.2f}-{rng['resistance']:.2f}] "
+              f"(r_touches={rng['r_touches']} s_touches={rng['s_touches']}) → fallback RANGE")
 
     # ── TREND: change_24h / change_48h (wygładzone) + lower_lows/higher_highs ──
     h1_12 = candles_h1[-12:]
@@ -1514,8 +1514,8 @@ def detect_market_regime(
             _spike_info = (f"+{spike_up_pct:.1f}% up" if net_negative
                            else f"-{spike_down_pct:.1f}% down")
             trend_score = max(0, trend_score - 2)
-            log.info(f"[REGIME] Spike-reversal TREND filter: spike {_spike_info} "
-                     f"vs ref48h=${price_48h:.2f} → trend_score-=2 ({trend_score})")
+            print(f"[REGIME] Spike-reversal TREND filter: spike {_spike_info} "
+                  f"vs ref48h=${price_48h:.2f} → trend_score-=2 ({trend_score})")
 
     has_price_change = abs(change_24h) >= 1.5 or abs(change_48h) >= 3.0
 
@@ -1572,10 +1572,10 @@ def detect_market_regime(
                 "direction": trend_dir, "score": trend_score,
                 "pct_outside": 0, "details": details,
             }
-        log.info(f"[REGIME] TREND_{trend_dir.upper()} zablokowany — "
-                 f"cena ${current_price:.2f} wewnątrz range "
-                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] "
-                 f"(r_touches={rng['r_touches']} s_touches={rng['s_touches']}) → fallback RANGE")
+        print(f"[REGIME] TREND_{trend_dir.upper()} zablokowany — "
+              f"cena ${current_price:.2f} wewnątrz range "
+              f"[{rng['support']:.2f}-{rng['resistance']:.2f}] "
+              f"(r_touches={rng['r_touches']} s_touches={rng['s_touches']}) → fallback RANGE")
 
     # ── RANGE ────────────────────────────────────────────────────────────────
     return {
