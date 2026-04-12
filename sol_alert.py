@@ -1457,9 +1457,12 @@ def detect_market_regime(
     if impulse_score >= impulse_min_score:
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
-        # Guard: impuls tylko po faktycznym przekroczeniu granicy range'a
-        if (impulse_dir == "up"   and current_price >= rng["resistance"]) or \
-           (impulse_dir == "down" and current_price <= rng["support"]):
+        # Guard: impuls blokowany wewnątrz range'a — ale tylko gdy range jest
+        # prawdziwy (min 2 dotknięcia obu stron; strefa = 6% range_size).
+        genuine_range = rng["r_touches"] >= 2 and rng["s_touches"] >= 2
+        outside_range = (impulse_dir == "up"   and current_price >= rng["resistance"]) or \
+                        (impulse_dir == "down" and current_price <= rng["support"])
+        if not genuine_range or outside_range:
             strength = min(10, impulse_score * 2 + imp_str)
             details = (f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; "
                        f"vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6; spk:{spike_reversal_score}")
@@ -1472,7 +1475,8 @@ def detect_market_regime(
             }
         log.info(f"[REGIME] IMPULSE_{impulse_dir.upper()} zablokowany — "
                  f"cena ${current_price:.2f} wewnątrz range "
-                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] → fallback RANGE")
+                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] "
+                 f"(r_touches={rng['r_touches']} s_touches={rng['s_touches']}) → fallback RANGE")
 
     # ── TREND: change_24h / change_48h (wygładzone) + lower_lows/higher_highs ──
     h1_12 = candles_h1[-12:]
@@ -1531,9 +1535,12 @@ def detect_market_regime(
             if mtf_up == 3:
                 trend_dir = "up"
 
-        # Guard: trend tylko po faktycznym przekroczeniu granicy range'a
-        if (trend_dir == "up"   and current_price >= rng["resistance"]) or \
-           (trend_dir == "down" and current_price <= rng["support"]):
+        # Guard: trend blokowany wewnątrz range'a — ale tylko gdy range jest
+        # prawdziwy (min 2 dotknięcia obu stron; strefa = 6% range_size).
+        genuine_range = rng["r_touches"] >= 2 and rng["s_touches"] >= 2
+        outside_range = (trend_dir == "up"   and current_price >= rng["resistance"]) or \
+                        (trend_dir == "down" and current_price <= rng["support"])
+        if not genuine_range or outside_range:
             return {
                 **base,
                 "regime": f"TREND_{trend_dir.upper()}",
@@ -1542,7 +1549,8 @@ def detect_market_regime(
             }
         log.info(f"[REGIME] TREND_{trend_dir.upper()} zablokowany — "
                  f"cena ${current_price:.2f} wewnątrz range "
-                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] → fallback RANGE")
+                 f"[{rng['support']:.2f}-{rng['resistance']:.2f}] "
+                 f"(r_touches={rng['r_touches']} s_touches={rng['s_touches']}) → fallback RANGE")
 
     # ── RANGE ────────────────────────────────────────────────────────────────
     return {
