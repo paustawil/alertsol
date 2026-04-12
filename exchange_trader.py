@@ -488,10 +488,11 @@ def _find_preset_tpsl_pair(
     return tp1_id, tp2_id, sl1_id, sl2_id
 
 
-def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty: float):
+def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty: float) -> bool:
     """
     Modyfikuje istniejący SL order: nowa cena triggera i nowy rozmiar.
     Używane po TP1 — przesunięcie SL na SLpoTP1 i zmniejszenie size do half_qty.
+    Zwraca True jeśli modyfikacja się powiodła.
     """
     try:
         resp = client.post("/api/v2/mix/order/modify-tpsl-order", {
@@ -505,10 +506,48 @@ def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty
         })
         if resp.get("code") == "00000":
             print(f"[exchange] SL {sl_order_id} zmodyfikowany → {new_price}, size={_fmt_qty(new_qty)} SOL")
+            return True
         else:
             log.warning(f"[exchange] modify_sl {sl_order_id}: code={resp.get('code')} msg={resp.get('msg')}")
+            return False
     except Exception as e:
         log.warning(f"[exchange] modify_sl {sl_order_id}: {e}")
+        return False
+
+
+def _place_new_sl(
+    client: BitgetClient,
+    direction: str,
+    price: float,
+    qty: float,
+    sid,
+) -> str | None:
+    """
+    Składa nowy loss_plan TPSL order po TP1.
+    Używane gdy _modify_sl się nie powiodło — np. Bitget auto-anulował stary SL2
+    w momencie gdy TP1 zamknął pierwszą połowę pozycji.
+    Zwraca orderId lub None przy błędzie.
+    """
+    try:
+        resp = client.post("/api/v2/mix/order/place-tpsl-order", {
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "marginCoin":   MARGIN_COIN,
+            "planType":     "loss_plan",
+            "triggerPrice": _fmt_price(price),
+            "triggerType":  "mark_price",
+            "executePrice": "0",
+            "holdSide":     direction,
+            "size":         _fmt_qty(qty),
+        })
+        if resp.get("code") == "00000":
+            oid = resp["data"]["orderId"]
+            print(f"[exchange] #{sid} nowy SL2: {oid} | {_fmt_qty(qty)} SOL @ {price}")
+            return oid
+        log.error(f"[exchange] #{sid} place new SL2: code={resp.get('code')} msg={resp.get('msg')}")
+    except Exception as e:
+        log.error(f"[exchange] #{sid} place new SL2: {e}")
+    return None
 
 
 # ── Inwalidacja otwartych pozycji (wywoływana z sol_alert.py) ─────────────────
@@ -704,19 +743,24 @@ def _sync_inner():
     pending  = _load_pending()
     modified = False
 
-    # Guard: maksymalnie MAX_POSITIONS aktywnych pozycji na raz.
-    # Liczymy tylko pozycje realnie otwarte na Bitget — bez shadow i bez po-TP1
-    # (po TP1 pozycja jest już zamknięta połowicznie i trackowana tylko wirtualnie).
-    active_count = sum(
-        1 for s in pending
-        if s.get("exchange_position_opened")
-        and not s.get("exchange_done", False)
-        and not s.get("shadow", False)
-        and not s.get("exchange_tp1_done", False)
-    )
-    exchange_slot_taken = active_count >= MAX_POSITIONS
-    if exchange_slot_taken:
-        print(f"[exchange] Limit pozycji osiągnięty ({active_count}/{MAX_POSITIONS}) — nowe wstrzymane.")
+    # Guard: maksymalnie MAX_POSITIONS aktywnych pozycji na raz PER KIERUNEK.
+    # Liczymy osobno long i short — pozwala na jednoczesne pozycje w obu kierunkach
+    # (hedge mode na Bitget), np. range long + range short równocześnie.
+    def _active_for_dir(d: str) -> int:
+        return sum(
+            1 for s in pending
+            if s.get("exchange_position_opened")
+            and s.get("direction") == d
+            and not s.get("exchange_done", False)
+            and not s.get("shadow", False)
+            and not s.get("exchange_tp1_done", False)
+        )
+    active_longs  = _active_for_dir("long")
+    active_shorts = _active_for_dir("short")
+    if active_longs >= MAX_POSITIONS:
+        print(f"[exchange] Limit LONG pozycji osiągnięty ({active_longs}/{MAX_POSITIONS}) — nowe long wstrzymane.")
+    if active_shorts >= MAX_POSITIONS:
+        print(f"[exchange] Limit SHORT pozycji osiągnięty ({active_shorts}/{MAX_POSITIONS}) — nowe short wstrzymane.")
 
     for s in pending:
         sid       = s.get("setup_id", "?")
@@ -759,8 +803,9 @@ def _sync_inner():
 
         # ── NOWY setup — złóż 2 plan ordery przy W1 (half qty każdy) ────────
         if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
-            if exchange_slot_taken:
-                print(f"[exchange] {label}: pominięty — slot zajęty (tryb jedna pozycja na raz)")
+            dir_active = active_longs if direction == "long" else active_shorts
+            if dir_active >= MAX_POSITIONS:
+                print(f"[exchange] {label}: pominięty — limit {direction} pozycji ({dir_active}/{MAX_POSITIONS})")
                 continue
             # Atomicznie zarezerwuj slot przed wywołaniem API
             if not db.claim_plan_order(s["setup_id"]):
@@ -939,30 +984,47 @@ def _sync_inner():
                 print(f"[exchange] {label}: TP1 status = {tp1_status}")
 
                 if tp1_status == "executed":
-                    tps_list  = s.get("tps") or []
-                    tp1_price = float(tps_list[0]) if tps_list else None
-                    avg_entry = s.get("avg_entry")
-                    entry_be  = float(avg_entry) if avg_entry else (float(tps_list[0]) if tp1_price else None)
+                    tps_list   = s.get("tps") or []
+                    tp1_price  = float(tps_list[0]) if tps_list else None
+                    avg_entry  = s.get("avg_entry")
+                    # Użyj sl_after_tp1 jeśli dostępny, fallback na avg_entry (break-even)
+                    sl_new_raw = s.get("sl_after_tp1")
+                    sl_new     = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
                     half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
 
-                    # Anuluj SL1 (Bitget mógł już auto-anulować) i zmodyfikuj SL2 → BE
+                    # Anuluj SL1 (Bitget mógł już auto-anulować)
                     if sl_oid:
                         _cancel_order(client, sl_oid, "loss_plan")
-                    if sl2_oid and entry_be:
-                        _modify_sl(client, sl2_oid, entry_be, half_qty_f)
-                        print(f"[exchange] {label}: SL2 przesunięty na BE={entry_be}")
+
+                    # Przesuń SL2 → nowy SL (sl_after_tp1 lub BE)
+                    # Bitget często auto-anuluje SL2 gdy TP1 zamknie połowę pozycji —
+                    # dlatego próbujemy modify, a jeśli się nie uda, składamy nowy order.
+                    new_sl2_oid = sl2_oid
+                    if sl_new and half_qty_f > 0:
+                        if sl2_oid and _modify_sl(client, sl2_oid, sl_new, half_qty_f):
+                            print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new}")
+                        else:
+                            # modify nie powiodło się — anuluj stary i złóż nowy loss_plan
+                            if sl2_oid:
+                                _cancel_order(client, sl2_oid, "loss_plan")
+                            new_sl2_oid = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
+                            if new_sl2_oid:
+                                print(f"[exchange] {label}: nowy SL2 złożony → {new_sl2_oid} @ {sl_new}")
+                            else:
+                                log.warning(f"[exchange] {label}: nie udało się złożyć nowego SL2!")
 
                     pnl_usd = None
                     if avg_entry and tp1_price and half_qty_f:
                         sign    = 1 if s.get("direction") == "long" else -1
                         pnl_usd = sign * half_qty_f * (tp1_price - float(avg_entry))
+                    s["pnl_usd"] = pnl_usd  # zachowaj w pamięci dla późniejszego TP1+BE/TP1+TP2
 
                     s["exchange_tp1_oid"]  = None
                     s["exchange_tp1_done"] = True
                     s["exchange_sl_oid"]   = None
-                    # tp2_oid i sl2_oid zostają aktywne — faza 2
+                    s["exchange_sl2_oid"]  = new_sl2_oid  # zaktualizuj OID jeśli złożony nowy
                     modified = True
-                    print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub BE (SL2={sl2_oid})")
+                    print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 (SL2={new_sl2_oid})")
                     if sid and sid != "?":
                         db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
                     continue
@@ -1050,6 +1112,8 @@ def _sync_inner():
                 log.warning(f"[exchange] {label}: faza 2 — wszystkie zlecenia zniknęły — zwalniam slot")
                 s["exchange_done"] = True
                 modified = True
+                if sid and sid != "?":
+                    db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
 
     if modified:
         _save_pending(pending)
