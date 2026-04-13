@@ -1906,6 +1906,7 @@ def api_update_tps(setup_id: int, body: TpsUpdate):
     # Modify TP1 on Bitget if order exists
     tp1_oid = s.get("exchange_tp1_oid")
     if tp1_new is not None:
+        tp1_ok = False
         if tp1_oid and client:
             half_qty_str = s.get("exchange_qty_half")
             half_qty = float(half_qty_str) if half_qty_str else None
@@ -1923,20 +1924,25 @@ def api_update_tps(setup_id: int, body: TpsUpdate):
                 resp = client.post("/api/v2/mix/order/modify-tpsl-order", params)
                 if resp.get("code") == "00000":
                     modified.append(f"TP1→{tp1_new}")
+                    tp1_ok = True
                 else:
                     failed.append(f"TP1:{resp.get('msg')}")
             except Exception as e:
                 failed.append(f"TP1:{e}")
         else:
             modified.append(f"TP1→{tp1_new} (tylko DB)")
-        if len(tps) > 0:
-            tps[0] = tp1_new
-        elif len(tps) == 0:
-            tps = [tp1_new]
+            tp1_ok = True
+        # Aktualizuj lokalne tps tylko jeśli Bitget przyjął zmianę
+        if tp1_ok:
+            if len(tps) > 0:
+                tps[0] = tp1_new
+            elif len(tps) == 0:
+                tps = [tp1_new]
 
     # Modify TP2 on Bitget if order exists
     tp2_oid = s.get("exchange_tp2_oid")
     if tp2_new is not None:
+        tp2_ok = False
         if tp2_oid and client:
             half_qty_str = s.get("exchange_qty_half")
             half_qty = float(half_qty_str) if half_qty_str else None
@@ -1954,24 +1960,29 @@ def api_update_tps(setup_id: int, body: TpsUpdate):
                 resp = client.post("/api/v2/mix/order/modify-tpsl-order", params)
                 if resp.get("code") == "00000":
                     modified.append(f"TP2→{tp2_new}")
+                    tp2_ok = True
                 else:
                     failed.append(f"TP2:{resp.get('msg')}")
             except Exception as e:
                 failed.append(f"TP2:{e}")
         else:
             modified.append(f"TP2→{tp2_new} (tylko DB)")
-        if len(tps) > 1:
-            tps[1] = tp2_new
-        elif len(tps) == 1:
-            tps.append(tp2_new)
-        else:
-            tps = [None, tp2_new]
+            tp2_ok = True
+        # Aktualizuj lokalne tps tylko jeśli Bitget przyjął zmianę
+        if tp2_ok:
+            if len(tps) > 1:
+                tps[1] = tp2_new
+            elif len(tps) == 1:
+                tps.append(tp2_new)
+            else:
+                tps = [None, tp2_new]
 
     # Modify SL on Bitget if order exists
     sl_new   = body.sl
     sl_oid   = s.get("exchange_sl_oid")
     tp1_done = s.get("exchange_tp1_done", False)
     if sl_new is not None:
+        sl_ok = False
         if sl_oid and client:
             # Rozmiar SL: po TP1 jest już half_qty, przed TP1 — full_qty.
             # Zachowujemy istniejący rozmiar (modify nie wymaga size jeśli się nie zmienia).
@@ -1986,19 +1997,23 @@ def api_update_tps(setup_id: int, body: TpsUpdate):
                 })
                 if resp.get("code") == "00000":
                     modified.append(f"SL→{sl_new}")
+                    sl_ok = True
                 else:
                     failed.append(f"SL:{resp.get('msg')}")
             except Exception as e:
                 failed.append(f"SL:{e}")
         else:
             modified.append(f"SL→{sl_new} (tylko DB)")
-        # Aktualizuj odpowiednie pole w DB: sl_after_tp1 gdy po TP1, inaczej sl
-        if tp1_done:
-            db.update_setup(setup_id, sl_after_tp1=sl_new)
-        else:
-            db.update_setup(setup_id, sl=sl_new)
+            sl_ok = True
+        # Aktualizuj DB SL tylko jeśli Bitget przyjął zmianę — zapobiega fałszywemu
+        # wykryciu "SL hit" przez monitor gdy Bitget nadal ma stary poziom SL.
+        if sl_ok:
+            if tp1_done:
+                db.update_setup(setup_id, sl_after_tp1=sl_new)
+            else:
+                db.update_setup(setup_id, sl=sl_new)
 
-    if modified or not failed:
+    if modified:
         db.update_setup(setup_id, tps=tps)
 
     return {
