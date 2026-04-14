@@ -2060,24 +2060,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_str = f"${ma60_s2:.2f}" if ma60_s2 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_str} MA60={ma60_str} → {'OK' if ma_ok_s else 'BLOCKED (bullish MA)'}")
 
-            # ── Filtr 4: "Po fakcie" — nie shortuj gdy cena już opuściła opór z niedźwiedzim impetem.
-            # Jeśli W1 jest powyżej ceny (potrzeba wzrostu do wejścia) I cena właśnie spada od oporu
-            # (≥2/3 ostatnich M15 niedźwiedzich I dystans > 0.8 ATR od W1) → setup spóźniony.
-            _w_needs_rise = w > current_price * 1.003  # W1 co najmniej 0.3% powyżej ceny
-            if _w_needs_rise:
-                _bf3 = sum(1 for c in candles_m15[-3:] if c["close"] < c["open"])
-                _dist_from_w = w - current_price  # jak daleko cena jest poniżej W1
-                after_fact_s = _bf3 >= 2 and _dist_from_w > atr * 0.8
-                log_lines.append(
-                    f"    after_fact: need_rise=True bearish3={_bf3}/3 "
-                    f"dist_from_W1=${_dist_from_w:.2f} (threshold ATR*0.8=${atr * 0.8:.2f}) "
-                    f"→ {'BLOCKED (po fakcie — cena odpływa od oporu)' if after_fact_s else 'OK'}"
-                )
-            else:
-                after_fact_s = False
-                log_lines.append(f"    after_fact: price przy W1 (W=${w:.2f} ≤ cena=${current_price:.2f}*1.003) → OK")
-
-            if (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s and tp1_margin_ok_s and not after_fact_s:
+            if (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s and tp1_margin_ok_s:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
@@ -2942,16 +2925,6 @@ def next_setup_id() -> int:
 REPLACE_MIN_DIFF = 0.10  # poniżej → prawdziwy duplikat, pomiń
 REPLACE_MAX_DIFF = 0.50  # powyżej → osobny setup
 
-# Typy setupów trend vs range — do wzajemnego wykluczania
-_TREND_SHORT_TYPES = frozenset({
-    "trend_pullback_short", "trend_consolidation_short",
-    "impulse_continuation_short", "impulse_aggressive_short",
-})
-_TREND_LONG_TYPES = frozenset({
-    "trend_pullback_long", "trend_consolidation_long",
-    "impulse_continuation_long", "impulse_aggressive_long",
-})
-
 
 def save_pending(setup: dict, model: str, rejection: str, current_price: float, shadow: bool = False):
     entries   = setup.get("entries", [])
@@ -2994,35 +2967,6 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
                     db.resolve_setup(p["setup_id"], "anulowany", None, None, None, None)
                     replaced_setup = {"sid": p["setup_id"], "w1": old_w1}
                     break  # stary anulowany — kontynuuj wstawianie nowego
-
-        # Wzajemne wykluczanie trend ↔ range:
-        # Trend short invaliduje pending range_support_long (i vice versa).
-        # Chroni przed sytuacją: reżim zmienił się z RANGE → TREND_DOWN, a oba setupy
-        # są jednocześnie aktywne → dwa SL przy dolnej krawędzi konsolidacji.
-        new_type = setup.get("type", "")
-        if new_type:
-            for p in db.get_active_setups():
-                if p.get("entry_hit_at") is not None:
-                    continue  # pozycja już otwarta — nie ruszaj
-                p_type = p.get("type", "")
-                conflicting = (
-                    (new_type in _TREND_SHORT_TYPES and p_type == "range_support_long") or
-                    (new_type in _TREND_LONG_TYPES  and p_type == "range_resistance_short") or
-                    (new_type == "range_support_long"     and p_type in _TREND_SHORT_TYPES) or
-                    (new_type == "range_resistance_short" and p_type in _TREND_LONG_TYPES)
-                )
-                if conflicting:
-                    now_iso = datetime.now(timezone.utc).isoformat()
-                    cancel_reason = (f"anulowany przez {new_type} "
-                                     f"(trend↔range conflict: {p_type})")
-                    print(f"[pending] Anulowanie #{p['setup_id']} ({p_type}) "
-                          f"— sprzeczny z nowym {new_type}")
-                    db.update_setup(p["setup_id"],
-                                    shadow=True,
-                                    cancel_reason=cancel_reason,
-                                    cancel_time=now_iso,
-                                    cancel_price=round(current_price, 2))
-                    db.resolve_setup(p["setup_id"], "anulowany", None, None, None, None)
 
     # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
     w1_lvl    = entries[0] if entries else current_price
