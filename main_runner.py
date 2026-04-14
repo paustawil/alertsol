@@ -245,7 +245,9 @@ def dashboard():
             f'data-tp1-oid="{tp1_oid}" data-tp2-oid="{tp2_oid}" data-sl-oid="{sl_oid}" '
             f'data-qty-full="{qty_full}" data-pos-open="{pos_open}" data-tp1-done="{tp1_done}">'
             f"<td>#{sid}</td><td>{s['model']}</td>"
-            f"<td>{s['direction'].upper()}</td><td>{status}</td>"
+            f"<td>{s['direction'].upper()}</td>"
+            f"<td style='font-size:0.75em;color:#aaa;white-space:nowrap'>{s.get('type','')}</td>"
+            f"<td>{status}</td>"
             f"<td>{w1}</td>"
             f'<td>'
             f'<span class="av-view">{tp1}</span>'
@@ -450,13 +452,13 @@ def dashboard():
 
 <h3>Aktywne setupy ({len(active)}) <small style="color:#888;font-size:0.7em" id="bitget-live-status">ładowanie Bitget…</small></h3>
 <table id="active-table">
-<tr><th>#</th><th>Model</th><th>Kier.</th><th>Status</th><th>W1</th><th>TP1</th><th>TP2</th><th>SL</th><th>SL@TP1</th>
+<tr><th>#</th><th>Model</th><th>Kier.</th><th>Typ</th><th>Status</th><th>W1</th><th>TP1</th><th>TP2</th><th>SL</th><th>SL@TP1</th>
 <th title="SOL w otwartej pozycji (Bitget)" style="background:#1a2a1a">qtP</th>
 <th title="SOL na zleceniu TP1 (Bitget)" style="background:#1a2a1a">qtTP1</th>
 <th title="SOL na zleceniu TP2 (Bitget)" style="background:#1a2a1a">qtTP2</th>
 <th title="SOL na zleceniu SL (Bitget)" style="background:#1a2a1a">qtSL</th>
 <th>Akcje</th></tr>
-{active_rows or '<tr><td colspan=14 style="color:#888">Brak aktywnych setupów</td></tr>'}
+{active_rows or '<tr><td colspan=15 style="color:#888">Brak aktywnych setupów</td></tr>'}
 </table>
 
 <h3>Per model</h3>
@@ -487,10 +489,10 @@ def dashboard():
 </div>
 <table id="history-table">
 <thead>
-<tr><th>#</th><th>Alert</th><th>Wejście dt</th><th>Wyjście dt</th><th>Model</th><th>Kier.</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th style="background:#1a2a2a">PnL $</th><th style="background:#1a2a2a">PnL %</th><th style="background:#1a2a2a" title="PnL gdyby cała pozycja wyszła na TP1 (dla SL = rzeczywisty PnL)">TP1-only $</th><th style="background:#1a2a2a" title="TP1-only %">TP1-only %</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
-<tr id="hist-totals" style="background:#1a2a1a;font-weight:bold;font-size:0.9em"><td colspan=9 style="color:#888;font-size:0.8em">∑ filtr:</td><td id="ht-pnl" style="background:#1a2a2a">—</td><td id="ht-pnl-pct" style="background:#1a2a2a">—</td><td id="ht-tp1" style="background:#1a2a2a">—</td><td id="ht-tp1-pct" style="background:#1a2a2a">—</td><td id="ht-delta">—</td><td></td></tr>
+<tr><th>#</th><th>Alert</th><th>Wejście dt</th><th>Wyjście dt</th><th>Model</th><th>Kier.</th><th>Typ</th><th>Wejście</th><th>Wynik</th><th>Wyjście</th><th style="background:#1a2a2a">PnL $</th><th style="background:#1a2a2a">PnL %</th><th style="background:#1a2a2a" title="PnL gdyby cała pozycja wyszła na TP1 (dla SL = rzeczywisty PnL)">TP1-only $</th><th style="background:#1a2a2a" title="TP1-only %">TP1-only %</th><th title="Rzeczywisty PnL minus TP1-only (czy TP2 opłacał się)">Δ(real-TP1)</th><th></th></tr>
+<tr id="hist-totals" style="background:#1a2a1a;font-weight:bold;font-size:0.9em"><td colspan=10 style="color:#888;font-size:0.8em">∑ filtr:</td><td id="ht-pnl" style="background:#1a2a2a">—</td><td id="ht-pnl-pct" style="background:#1a2a2a">—</td><td id="ht-tp1" style="background:#1a2a2a">—</td><td id="ht-tp1-pct" style="background:#1a2a2a">—</td><td id="ht-delta">—</td><td></td></tr>
 </thead>
-<tbody id="hist-body"><tr><td colspan=15 style="color:#888">Ładowanie...</td></tr></tbody>
+<tbody id="hist-body"><tr><td colspan=16 style="color:#888">Ładowanie...</td></tr></tbody>
 </table>
 <div style="text-align:center;margin:10px 0">
   <button class="btn-action" id="load-more-btn" onclick="loadHistory(false)" style="display:none">Załaduj więcej</button>
@@ -969,6 +971,7 @@ function buildHistRow(s) {{
     + '<td style="font-size:0.8em;color:#aaa">' + exitDt + '</td>'
     + '<td>' + s.model + '</td>'
     + '<td>' + dir.toUpperCase() + '</td>'
+    + '<td style="font-size:0.75em;color:#aaa;white-space:nowrap">' + (s.type || '') + '</td>'
     + '<td><span class="vmode avg-entry-display">' + entryStr + '</span>'
     +   '<input class="emode avg-entry-input" type="number" step="0.01" value="' + entryInp + '" oninput="onEntryChange(this)"></td>'
     + '<td><span class="vmode result-display">' + resLabel + '</span>'
