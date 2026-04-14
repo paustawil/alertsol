@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Range Backtest — porownanie logiki range setupow:
-  Wersja A (aktualna): TP na % range'a, oba kierunki niezaleznie od EMA
-  Wersja B (nowa):     EMA alignment decyduje o kierunku, TP na poziomach EMA
+Range Backtest — porownanie logiki range setupow A vs C.
+
+  Wersja A (aktualna):  TP1=50% range, TP2=90% range, MA filter na M15
+  Wersja C (propozycja): te same warunki wejscia co A, ale TP na poziomach EMA H1
+                          (TP1 = najblizsze EMA, TP2 = nastepne EMA lub fallback 60%)
+
+UWAGA: wymaga dostepu do OKX API. Uruchom z terminala (nie z tego srodowiska — proxy blokuje).
 
 Uruchomienie:
-    python range_backtest.py
+    python range_backtest.py --from 2026-04-01
     python range_backtest.py --from 2026-04-01 --to 2026-04-14
-    python range_backtest.py --max-rng-atr 4.0   # filtr szerokosci range
+    python range_backtest.py --from 2026-04-01 --max-rng-atr 4.0
 """
 
 import argparse
@@ -189,18 +193,19 @@ def gen_version_a(candles_h1: list[dict], candles_m15: list[dict],
     return setups
 
 
-def gen_version_b(candles_h1: list[dict], candles_m15: list[dict],
+def gen_version_c(candles_h1: list[dict], candles_m15: list[dict],
                   price: float, atr: float, max_rng_atr: float) -> list[dict]:
     """
-    Wersja B — nowa logika:
-    - EMA H1 alignment decyduje o kierunku (bullish→tylko long, bearish→tylko short, mixed→skip)
-    - TP na poziomach EMA H1 (fallback na mniejszy % range)
-    - Filtr szerokości range (max_rng_atr)
+    Wersja C — te same warunki wejscia co A (MA filter M15, oba kierunki),
+    ale TP bazowane na poziomach EMA H1 zamiast stalych % range.
+
+    TP1 = najblizsze EMA powyzej wejscia (long) / ponizej wejscia (short)
+    TP2 = nastepne EMA lub fallback na 60% range jesli brak
     """
-    rng    = detect_range(candles_h1)
-    sup    = rng["support"]
-    res    = rng["resistance"]
-    size   = rng["size"]
+    rng  = detect_range(candles_h1)
+    sup  = rng["support"]
+    res  = rng["resistance"]
+    size = rng["size"]
     if size < atr * 1.5:
         return []
     if max_rng_atr and size > atr * max_rng_atr:
@@ -208,43 +213,41 @@ def gen_version_b(candles_h1: list[dict], candles_m15: list[dict],
     if rng["r_touches"] < 2 or rng["s_touches"] < 2:
         return []
 
-    emas      = calc_emas(candles_h1)
-    alignment = ema_alignment(emas)
-    if alignment == "mixed":
-        return []
+    ma30_m15 = _ma_m15(candles_m15, 30)
+    ma60_m15 = _ma_m15(candles_m15, 60)
+    emas     = calc_emas(candles_h1)
+    setups   = []
 
-    setups = []
-
-    if alignment == "bearish":
-        # range_resistance_short
-        w_s  = round(res - size * 0.10, 3)
-        sl_s = round(res + atr,         3)
-        dist_ok = abs(w_s - price) <= price * 0.03
-        tp1_margin_ok = price >= w_s - size * 0.15
-        if not dist_ok or not tp1_margin_ok:
-            return []
+    # range_resistance_short
+    w_s  = round(res - size * 0.10, 3)
+    sl_s = round(res + atr,         3)
+    dist_ok_s      = abs(w_s - price) <= price * 0.03
+    tp1_margin_ok_s = price >= w_s - size * 0.15
+    ma_bullish     = ma30_m15 and ma60_m15 and price > ma30_m15 > ma60_m15
+    ma_ok_s        = not ma_bullish
+    if dist_ok_s and tp1_margin_ok_s and ma_ok_s:
         tp1_s, tp2_s = ema_tps_short(w_s, emas, sup, res, size)
         rr_s = (w_s - tp1_s) / (sl_s - w_s) if sl_s > w_s and tp1_s < w_s else 0
-        if rr_s >= 1.2:
+        if rr_s >= 1.5:
             setups.append({
-                "direction": "short", "type": "B_range_short",
+                "direction": "short", "type": "C_range_short",
                 "w": w_s, "sl": sl_s, "tp1": tp1_s, "tp2": tp2_s,
                 "rr": round(rr_s, 2),
             })
 
-    if alignment == "bullish":
-        # range_support_long
-        w_l  = round(sup + size * 0.10, 3)
-        sl_l = round(sup - atr,         3)
-        dist_ok = abs(w_l - price) <= price * 0.03
-        tp1_margin_ok = price <= w_l + size * 0.15
-        if not dist_ok or not tp1_margin_ok:
-            return []
+    # range_support_long
+    w_l  = round(sup + size * 0.10, 3)
+    sl_l = round(sup - atr,         3)
+    dist_ok_l      = abs(w_l - price) <= price * 0.03
+    tp1_margin_ok_l = price <= w_l + size * 0.15
+    ma_bearish     = ma30_m15 and ma60_m15 and price < ma30_m15 < ma60_m15
+    ma_ok_l        = not ma_bearish
+    if dist_ok_l and tp1_margin_ok_l and ma_ok_l:
         tp1_l, tp2_l = ema_tps_long(w_l, emas, res, sup, size)
         rr_l = (tp1_l - w_l) / (w_l - sl_l) if w_l > sl_l and tp1_l > w_l else 0
-        if rr_l >= 1.2:
+        if rr_l >= 1.5:
             setups.append({
-                "direction": "long", "type": "B_range_long",
+                "direction": "long", "type": "C_range_long",
                 "w": w_l, "sl": sl_l, "tp1": tp1_l, "tp2": tp2_l,
                 "rr": round(rr_l, 2),
             })
@@ -599,10 +602,10 @@ def run_backtest_synthetic(from_ts: int, to_ts: int, max_rng_atr: float | None,
 def _run_loop(m15_window: list[dict], all_m15: list[dict], all_h1: list[dict],
               max_rng_atr: float | None) -> None:
     results_a: list[dict] = []
-    results_b: list[dict] = []
+    results_c: list[dict] = []
 
     last_entry_a: dict[str, int] = {}
-    last_entry_b: dict[str, int] = {}
+    last_entry_c: dict[str, int] = {}
 
     for i, candle in enumerate(m15_window):
         t = candle["time"]
@@ -611,7 +614,7 @@ def _run_loop(m15_window: list[dict], all_m15: list[dict], all_h1: list[dict],
         if len(ctx_h1) < 60:
             continue
 
-        # M15 kontekst (min 60 świec = 15h do filtrów MA30/MA60 na M15)
+        # M15 kontekst (min 60 swiec = 15h do filtrow MA30/MA60 na M15)
         ctx_m15 = [c for c in all_m15 if c["time"] <= t]
         if len(ctx_m15) < 60:
             continue
@@ -629,30 +632,30 @@ def _run_loop(m15_window: list[dict], all_m15: list[dict], all_h1: list[dict],
             key = s["direction"]
             if i - last_entry_a.get(key, -COOLDOWN_M15) < COOLDOWN_M15:
                 continue
-            res = simulate(s, future)
-            if res:
-                res["time"] = t
-                results_a.append(res)
+            r = simulate(s, future)
+            if r:
+                r["time"] = t
+                results_a.append(r)
                 last_entry_a[key] = i
 
-        for s in gen_version_b(ctx_h1, ctx_m15, price, atr, max_rng_atr):
+        for s in gen_version_c(ctx_h1, ctx_m15, price, atr, max_rng_atr):
             key = s["direction"]
-            if i - last_entry_b.get(key, -COOLDOWN_M15) < COOLDOWN_M15:
+            if i - last_entry_c.get(key, -COOLDOWN_M15) < COOLDOWN_M15:
                 continue
-            res = simulate(s, future)
-            if res:
-                res["time"] = t
-                results_b.append(res)
-                last_entry_b[key] = i
+            r = simulate(s, future)
+            if r:
+                r["time"] = t
+                results_c.append(r)
+                last_entry_c[key] = i
 
-    _print_summary("A — aktualna (% range, oba kierunki)", results_a)
-    _print_summary("B — nowa    (EMA direction + EMA TPs)", results_b)
+    _print_summary("A — aktualna  (TP=50%/90% range)", results_a)
+    _print_summary("C — EMA TPs   (TP na poziomach EMA H1)", results_c)
     _print_detail(results_a, "A")
-    _print_detail(results_b, "B")
+    _print_detail(results_c, "C")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Range Backtest v A vs B")
+    parser = argparse.ArgumentParser(description="Range Backtest: A (% range TPs) vs C (EMA TPs)")
     parser.add_argument("--from",  dest="date_from", default="2026-04-01",
                         help="Start (YYYY-MM-DD lub YYYY-MM-DD HH:MM)")
     parser.add_argument("--to",    dest="date_to",
