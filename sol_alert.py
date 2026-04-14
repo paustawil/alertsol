@@ -46,6 +46,7 @@ ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT
 ENABLE_GPT3          = False  # standalone GPT3 detektor — wyłączony
 ENABLE_GPT3_VALIDATOR = True  # GPT3 jako filtr Algo2 setupów — aktywny (backtest Mar 15-29: +$19.76)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
+ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako shadow (dedup aktywny)
 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
 _last_feedback: dict = {}  # {"Algo2": {...}, "Grok": {...}}
@@ -2840,7 +2841,8 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
 
     # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
-    if not shadow:
+    # Algo2 shadow mode — dedup aktywny nawet gdy shadow=True (obserwacja w warunkach live).
+    if not shadow or model == "Algo2":
         for p in db.get_active_setups():
             if p["direction"] == direction and p["model"] == model:
                 old_w1 = p["entries"][0] if p["entries"] else 0
@@ -3981,11 +3983,17 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         print("[algo2] IMPULSE — GPT3 Validator pominięty.")
     # ── koniec walidatora ─────────────────────────────────────────────────
 
-    save_pending(best, "Algo2", "", current)
+    is_shadow = ALGO2_SHADOW_MODE
+    save_pending(best, "Algo2", "", current, shadow=is_shadow)
     if best.get("setup_id"):
         log_to_alerty("Algo2", "", best)
-        send_telegram(format_alert("Algo2", best, current, True))
-        if val_result:
+        if is_shadow:
+            send_telegram(f"👁 <b>[Algo2-shadow]</b> {best['type']} {best['direction'].upper()}"
+                          f" | W=${best['entries'][0]:.2f} SL=${best['sl']:.2f}"
+                          f" TP1=${best['tps'][0]:.2f} RR={best['rr']}")
+        else:
+            send_telegram(format_alert("Algo2", best, current, True))
+        if val_result and not is_shadow:
             db.update_setup(best["setup_id"], llm_scores={
                 "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
             })
