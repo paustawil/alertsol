@@ -6,6 +6,24 @@ Zmiany infrastrukturalne (dashboard, baza, Telegram) są tu pominięte.
 
 ---
 
+## 2026-04-14
+
+### Nowy entry trigger dla range setupów (potwierdzenie M15)
+
+Analiza bazy danych wykazała że 57% (28/49) range setupów było anulowanych z powodu
+"cena przebiła TP1 bez wejścia". Przyczyna: setup tworzył się gdy cena była blisko
+granicy strefy, ale entry trigger=rising czekał na powrót ceny do W. Cena zamiast
+wracać kontynuowała ruch i przechodziła przez TP1.
+
+Nowa logika dla `range_resistance_short` i `range_support_long`:
+- Warunek 1: cena dotknęła strefy granicznej w ostatnich 8 świecach M15 (2h)
+- Warunek 2: aktualna świeca M15 zamknęła się poniżej/powyżej strefy (potwierdzenie)
+- Entry = current_price ± 0.01 → save_pending ustawi falling/rising trigger → wejście od razu
+- Usunięto: `dist_ok` (3% od W), `momentum_ok` (zastąpione przez confirmed_break)
+- Zachowano: `r_touches>=2`, MA filter, `RR>=1.5`, `tp1_margin`
+
+---
+
 ## 2026-04-12
 
 ### Spike-reversal filter dla detekcji TREND
