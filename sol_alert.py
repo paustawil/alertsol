@@ -2026,28 +2026,25 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         rng_size = res - sup
         log_lines.append(f"  Range: S=${sup:.2f} R=${res:.2f} size=${rng_size:.2f} (min={atr*1.5:.2f})")
         if rng_size > atr * 1.5:
-            # range_resistance_short
-            w = res - rng_size * 0.1
-            sl = res + atr * 1.0
-            tp1 = sup + rng_size * 0.5
-            tp2 = sup + rng_size * 0.1
-            dist_ok = abs(w - current_price) <= max_entry_dist
+            # range_resistance_short — wejście po potwierdzeniu zamknięcia M15 poniżej strefy
+            # Stara logika: entry=W, dist_ok 3%, czekaj na rising trigger → 57% anulowań
+            # Nowa logika: wejdź od razu gdy M15 zamknęła się poniżej strefy oporowej
+            zone_s = round(res - rng_size * 0.10, 2)
+            zone_touched_s = any(c["high"] >= zone_s for c in candles_m15[-8:])  # dotknięcie strefy w ostatnich 2h
+            confirmed_break_s = current_price < zone_s                           # zamknięcie poniżej strefy
+            w_s = round(current_price - 0.01, 2)   # wejście natychmiast (falling trigger w save_pending)
+            sl = round(res + atr, 2)
+            tp1 = round(sup + rng_size * 0.5, 2)
+            tp2 = round(sup + rng_size * 0.1, 2)
             tp1_margin_ok_s = current_price >= tp1 + rng_size * 0.15
-            log_lines.append(f"  → range_short: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok} tp1_margin={'OK' if tp1_margin_ok_s else f'BLOCKED (cena ${current_price:.2f} zbyt blisko TP1 ${tp1:.2f})'}")
+            log_lines.append(f"  → range_short: zone=${zone_s:.2f} touched={zone_touched_s} break={confirmed_break_s} price=${current_price:.2f} tp1_margin={'OK' if tp1_margin_ok_s else 'BLOCKED'}")
 
-            # ── Filtr 1: Bullish momentum – nie shortuj na oporze podczas silnego wzrostu
-            last6_m15_s = candles_m15[-6:]
-            bullish_count_s = sum(1 for c in last6_m15_s if c["close"] > c["open"])
-            m15_rise = (last6_m15_s[-1]["close"] - last6_m15_s[0]["open"]) / last6_m15_s[0]["open"] * 100
-            momentum_ok_s = not (bullish_count_s >= 5 or m15_rise > 1.5)
-            log_lines.append(f"    momentum: {bullish_count_s}/6 bullish, rise={m15_rise:+.2f}% → {'OK' if momentum_ok_s else 'BLOCKED'}")
-
-            # ── Filtr 2: Resistance touches – opór musi mieć min 2 wcześniejsze testy
+            # ── Filtr 1: Resistance touches – opór musi mieć min 2 wcześniejsze testy
             r_touches = rng["r_touches"]
             touches_ok_s = r_touches >= 2
             log_lines.append(f"    r_touches: {r_touches} → {'OK' if touches_ok_s else 'BLOCKED (min 2)'}")
 
-            # ── Filtr 3: MA alignment – nie shortuj gdy cena > MA30 > MA60 (bullish alignment)
+            # ── Filtr 2: MA alignment – nie shortuj gdy cena > MA30 > MA60 (bullish alignment)
             m15_closes_s = [c["close"] for c in candles_m15]
             ma30_s2 = sum(m15_closes_s[-30:]) / min(30, len(m15_closes_s)) if len(m15_closes_s) >= 10 else None
             ma60_s2 = sum(m15_closes_s[-60:]) / min(60, len(m15_closes_s)) if len(m15_closes_s) >= 30 else None
@@ -2060,39 +2057,36 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_str = f"${ma60_s2:.2f}" if ma60_s2 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_str} MA60={ma60_str} → {'OK' if ma_ok_s else 'BLOCKED (bullish MA)'}")
 
-            if (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s and tp1_margin_ok_s:
-                log_lines.append(f"    ✓ ACCEPTED")
+            rr_s = (w_s - tp1) / (sl - w_s) if sl > w_s and tp1 < w_s else 0
+            if zone_touched_s and confirmed_break_s and touches_ok_s and ma_ok_s and tp1_margin_ok_s and rr_s >= 1.5:
+                log_lines.append(f"    ✓ ACCEPTED (W=${w_s:.2f} SL=${sl:.2f} TP1=${tp1:.2f} RR={rr_s:.1f})")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
-                    "entries": [round(w, 2)], "sl": round(sl, 2),
-                    "sl_after_tp1": round(w, 2),
-                    "tps": [round(tp1, 2), round(tp2, 2)],
-                    "rr": round((w - tp1) / (sl - w), 1),
+                    "entries": [w_s], "sl": sl,
+                    "sl_after_tp1": w_s,
+                    "tps": [tp1, tp2],
+                    "rr": round(rr_s, 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={r_touches}",
+                    "reasoning": f"RANGE breakout; S=${sup:.2f} R=${res:.2f} touches={r_touches}",
                 })
-            # range_support_long
-            w = sup + rng_size * 0.1
-            sl = sup - atr * 1.0
-            tp1 = sup + rng_size * 0.5
-            tp2 = res - rng_size * 0.1
-            dist_ok = abs(w - current_price) <= max_entry_dist
+
+            # range_support_long — wejście po potwierdzeniu zamknięcia M15 powyżej strefy
+            zone_l = round(sup + rng_size * 0.10, 2)
+            zone_touched_l = any(c["low"] <= zone_l for c in candles_m15[-8:])  # dotknięcie strefy w ostatnich 2h
+            confirmed_break_l = current_price > zone_l                           # zamknięcie powyżej strefy
+            w_l = round(current_price + 0.01, 2)   # wejście natychmiast (rising trigger w save_pending)
+            sl = round(sup - atr, 2)
+            tp1 = round(sup + rng_size * 0.5, 2)
+            tp2 = round(res - rng_size * 0.1, 2)
             tp1_margin_ok = current_price <= tp1 - rng_size * 0.15
-            log_lines.append(f"  → range_long: W=${w:.2f} dist=${abs(w-current_price):.2f} dist_ok={dist_ok} tp1_margin={'OK' if tp1_margin_ok else f'BLOCKED (cena ${current_price:.2f} zbyt blisko TP1 ${tp1:.2f})'}")
+            log_lines.append(f"  → range_long: zone=${zone_l:.2f} touched={zone_touched_l} break={confirmed_break_l} price=${current_price:.2f} tp1_margin={'OK' if tp1_margin_ok else 'BLOCKED'}")
 
-            # ── Filtr 1: Bearish momentum – nie kupuj na wsparciu podczas silnego spadku
-            last6_m15 = candles_m15[-6:]
-            bearish_count = sum(1 for c in last6_m15 if c["close"] < c["open"])
-            m15_drop = (last6_m15[-1]["close"] - last6_m15[0]["open"]) / last6_m15[0]["open"] * 100
-            momentum_ok = not (bearish_count >= 5 or m15_drop < -1.5)
-            log_lines.append(f"    momentum: {bearish_count}/6 bearish, drop={m15_drop:+.2f}% → {'OK' if momentum_ok else 'BLOCKED'}")
-
-            # ── Filtr 2: Support touches – wsparcie musi mieć min 2 wcześniejsze odbicia
+            # ── Filtr 1: Support touches – wsparcie musi mieć min 2 wcześniejsze odbicia
             s_touches = rng["s_touches"]
             touches_ok = s_touches >= 2
             log_lines.append(f"    s_touches: {s_touches} → {'OK' if touches_ok else 'BLOCKED (min 2)'}")
 
-            # ── Filtr 3: MA alignment – nie kupuj gdy cena < MA30 < MA60 (bearish alignment)
+            # ── Filtr 2: MA alignment – nie kupuj gdy cena < MA30 < MA60 (bearish alignment)
             m15_closes = [c["close"] for c in candles_m15]
             ma30 = sum(m15_closes[-30:]) / min(30, len(m15_closes)) if len(m15_closes) >= 10 else None
             ma60 = sum(m15_closes[-60:]) / min(60, len(m15_closes)) if len(m15_closes) >= 30 else None
@@ -2105,16 +2099,17 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_s = f"${ma60:.2f}" if ma60 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_s} MA60={ma60_s} → {'OK' if ma_ok else 'BLOCKED (bearish MA)'}")
 
-            if (tp1 - w) / (w - sl) >= 1.5 and dist_ok and momentum_ok and touches_ok and ma_ok and tp1_margin_ok:
-                log_lines.append(f"    ✓ ACCEPTED")
+            rr_l = (tp1 - w_l) / (w_l - sl) if w_l > sl and tp1 > w_l else 0
+            if zone_touched_l and confirmed_break_l and touches_ok and ma_ok and tp1_margin_ok and rr_l >= 1.5:
+                log_lines.append(f"    ✓ ACCEPTED (W=${w_l:.2f} SL=${sl:.2f} TP1=${tp1:.2f} RR={rr_l:.1f})")
                 setups.append({
                     "type": "range_support_long", "direction": "long",
-                    "entries": [round(w, 2)], "sl": round(sl, 2),
-                    "sl_after_tp1": round(w, 2),
-                    "tps": [round(tp1, 2), round(tp2, 2)],
-                    "rr": round((tp1 - w) / (w - sl), 1),
+                    "entries": [w_l], "sl": sl,
+                    "sl_after_tp1": w_l,
+                    "tps": [tp1, tp2],
+                    "rr": round(rr_l, 1),
                     "score": 0,
-                    "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={s_touches}",
+                    "reasoning": f"RANGE breakout; S=${sup:.2f} R=${res:.2f} touches={s_touches}",
                 })
     else:
         log_lines.append(f"  Brak setupów dla direction={direction}")
