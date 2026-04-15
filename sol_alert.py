@@ -3272,6 +3272,9 @@ def grok_shadow_main() -> None:
     Wirtualny tracking: check_pending() w main() co 15 min obsługuje shadow setups automatycznie.
     """
     global _last_grok_detection_ts
+    if not ENABLE_GROK:
+        print("[grok-shadow] ENABLE_GROK=False — pomijam (brak zapytań do API).")
+        return
     if not XAI_KEY:
         print("[grok-shadow] Brak XAI_API_KEY — pomijam.")
         return
