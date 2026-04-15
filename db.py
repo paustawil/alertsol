@@ -1003,3 +1003,133 @@ def save_hypo_result(setup_id: int, hypo_result: str, hypo_pnl_usd: float | None
                 {"setup_id": setup_id, "hypo_result": hypo_result,
                  "hypo_pnl_usd": hypo_pnl_usd},
             )
+
+
+# ── Analityka Algo2 ───────────────────────────────────────────────────────────
+
+def _algo2_time_filter(period_days: int | None) -> tuple[str, dict]:
+    """Zwraca fragment SQL i parametry dla filtra czasowego Algo2."""
+    if period_days:
+        return "AND alert_time >= NOW() - %(interval)s::interval", {"interval": f"{period_days} days"}
+    return "", {}
+
+
+def get_algo2_type_stats(period_days: int | None = None) -> list[dict]:
+    """Statystyki per typ setupu dla Algo2 (shadow i non-shadow łącznie).
+
+    Kolumny: type, direction, total, entered, entry_rate, wins, losses,
+             win_rate, avg_pnl_usd, tp2_hits, tp2_rate,
+             avg_time_to_entry_h, avg_hold_h
+    """
+    time_sql, time_params = _algo2_time_filter(period_days)
+    wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(type,''), '(brak)') AS type,
+                    direction,
+                    COUNT(*)                                                              AS total,
+                    COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                     AS entered,
+                    ROUND(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric
+                          / NULLIF(COUNT(*), 0) * 100, 1)                                AS entry_rate,
+                    COUNT(*) FILTER (WHERE {wins_filter})                                AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                                AS losses,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
+                                 + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1)  AS win_rate,
+                    ROUND(AVG(pnl_usd) FILTER (
+                          WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    )::numeric, 2)                                                        AS avg_pnl_usd,
+                    COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))                  AS tp2_hits,
+                    ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                       AS tp2_rate,
+                    ROUND(AVG(
+                        CASE WHEN entry_hit_at IS NOT NULL AND alert_timestamp IS NOT NULL
+                             THEN (entry_hit_at - alert_timestamp) / 3600.0 END
+                    )::numeric, 1)                                                        AS avg_time_to_entry_h,
+                    ROUND(AVG(
+                        CASE WHEN exit_time IS NOT NULL AND entry_hit_at IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM exit_time - to_timestamp(entry_hit_at)) / 3600.0 END
+                    )::numeric, 1)                                                        AS avg_hold_h
+                FROM setups
+                WHERE model = 'Algo2'
+                  {time_sql}
+                GROUP BY type, direction
+                ORDER BY type, direction
+                """,
+                time_params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def get_algo2_time_heatmap(period_days: int | None = None) -> list[dict]:
+    """Heatmapa godzinowa dla Algo2: liczba alertów, % entry, % wygranych per godzina (czas Warsaw).
+
+    Kolumny: hour (0-23), total, entered, entry_rate, wins, losses, win_rate
+    """
+    time_sql, time_params = _algo2_time_filter(period_days)
+    wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    EXTRACT(HOUR FROM alert_time AT TIME ZONE 'Europe/Warsaw')::int AS hour,
+                    COUNT(*)                                                          AS total,
+                    COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                 AS entered,
+                    ROUND(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric
+                          / NULLIF(COUNT(*), 0) * 100, 1)                            AS entry_rate,
+                    COUNT(*) FILTER (WHERE {wins_filter})                            AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                            AS losses,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
+                                 + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1) AS win_rate
+                FROM setups
+                WHERE model = 'Algo2'
+                  {time_sql}
+                GROUP BY hour
+                ORDER BY hour
+                """,
+                time_params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def get_algo2_rr_analysis(period_days: int | None = None) -> list[dict]:
+    """Analiza RR dla Algo2: deklarowany RR vs rzeczywiste wyniki TP1/TP2.
+
+    Kolumny: type, direction, entered, avg_rr_declared, tp1_rate, tp2_rate,
+             tp1_be_sl_hits (TP1 ale exit na SL/BE), sl_rate
+    """
+    time_sql, time_params = _algo2_time_filter(period_days)
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(type,''), '(brak)') AS type,
+                    direction,
+                    COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)             AS entered,
+                    ROUND(AVG(rr)::numeric, 2)                                   AS avg_rr_declared,
+                    COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')) AS tp1_hits,
+                    ROUND(COUNT(*) FILTER (WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0) * 100, 1) AS tp1_rate,
+                    COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))          AS tp2_hits,
+                    ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0) * 100, 1) AS tp2_rate,
+                    COUNT(*) FILTER (WHERE result IN ('TP1+BE','TP1+SL'))        AS tp1_be_sl_hits,
+                    COUNT(*) FILTER (WHERE result = 'SL')                        AS sl_hits,
+                    ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0) * 100, 1) AS sl_rate
+                FROM setups
+                WHERE model = 'Algo2'
+                  {time_sql}
+                GROUP BY type, direction
+                ORDER BY type, direction
+                """,
+                time_params,
+            )
+            return [dict(r) for r in cur.fetchall()]
