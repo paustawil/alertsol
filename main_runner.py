@@ -443,6 +443,68 @@ def dashboard():
   </div>
 </div>
 
+<!-- ── Analityka Algo2 ───────────────────────────────────────────────── -->
+<div class="indicators-panel" style="margin-top:18px">
+  <h3>🔬 Analityka Algo2
+    <span style="margin-left:14px">
+      <button class="period-btn active" data-a2period="7" onclick="setA2Period(7,this)">7 dni</button>
+      <button class="period-btn" data-a2period="30" onclick="setA2Period(30,this)">30 dni</button>
+      <button class="period-btn" data-a2period="0" onclick="setA2Period(0,this)">All-time</button>
+    </span>
+    <span id="a2-loading" style="margin-left:8px;font-size:0.7em;color:#888"></span>
+  </h3>
+
+  <!-- Per typ setupu -->
+  <h4 style="color:#80deea;margin:10px 0 6px">Per typ setupu</h4>
+  <div style="overflow-x:auto">
+    <table id="a2-type-table" style="min-width:760px">
+      <tr>
+        <th>Typ</th><th>Kier.</th><th title="Łączna liczba setupów">Ilość</th>
+        <th title="Procent setupów które weszły w pozycję">% entry</th>
+        <th title="Win rate: TP1/TP2/TP1+BE/TP1+SL z uruchomionych">Win rate</th>
+        <th title="Średni PnL z zamkniętych pozycji">Avg PnL $</th>
+        <th title="Procent setupów które dotarły do TP2">TP2 rate</th>
+        <th title="Średni czas od alertu do wejścia w pozycję">Śr. do entry</th>
+        <th title="Średni czas trzymania pozycji">Śr. hold</th>
+      </tr>
+      <tr id="a2-type-loading"><td colspan="9" style="color:#888;text-align:center">ładowanie...</td></tr>
+    </table>
+  </div>
+
+  <!-- Heatmapa godzinowa -->
+  <h4 style="color:#80deea;margin:16px 0 6px">Heatmapa godzinowa (czas PL)</h4>
+  <div style="overflow-x:auto">
+    <table id="a2-heatmap-table" style="min-width:580px;font-size:0.85em">
+      <tr>
+        <th>Godz.</th>
+        <th title="Liczba alertów">Alerty</th>
+        <th title="Procent alertów które weszły">% entry</th>
+        <th title="Win rate z pozycji uruchomionych o tej godzinie">Win rate</th>
+        <th title="Liczba wygranych">W</th>
+        <th title="Liczba strat">L</th>
+      </tr>
+      <tr id="a2-heatmap-loading"><td colspan="6" style="color:#888;text-align:center">ładowanie...</td></tr>
+    </table>
+  </div>
+
+  <!-- Analiza RR -->
+  <h4 style="color:#80deea;margin:16px 0 6px">Analiza RR i poziomów wyjścia</h4>
+  <div style="overflow-x:auto">
+    <table id="a2-rr-table" style="min-width:680px">
+      <tr>
+        <th>Typ</th><th>Kier.</th>
+        <th title="Liczba setupów które weszły">Wejść</th>
+        <th title="Średni deklarowany R:R">Dekl. RR</th>
+        <th title="% setupów które osiągnęły TP1 lub wyżej">TP1 rate</th>
+        <th title="% setupów które osiągnęły TP2">TP2 rate</th>
+        <th title="Setupy z TP1 ale wyjście na SL lub BE">TP1+BE/SL</th>
+        <th title="% setupów zamkniętych na SL">SL rate</th>
+      </tr>
+      <tr id="a2-rr-loading"><td colspan="8" style="color:#888;text-align:center">ładowanie...</td></tr>
+    </table>
+  </div>
+</div>
+
 <div>
   <span class="stat">📊 Win rate (all-time): <b>{win_rate}</b></span>
   <span class="stat">💰 Łączny PnL: <b>{total_pnl}</b></span>
@@ -1145,6 +1207,164 @@ async function loadPeriodStats() {{
 }}
 
 loadPeriodStats();
+
+// ── Algo2 Analytics ──────────────────────────────────────────────────────────
+var currentA2Period = 7;
+
+function setA2Period(p, btn) {{
+  currentA2Period = p;
+  document.querySelectorAll('[data-a2period]').forEach(function(b) {{ b.classList.remove('active'); }});
+  if (btn) btn.classList.add('active');
+  loadAlgo2Analytics();
+}}
+
+function fmtPct(v) {{
+  if (v == null) return '—';
+  var s = v.toFixed(1) + '%';
+  return s;
+}}
+function fmtPnl(v) {{
+  if (v == null) return '—';
+  return (v >= 0 ? '+' : '') + parseFloat(v).toFixed(2) + ' $';
+}}
+function pnlColor(v) {{
+  if (v == null) return '#e0e0e0';
+  return v >= 0 ? 'lightgreen' : 'salmon';
+}}
+function pctColor(v, lo, hi) {{
+  // lo = red threshold, hi = green threshold
+  if (v == null) return '#e0e0e0';
+  if (v >= hi) return 'lightgreen';
+  if (v >= lo) return '#e0e0e0';
+  return 'salmon';
+}}
+function heatColor(v, max) {{
+  if (!v || !max) return '';
+  var intensity = Math.min(v / max, 1.0);
+  var g = Math.round(100 + intensity * 100);
+  return 'rgba(64,' + g + ',64,0.35)';
+}}
+
+async function loadAlgo2Analytics() {{
+  var loading = document.getElementById('a2-loading');
+  loading.textContent = 'ładowanie...';
+  var periodParam = currentA2Period ? '?period=' + currentA2Period : '';
+  try {{
+    var [tsResp, hmResp, rrResp] = await Promise.all([
+      fetch('/api/algo2/type-stats' + periodParam),
+      fetch('/api/algo2/time-heatmap' + periodParam),
+      fetch('/api/algo2/rr-analysis' + periodParam),
+    ]);
+    var typeData = await tsResp.json();
+    var hmData   = await hmResp.json();
+    var rrData   = await rrResp.json();
+    renderA2TypeTable(typeData);
+    renderA2Heatmap(hmData);
+    renderA2RR(rrData);
+    loading.textContent = '';
+  }} catch(e) {{
+    loading.textContent = '⚠️ ' + e.message;
+  }}
+}}
+
+function renderA2TypeTable(rows) {{
+  var tbl = document.getElementById('a2-type-table');
+  var header = tbl.rows[0];
+  while (tbl.rows.length > 1) tbl.deleteRow(1);
+  if (!rows || rows.length === 0) {{
+    var tr = tbl.insertRow(); tr.insertCell().colSpan = 9;
+    tr.cells[0].colSpan = 9; tr.cells[0].textContent = 'Brak danych'; tr.cells[0].style.color = '#888';
+    return;
+  }}
+  rows.forEach(function(r) {{
+    var tr = tbl.insertRow();
+    var dirColor = r.direction === 'long' ? '#81c995' : '#f28b82';
+    [
+      r.type,
+      r.direction,
+      r.total,
+      r.entry_rate != null ? r.entry_rate.toFixed(1) + '%' : '—',
+      r.win_rate   != null ? r.win_rate.toFixed(1)   + '%' : '—',
+      fmtPnl(r.avg_pnl_usd),
+      r.tp2_rate   != null ? r.tp2_rate.toFixed(1)   + '%' : '—',
+      r.avg_time_to_entry_h != null ? r.avg_time_to_entry_h.toFixed(1) + 'h' : '—',
+      r.avg_hold_h != null ? r.avg_hold_h.toFixed(1) + 'h' : '—',
+    ].forEach(function(val, i) {{
+      var td = tr.insertCell();
+      td.textContent = val;
+      if (i === 1) td.style.color = dirColor;
+      if (i === 4 && r.win_rate != null) td.style.color = pctColor(r.win_rate, 40, 55);
+      if (i === 5 && r.avg_pnl_usd != null) td.style.color = pnlColor(r.avg_pnl_usd);
+      if (i === 6 && r.tp2_rate != null) td.style.color = pctColor(r.tp2_rate, 20, 40);
+    }});
+  }});
+}}
+
+function renderA2Heatmap(rows) {{
+  var tbl = document.getElementById('a2-heatmap-table');
+  while (tbl.rows.length > 1) tbl.deleteRow(1);
+  if (!rows || rows.length === 0) {{
+    var tr = tbl.insertRow();
+    tr.insertCell().colSpan = 6; tr.cells[0].colSpan = 6;
+    tr.cells[0].textContent = 'Brak danych'; tr.cells[0].style.color = '#888';
+    return;
+  }}
+  var maxTotal = Math.max.apply(null, rows.map(function(r) {{ return r.total || 0; }}));
+  rows.forEach(function(r) {{
+    var tr = tbl.insertRow();
+    var bgColor = heatColor(r.total, maxTotal);
+    if (bgColor) tr.style.background = bgColor;
+    var h = r.hour;
+    var hStr = (h < 10 ? '0' : '') + h + ':00';
+    [
+      hStr,
+      r.total,
+      r.entry_rate != null ? r.entry_rate.toFixed(1) + '%' : '—',
+      r.win_rate   != null ? r.win_rate.toFixed(1)   + '%' : '—',
+      r.wins  || 0,
+      r.losses || 0,
+    ].forEach(function(val, i) {{
+      var td = tr.insertCell();
+      td.textContent = val;
+      if (i === 2 && r.entry_rate != null) td.style.color = pctColor(r.entry_rate, 20, 50);
+      if (i === 3 && r.win_rate   != null) td.style.color = pctColor(r.win_rate, 40, 55);
+    }});
+  }});
+}}
+
+function renderA2RR(rows) {{
+  var tbl = document.getElementById('a2-rr-table');
+  while (tbl.rows.length > 1) tbl.deleteRow(1);
+  if (!rows || rows.length === 0) {{
+    var tr = tbl.insertRow();
+    tr.insertCell().colSpan = 8; tr.cells[0].colSpan = 8;
+    tr.cells[0].textContent = 'Brak danych'; tr.cells[0].style.color = '#888';
+    return;
+  }}
+  rows.forEach(function(r) {{
+    var tr = tbl.insertRow();
+    var dirColor = r.direction === 'long' ? '#81c995' : '#f28b82';
+    [
+      r.type,
+      r.direction,
+      r.entered || 0,
+      r.avg_rr_declared != null ? r.avg_rr_declared.toFixed(2) : '—',
+      r.tp1_rate != null ? r.tp1_rate.toFixed(1) + '%' : '—',
+      r.tp2_rate != null ? r.tp2_rate.toFixed(1) + '%' : '—',
+      r.tp1_be_sl_hits || 0,
+      r.sl_rate  != null ? r.sl_rate.toFixed(1)  + '%' : '—',
+    ].forEach(function(val, i) {{
+      var td = tr.insertCell();
+      td.textContent = val;
+      if (i === 1) td.style.color = dirColor;
+      if (i === 4 && r.tp1_rate != null) td.style.color = pctColor(r.tp1_rate, 40, 60);
+      if (i === 5 && r.tp2_rate != null) td.style.color = pctColor(r.tp2_rate, 20, 40);
+      if (i === 7 && r.sl_rate  != null) td.style.color = pctColor(100 - r.sl_rate, 40, 60);
+    }});
+  }});
+}}
+
+loadAlgo2Analytics();
 
 // ── Settings popover ─────────────────────────────────────────────────────────
 function toggleSettings() {{
@@ -2303,6 +2523,24 @@ def api_period_stats(period: str = "24h"):
     if period not in ("1d", "24h", "7d", "30d"):
         raise HTTPException(status_code=400, detail="Dozwolone okresy: 1d, 24h, 7d, 30d")
     return db.get_period_stats(period)
+
+
+@app.get("/api/algo2/type-stats")
+def api_algo2_type_stats(period: int | None = None):
+    """Statystyki per typ setupu dla Algo2. period = liczba dni (np. 7, 30) lub brak = all-time."""
+    return db.get_algo2_type_stats(period)
+
+
+@app.get("/api/algo2/time-heatmap")
+def api_algo2_time_heatmap(period: int | None = None):
+    """Heatmapa godzinowa alertów Algo2 (czas Warsaw). period = liczba dni lub brak = all-time."""
+    return db.get_algo2_time_heatmap(period)
+
+
+@app.get("/api/algo2/rr-analysis")
+def api_algo2_rr_analysis(period: int | None = None):
+    """Analiza RR dla Algo2: deklarowany RR vs TP1/TP2 hit rate. period = liczba dni lub brak = all-time."""
+    return db.get_algo2_rr_analysis(period)
 
 
 @app.post("/admin/run-gpt5-backtest")
