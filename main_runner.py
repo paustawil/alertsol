@@ -578,7 +578,7 @@ def dashboard():
       <tr>
         <th>Wariant</th>
         <th title="Liczba wygenerowanych setupów">Setups</th>
-        <th title="% setupów które weszły w pozycję">Entry%</th>
+        <th title="% wejść na snapshots gdzie wszystkie warianty odpaliły jednocześnie (porównywalna podstawa)">Entry%</th>
         <th title="Średnie RR do TP1 (geometria setupu)">RR TP1</th>
         <th title="Średnie RR do TP2 (geometria setupu)">RR TP2</th>
         <th>SL</th><th>TP1+BE</th><th>TP2</th>
@@ -2751,8 +2751,9 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
 
     # Agregaty per wariant
     from collections import defaultdict
-    agg: dict = defaultdict(lambda: {"total": 0, "entered": 0, "sl": 0, "tp1": 0,
-                                      "tp1_be": 0, "tp2": 0, "pnl_sum": 0.0,
+    agg: dict = defaultdict(lambda: {"total": 0, "shared_total": 0, "entered": 0,
+                                      "sl": 0, "tp1": 0, "tp1_be": 0, "tp2": 0,
+                                      "pnl_sum": 0.0,
                                       "rr_sum": 0.0, "rr_count": 0,
                                       "rr_tp2_sum": 0.0, "rr_tp2_count": 0})
     for r in rows:
@@ -2778,6 +2779,10 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
                 agg[v]["rr_tp2_count"] += 1
         except (ValueError, ZeroDivisionError):
             pass
+        # shared_total: snapshoty gdzie ≥2 wariantów odpaliło jednocześnie
+        n_vars = int(r.get("n_vars") or 1)
+        if n_vars >= 2:
+            agg[v]["shared_total"] += 1
         if r.get("entered") == "True":
             agg[v]["entered"] += 1
             res = r.get("result", "")
@@ -2798,7 +2803,7 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
             "variant":     vname,
             "total":       s["total"],
             "entered":     entered,
-            "entry_rate":  round(s["entered"] / s["total"] * 100, 1) if s["total"] else 0,
+            "entry_rate":  round(s["entered"] / s["shared_total"] * 100, 1) if s["shared_total"] else 0,
             "avg_rr_tp1":  round(s["rr_sum"]      / s["rr_count"],      2) if s["rr_count"]      else 0,
             "avg_rr_tp2":  round(s["rr_tp2_sum"]  / s["rr_tp2_count"],  2) if s["rr_tp2_count"]  else 0,
             "sl":          s["sl"],

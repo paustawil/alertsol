@@ -362,6 +362,7 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
 
         generated += len(setups)
         future_m15 = candles_m15[i:]
+        n_vars = len(setups)  # ile wariantów odpaliło na tym snapshotu
 
         for s in setups:
             trade = simulate_trade(s, future_m15)
@@ -378,6 +379,7 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
                 "sl":            s["sl"],
                 "rr":            s["rr"],
                 "swing_range":   s["swing_range"],
+                "n_vars":        n_vars,
                 **{k: v for k, v in trade.items()},
             })
 
