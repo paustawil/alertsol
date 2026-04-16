@@ -134,7 +134,7 @@ def simulate_trade(
             break
 
     if entry_ts is None:
-        return {"entered": False, "result": None, "pnl_pct": None,
+        return {"entered": False, "result": None, "pnl_pct": None, "pnl_usd": None,
                 "hours_to_entry": None, "hold_hours": None,
                 "entry_price": None, "exit_price": None}
 
@@ -183,7 +183,7 @@ def simulate_trade(
             break
 
     if result is None:
-        return {"entered": True, "result": "timeout", "pnl_pct": None,
+        return {"entered": True, "result": "timeout", "pnl_pct": None, "pnl_usd": None,
                 "hours_to_entry": hours_to_entry, "hold_hours": None,
                 "entry_price": entry_price, "exit_price": None}
 
