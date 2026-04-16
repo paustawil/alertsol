@@ -1345,7 +1345,7 @@ function runBacktestVariants() {{
 
 function pollBacktestStatus() {{
   fetch('/api/backtest-variants/status')
-    .then(function(r) {{ return r.json(); }})
+    .then(function(r) {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
     .then(function(s) {{
       var statusEl = document.getElementById('bt-status');
       if (s.running) {{
@@ -1359,13 +1359,15 @@ function pollBacktestStatus() {{
         clearInterval(_btPollTimer);
         statusEl.textContent = '❌ Błąd: ' + s.error;
       }}
-    }});
+    }})
+    .catch(function(e) {{ document.getElementById('bt-status').textContent = '⚠️ Błąd połączenia: ' + e.message; }});
 }}
 
 function loadBacktestSummary() {{
   fetch('/api/backtest-variants/result?limit=0')
-    .then(function(r) {{ return r.json(); }})
+    .then(function(r) {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
     .then(function(data) {{
+      if (data.error) {{ document.getElementById('bt-status').textContent = '⚠️ ' + data.error; return; }}
       var tbl = document.getElementById('bt-table');
       // usuń poprzednie wiersze (poza nagłówkiem)
       while (tbl.rows.length > 1) tbl.deleteRow(1);
@@ -1392,12 +1394,13 @@ function loadBacktestSummary() {{
         }});
       }});
       document.getElementById('bt-summary').style.display = 'block';
-    }});
+    }})
+    .catch(function(e) {{ document.getElementById('bt-status').textContent = '⚠️ Błąd ładowania wyników: ' + e.message; }});
 }}
 
 // Przy załadowaniu sprawdź czy są już jakieś wyniki
 fetch('/api/backtest-variants/status')
-  .then(function(r) {{ return r.json(); }})
+  .then(function(r) {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
   .then(function(s) {{
     if (s.done) {{
       document.getElementById('bt-status').textContent = '✅ Ostatni backtest: ' + s.rows + ' rekordów';
@@ -2713,18 +2716,18 @@ def admin_run_backtest_variants(days: int = 60):
 
 
 @app.get("/api/backtest-variants/status")
-def api_backtest_variants_status(_: None = Security(_require_api_key)):
+def api_backtest_variants_status():
     """Status ostatniego uruchomienia backtestów wariantów."""
     return _backtest_variants_status
 
 
 @app.get("/api/backtest-variants/result")
-def api_backtest_variants_result(variant: str | None = None, limit: int = 2000, _: None = Security(_require_api_key)):
+def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
     """Wyniki backtestów wariantów jako JSON.
 
     Parametry query:
       variant — filtr po wariancie (np. 'baseline', 'shallow', 'str4')
-      limit   — max liczba wierszy (domyślnie 2000)
+      limit   — max liczba wierszy (domyślnie 2000, 0 = brak limitu)
     """
     import csv as _csv
     import os
@@ -2736,7 +2739,7 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000, 
             if variant and row.get("variant") != variant:
                 continue
             rows.append(row)
-            if len(rows) >= limit:
+            if limit > 0 and len(rows) >= limit:
                 break
 
     # Agregaty per wariant
@@ -2776,7 +2779,7 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000, 
             "avg_pnl_pct": round(s["pnl_sum"] / entered, 2) if entered else 0,
         })
 
-    return {"summary": summary, "rows": rows[:limit]}
+    return {"summary": summary, "rows": rows if limit == 0 else rows[:limit]}
 
 
 @app.get("/api/backtest-variants/csv")
