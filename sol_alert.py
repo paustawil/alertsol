@@ -62,7 +62,7 @@ def _clean_log(text: str) -> str:
         if stripped and len(stripped) > 3 and stripped.count("=") / len(stripped) > 0.7:
             continue
         lines.append(stripped)
-    return "  ".join(lines)
+    return "\n".join(lines)
 
 
 # ── GPT3 Validator — ocenia setup wygenerowany przez Algo2 ───────────────────
