@@ -21,8 +21,9 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security
 from fastapi.responses import HTMLResponse
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 
 import db
@@ -198,6 +199,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AlertSol Dashboard", lifespan=lifespan)
+
+# ── Prosta autoryzacja kluczem dla endpointów analitycznych ──────────────────
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def _require_api_key(key: str | None = Security(_api_key_header)):
+    """Dependency: sprawdza X-API-Key względem env var CLAUDE_API_KEY.
+    Jeśli CLAUDE_API_KEY nie jest ustawione — endpoint jest otwarty (dev mode)."""
+    expected = os.getenv("CLAUDE_API_KEY", "")
+    if expected and key != expected:
+        raise HTTPException(status_code=403, detail="Invalid API key")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -548,6 +559,31 @@ def dashboard():
         <th title="% setupów zamkniętych na SL">SL rate</th>
       </tr>
       <tr id="a2-rr-loading"><td colspan="8" style="color:#888;text-align:center">ładowanie...</td></tr>
+    </table>
+  </div>
+
+  <!-- Backtest wariantów -->
+  <h4 style="color:#80deea;margin:20px 0 6px">Backtest wariantów parametrów</h4>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+    <label style="color:#aaa;font-size:0.85em">Dni historii:</label>
+    <input id="bt-days" type="number" value="60" min="7" max="180"
+           style="width:60px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:3px 6px;font-family:monospace">
+    <button class="btn-action" onclick="runBacktestVariants()">▶ Uruchom backtest</button>
+    <span id="bt-status" style="color:#888;font-size:0.85em"></span>
+    <a id="bt-csv-link" href="/api/backtest-variants/csv" download="backtest_variants.csv"
+       style="display:none;color:#80deea;font-size:0.85em">⬇ Pobierz CSV</a>
+  </div>
+  <div id="bt-summary" style="overflow-x:auto;display:none">
+    <table id="bt-table" style="min-width:700px">
+      <tr>
+        <th>Wariant</th>
+        <th title="Liczba wygenerowanych setupów">Setups</th>
+        <th title="% setupów które weszły w pozycję">Entry%</th>
+        <th>SL</th><th>TP1</th><th>TP1+BE</th><th>TP2</th>
+        <th title="% wygranych z wejść">Win%</th>
+        <th title="Suma PnL wszystkich wejść (% od $100 trade)">ΣPnL%</th>
+        <th title="Średni PnL na jedno wejście">Avg PnL%</th>
+      </tr>
     </table>
   </div>
 </div>
@@ -1283,6 +1319,96 @@ function renderA2RR(rows) {{
 }}
 
 loadAlgo2Analytics();
+
+// ── Backtest wariantów ────────────────────────────────────────────────────────
+var _btPollTimer = null;
+
+function runBacktestVariants() {{
+  var days = parseInt(document.getElementById('bt-days').value) || 60;
+  var statusEl = document.getElementById('bt-status');
+  var csvLink  = document.getElementById('bt-csv-link');
+  var summaryEl = document.getElementById('bt-summary');
+  statusEl.textContent = 'Uruchamianie...';
+  csvLink.style.display = 'none';
+  summaryEl.style.display = 'none';
+
+  fetch('/admin/run-backtest-variants?days=' + days, {{method: 'POST'}})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (!data.ok) {{ statusEl.textContent = '⚠️ ' + data.message; return; }}
+      statusEl.textContent = '⏳ Pobieranie danych i obliczenia... (kilka minut)';
+      if (_btPollTimer) clearInterval(_btPollTimer);
+      _btPollTimer = setInterval(pollBacktestStatus, 5000);
+    }})
+    .catch(function(e) {{ statusEl.textContent = '⚠️ ' + e.message; }});
+}}
+
+function pollBacktestStatus() {{
+  fetch('/api/backtest-variants/status')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(s) {{
+      var statusEl = document.getElementById('bt-status');
+      if (s.running) {{
+        statusEl.textContent = '⏳ Trwa... (started: ' + (s.started_at || '').substring(11,16) + ' UTC)';
+      }} else if (s.done) {{
+        clearInterval(_btPollTimer);
+        statusEl.textContent = '✅ Gotowe! (' + s.rows + ' rekordów)';
+        document.getElementById('bt-csv-link').style.display = 'inline';
+        loadBacktestSummary();
+      }} else if (s.error) {{
+        clearInterval(_btPollTimer);
+        statusEl.textContent = '❌ Błąd: ' + s.error;
+      }}
+    }});
+}}
+
+function loadBacktestSummary() {{
+  fetch('/api/backtest-variants/result?limit=0')
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      var tbl = document.getElementById('bt-table');
+      // usuń poprzednie wiersze (poza nagłówkiem)
+      while (tbl.rows.length > 1) tbl.deleteRow(1);
+      (data.summary || []).forEach(function(s) {{
+        var tr = tbl.insertRow();
+        var winColor = s.win_rate >= 55 ? '#81c995' : s.win_rate >= 40 ? '#e0e0e0' : '#f28b82';
+        var pnlColor = s.avg_pnl_pct >= 0 ? '#81c995' : '#f28b82';
+        [
+          s.variant,
+          s.total,
+          s.entry_rate + '%',
+          s.sl,
+          s.tp1,
+          s.tp1_be,
+          s.tp2,
+          s.win_rate + '%',
+          (s.pnl_sum_pct >= 0 ? '+' : '') + s.pnl_sum_pct + '%',
+          (s.avg_pnl_pct >= 0 ? '+' : '') + s.avg_pnl_pct + '%',
+        ].forEach(function(val, i) {{
+          var td = tr.insertCell();
+          td.textContent = val;
+          if (i === 7) td.style.color = winColor;
+          if (i === 8 || i === 9) td.style.color = pnlColor;
+        }});
+      }});
+      document.getElementById('bt-summary').style.display = 'block';
+    }});
+}}
+
+// Przy załadowaniu sprawdź czy są już jakieś wyniki
+fetch('/api/backtest-variants/status')
+  .then(function(r) {{ return r.json(); }})
+  .then(function(s) {{
+    if (s.done) {{
+      document.getElementById('bt-status').textContent = '✅ Ostatni backtest: ' + s.rows + ' rekordów';
+      document.getElementById('bt-csv-link').style.display = 'inline';
+      loadBacktestSummary();
+    }} else if (s.running) {{
+      document.getElementById('bt-status').textContent = '⏳ Trwa...';
+      if (_btPollTimer) clearInterval(_btPollTimer);
+      _btPollTimer = setInterval(pollBacktestStatus, 5000);
+    }}
+  }}).catch(function(){{}});
 
 // ── Settings popover ─────────────────────────────────────────────────────────
 function toggleSettings() {{
@@ -2478,7 +2604,7 @@ def api_algo2_rr_analysis(period: int | None = None):
 
 
 @app.get("/api/algo2/variant-stats")
-def api_algo2_variant_stats(period: int | None = None):
+def api_algo2_variant_stats(period: int | None = None, _: None = Security(_require_api_key)):
     """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
     return db.get_algo2_variant_stats(period)
 
@@ -2488,6 +2614,7 @@ def api_analytics_export(
     days: int | None = None,
     variant: str | None = None,
     type_filter: str | None = None,
+    _: None = Security(_require_api_key),
 ):
     """Eksport surowych danych setupów do analizy.
 
@@ -2586,13 +2713,13 @@ def admin_run_backtest_variants(days: int = 60):
 
 
 @app.get("/api/backtest-variants/status")
-def api_backtest_variants_status():
+def api_backtest_variants_status(_: None = Security(_require_api_key)):
     """Status ostatniego uruchomienia backtestów wariantów."""
     return _backtest_variants_status
 
 
 @app.get("/api/backtest-variants/result")
-def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
+def api_backtest_variants_result(variant: str | None = None, limit: int = 2000, _: None = Security(_require_api_key)):
     """Wyniki backtestów wariantów jako JSON.
 
     Parametry query:
