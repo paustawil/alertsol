@@ -1323,7 +1323,7 @@ function renderScanBlock(el, model, scan) {{
     ? '<span style="color:lightgreen;font-size:0.8em">✓ setup</span> · '
     : '<span style="color:#888;font-size:0.8em">✗ brak setupu</span> · ';
 
-  var rawLines = (scan.text || '').trim().split('\n');
+  var rawLines = (scan.text || '').trim().split('\\n');
   var htmlLines = [];
   for (var i = 0; i < rawLines.length; i++) {{
     var line = rawLines[i].trim();
