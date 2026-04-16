@@ -290,8 +290,8 @@ def gen_pullback_setups_for_snapshot(
     setups = []
 
     for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, _) in _PULLBACK_VARIANTS.items():
-        if vname == "str4" and strength != 4:
-            continue
+        # Uwaga: w live systemie str4 odpala tylko przy strength==4 (baseline pokrywa >=5),
+        # ale w backteście każdy wariant jest niezależny — str4 odpala przy strength>=4.
         if strength < str_min:
             continue
 
