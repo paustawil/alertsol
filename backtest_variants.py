@@ -158,6 +158,12 @@ def simulate_trade(
             exit_price = (tp1 + tp2) / 2  # half at TP1 (already locked), half at TP2
             exit_ts   = c["time"]
             break
+        if tp1_hit and tp2_hit and not sl_hit and tp1_hit_at is None:
+            # TP1 i TP2 trafione na tej samej świecy — rejestruj TP2 od razu
+            result    = "TP2"
+            exit_price = (tp1 + tp2) / 2
+            exit_ts   = c["time"]
+            break
         if tp1_hit and sl_hit and tp1_hit_at is None:
             result    = "SL"
             exit_price = sl
@@ -338,6 +344,12 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
     results: list[dict] = []
     step = 4  # co ile świec M15 (co 1h) odpalamy detekcję
 
+    # Blokada: czas (unix) do kiedy dany wariant+kierunek jest "zajęty"
+    # Modeluje zachowanie live systemu — nowy setup nie jest generowany
+    # dopóki poprzedni nie wygaśnie (ENTRY_TIMEOUT + HOLD_TIMEOUT max).
+    BLOCKED_SECONDS = (ENTRY_TIMEOUT_CANDLES + HOLD_TIMEOUT_CANDLES) * 15 * 60
+    active_until: dict[str, int] = {}  # klucz: "{variant}_{direction}"
+
     print(f"Replay: {len(candles_m15)} świec M15 (step={step}) ...", flush=True)
     generated = 0
 
@@ -357,6 +369,12 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
 
         # Generuj setupy dla wszystkich wariantów
         setups = gen_pullback_setups_for_snapshot(snap_h1, snap_m15, current_price, snap_ts)
+        if not setups:
+            continue
+
+        # Odfiltruj warianty które są aktualnie "zajęte"
+        setups = [s for s in setups
+                  if snap_ts >= active_until.get(f"{s['variant']}_{s['direction']}", 0)]
         if not setups:
             continue
 
@@ -382,6 +400,9 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
                 "n_vars":        n_vars,
                 **{k: v for k, v in trade.items()},
             })
+            # Zablokuj wariant+kierunek na czas trwania tego setupu
+            block_key = f"{s['variant']}_{s['direction']}"
+            active_until[block_key] = snap_ts + BLOCKED_SECONDS
 
     print(f"\nWygenerowano {generated} setupów → {len(results)} rekordów wyników")
 
