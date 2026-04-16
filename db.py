@@ -925,7 +925,7 @@ def get_resolved_filtered(
 
             cur.execute(
                 f"""
-                SELECT setup_id, alert_time, entry_hit_at, model, direction, type, score,
+                SELECT setup_id, alert_time, entry_hit_at, model, direction, type, variant, score,
                        result, avg_entry, avg_exit, pnl_usd, pnl_pct,
                        exit_time, entries, tps, sl, sl_after_tp1,
                        exchange_qty_full, exchange_qty_half,

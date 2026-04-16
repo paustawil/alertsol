@@ -277,7 +277,9 @@ def dashboard():
             f'data-qty-full="{qty_full}" data-pos-open="{pos_open}" data-tp1-done="{tp1_done}">'
             f"<td>#{sid}</td><td>{s['model']}</td>"
             f"<td>{s['direction'].upper()}</td>"
-            f"<td style='font-size:0.75em;color:#aaa;white-space:nowrap'>{s.get('type','')}</td>"
+            f"<td style='font-size:0.75em;color:#aaa;white-space:nowrap'>{s.get('type','')}"
+            + (f"<br><span style='color:#555;font-size:0.85em'>[{s['variant']}]</span>" if s.get('variant') else "")
+            + "</td>"
             f"<td>{status}</td>"
             f"<td>{w1}</td>"
             f'<td>'
@@ -990,7 +992,7 @@ function buildHistRow(s) {{
     + '<td style="font-size:0.8em;color:#aaa">' + exitDt + '</td>'
     + '<td>' + s.model + '</td>'
     + '<td>' + dir.toUpperCase() + '</td>'
-    + '<td style="font-size:0.75em;color:#aaa;white-space:nowrap">' + (s.type || '') + '</td>'
+    + '<td style="font-size:0.75em;color:#aaa;white-space:nowrap">' + (s.type || '') + (s.variant ? '<br><span style="color:#555;font-size:0.85em">[' + s.variant + ']</span>' : '') + '</td>'
     + '<td><span class="vmode avg-entry-display">' + entryStr + '</span>'
     +   '<input class="emode avg-entry-input" type="number" step="0.01" value="' + entryInp + '" oninput="onEntryChange(this)"></td>'
     + '<td><span class="vmode result-display">' + resLabel + '</span>'
