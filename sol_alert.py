@@ -62,7 +62,7 @@ def _clean_log(text: str) -> str:
         if stripped and len(stripped) > 3 and stripped.count("=") / len(stripped) > 0.7:
             continue
         lines.append(stripped)
-    return "  ".join(lines)
+    return "\n".join(lines)
 
 
 # ── GPT3 Validator — ocenia setup wygenerowany przez Algo2 ───────────────────
@@ -760,23 +760,25 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     if not dist_ok: reasons.append(f"dist>3%({w-current_price:.2f})")
                     log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
-        # impulse_continuation_short — mini-pullback w impulsie
+        # impulse_continuation_short — mini-pullback w impulsie (1-2 zielone świece = odbicie w dół)
         if regime_name.startswith("IMPULSE_"):
             _cont_spike = regime.get("spike_score", 0)
+            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
             last6 = candles_m15[-6:]
             greens = [c for c in last6 if c["close"] > c["open"]]
-            log_lines.append(f"  → impulse_cont: greens={len(greens)}/6 (need 1-2) spike={_cont_spike}")
+            log_lines.append(f"  → impulse_cont_short: greens={len(greens)}/6 (need 1-2) spike={_cont_spike}")
             if _cont_spike >= 2:
                 log_lines.append(f"    ✗ SKIP: spike_score={_cont_spike}>=2 (odwrót)")
             elif len(greens) >= 1 and len(greens) <= 2:
                 pullback_high = max(c["high"] for c in last6[-2:])
                 w = round(pullback_high, 2)
                 sl = round(pullback_high + atr * 0.8, 2)
-                tp1 = round(swing_low, 2)
-                tp2 = round(swing_low - atr, 2)
+                # TP: projekcja ATR_M15 poniżej bieżącej ceny (kontynuacja impulsu w dół)
+                tp1 = round(current_price - atr_m15 * 1.5, 2)
+                tp2 = round(current_price - atr_m15 * 2.5, 2)
                 rr_ok = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
                 dist_ok = abs(w - current_price) <= max_entry_dist
-                log_lines.append(f"    W=${w:.2f} dist=${abs(w-current_price):.2f} rr_ok={rr_ok} dist_ok={dist_ok}")
+                log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} ATR_M15=${atr_m15:.2f} dist=${abs(w-current_price):.2f} rr_ok={rr_ok} dist_ok={dist_ok}")
                 if rr_ok and dist_ok:
                     log_lines.append(f"    ✓ ACCEPTED")
                     setups.append({
@@ -784,7 +786,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
                         "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
                         "score": strength,
-                        "reasoning": f"{regime_name}({strength}); pullback M15",
+                        "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
 
         # impulse_aggressive_short — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
@@ -867,6 +869,35 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     if not below_price: reasons.append("W>=cena")
                     if not dist_ok: reasons.append(f"dist>3%({current_price-w:.2f})")
                     log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
+
+        # impulse_continuation_long — mini-pullback w impulsie (1-2 czerwone świece = cofnięcie w górę)
+        if regime_name.startswith("IMPULSE_"):
+            _cont_spike = regime.get("spike_score", 0)
+            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+            last6 = candles_m15[-6:]
+            reds = [c for c in last6 if c["close"] < c["open"]]
+            log_lines.append(f"  → impulse_cont_long: reds={len(reds)}/6 (need 1-2) spike={_cont_spike}")
+            if _cont_spike >= 2:
+                log_lines.append(f"    ✗ SKIP: spike_score={_cont_spike}>=2 (odwrót)")
+            elif len(reds) >= 1 and len(reds) <= 2:
+                pullback_low = min(c["low"] for c in last6[-2:])
+                w = round(pullback_low, 2)
+                sl = round(pullback_low - atr * 0.8, 2)
+                # TP: projekcja ATR_M15 powyżej bieżącej ceny (kontynuacja impulsu w górę)
+                tp1 = round(current_price + atr_m15 * 1.5, 2)
+                tp2 = round(current_price + atr_m15 * 2.5, 2)
+                rr_ok = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                dist_ok = abs(w - current_price) <= max_entry_dist
+                log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} ATR_M15=${atr_m15:.2f} dist=${abs(w-current_price):.2f} rr_ok={rr_ok} dist_ok={dist_ok}")
+                if rr_ok and dist_ok:
+                    log_lines.append(f"    ✓ ACCEPTED")
+                    setups.append({
+                        "type": "impulse_continuation_long", "direction": "long",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
+                        "score": strength,
+                        "reasoning": f"{regime_name}({strength}); pullback M15 cont",
+                    })
 
         # impulse_aggressive_long — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
         if regime_name.startswith("IMPULSE_"):
@@ -1990,10 +2021,10 @@ def check_stale_setups(regime: dict, current_price: float):
     1. Cena uciekła >5% od entry
     2. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
     3. Cena przebiła TP1 bez wejścia w pozycję
+    Shadow setups podlegają tym samym regułom — różnica tylko w tym że nie składamy zleceń.
     """
     pending = db.get_active_setups()
-    non_entered = [s for s in pending
-                   if s.get("entry_hit_at") is None and not s.get("shadow")]
+    non_entered = [s for s in pending if s.get("entry_hit_at") is None]
     if not non_entered:
         return
 
@@ -2042,9 +2073,10 @@ def check_stale_setups(regime: dict, current_price: float):
 
             di = "📉" if d == "short" else "📈"
             tp1 = s["tps"][0] if s.get("tps") else None
+            is_shadow = s.get("shadow", False)
             try:
                 send_telegram(
-                    f"🚫 <b>Setup #{sid} anulowany</b>\n"
+                    f"🚫 <b>Setup #{sid} anulowany</b>" + (" <i>[shadow]</i>" if is_shadow else "") + "\n"
                     f"{di} {d.upper()}"
                     + (f" | W1: ${w1:.2f}" if w1 else "")
                     + (f" | TP1: ${tp1:.2f}" if tp1 else "") + "\n"
