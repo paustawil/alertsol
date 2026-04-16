@@ -374,15 +374,15 @@ def dashboard():
   <div class="ind-row">
     <div class="ind-card">
       <div class="label">Kwota zlecenia (USDT)</div>
-      <div class="value"><input type="number" step="1" min="1" id="set-trade-usdt" class="settings-input" value="—"></div>
+      <div class="value"><input type="number" step="1" min="1" id="set-trade-usdt" class="settings-input" value="" placeholder="—"></div>
     </div>
     <div class="ind-card">
       <div class="label">Częstotliwość alertów (min)</div>
-      <div class="value"><input type="number" step="1" min="1" max="60" id="set-alert-interval" class="settings-input" value="—"></div>
+      <div class="value"><input type="number" step="1" min="1" max="60" id="set-alert-interval" class="settings-input" value="" placeholder="—"></div>
     </div>
     <div class="ind-card">
       <div class="label">Maks. otwartych zleceń</div>
-      <div class="value"><input type="number" step="1" min="1" max="20" id="set-max-positions" class="settings-input" value="—"></div>
+      <div class="value"><input type="number" step="1" min="1" max="20" id="set-max-positions" class="settings-input" value="" placeholder="—"></div>
     </div>
     <div style="display:flex;align-items:flex-end;margin-top:8px">
       <button class="settings-save" id="settings-save-btn" onclick="saveSettings()">Zapisz ustawienia</button>
