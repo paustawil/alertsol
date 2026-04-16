@@ -23,7 +23,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.responses import HTMLResponse
-from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 
 import db
@@ -201,13 +200,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AlertSol Dashboard", lifespan=lifespan)
 
 # ── Prosta autoryzacja kluczem dla endpointów analitycznych ──────────────────
-_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+# Klucz przekazywany jako query param ?api_key=... (WebFetch nie obsługuje nagłówków)
+from fastapi import Query
 
-def _require_api_key(key: str | None = Security(_api_key_header)):
-    """Dependency: sprawdza X-API-Key względem env var CLAUDE_API_KEY.
+def _require_api_key(api_key: str | None = Query(default=None, alias="api_key")):
+    """Dependency: sprawdza ?api_key=... względem env var CLAUDE_API_KEY.
     Jeśli CLAUDE_API_KEY nie jest ustawione — endpoint jest otwarty (dev mode)."""
     expected = os.getenv("CLAUDE_API_KEY", "")
-    if expected and key != expected:
+    if expected and api_key != expected:
         raise HTTPException(status_code=403, detail="Invalid API key")
 
 
