@@ -787,34 +787,36 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "reasoning": f"{regime_name}({strength}); pullback M15",
                     })
 
-        # impulse_aggressive_short — market entry natychmiast, vol >= 2.0x (force_shadow — tryb testowy)
+        # impulse_aggressive_short — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
         if regime_name.startswith("IMPULSE_"):
             _agg_vol   = regime.get("vol_ratio", 1.0)
             _agg_spike = regime.get("spike_score", 0)
-            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike}")
+            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike} ATR_H1=${atr:.2f} ATR_M15=${atr_m15:.2f}")
             if _agg_spike >= 2:
                 log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
             elif _agg_vol < 2.0:
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
-                w   = round(current_price, 2)
-                sl  = round(current_price + atr * 1.2, 2)
-                tp1 = round(swing_low, 2)
-                tp2 = round(swing_low - atr, 2)
-                rr_ok = tp1 < w and (w - tp1) / (sl - w) >= 1.5
-                log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} rr_ok={rr_ok}")
-                if rr_ok:
-                    log_lines.append(f"    ✓ ACCEPTED (force_shadow — tryb testowy)")
-                    setups.append({
-                        "type": "impulse_aggressive_short", "direction": "short",
-                        "entries": [w], "sl": sl, "sl_after_tp1": w,
-                        "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
-                        "score": strength,
-                        "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive",
-                        "force_shadow": True,
-                    })
-                else:
-                    log_lines.append(f"    ✗ REJECTED: RR<1.5")
+                w = round(current_price, 2)
+                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
+                    _sl  = round(current_price + _vatr * 1.2, 2)
+                    _tp1 = round(current_price - _vatr * 2.0, 2)
+                    _tp2 = round(current_price - _vatr * _tp2_mult, 2)
+                    _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
+                    log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                    if _rr_ok:
+                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
+                        setups.append({
+                            "type": "impulse_aggressive_short", "direction": "short",
+                            "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                            "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
+                            "score": strength, "variant": _vname,
+                            "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
+                            "force_shadow": True,
+                        })
+                    else:
+                        log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
@@ -866,34 +868,36 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     if not dist_ok: reasons.append(f"dist>3%({current_price-w:.2f})")
                     log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
-        # impulse_aggressive_long — market entry natychmiast, vol >= 2.0x (force_shadow — tryb testowy)
+        # impulse_aggressive_long — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
         if regime_name.startswith("IMPULSE_"):
             _agg_vol   = regime.get("vol_ratio", 1.0)
             _agg_spike = regime.get("spike_score", 0)
-            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike}")
+            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike} ATR_H1=${atr:.2f} ATR_M15=${atr_m15:.2f}")
             if _agg_spike >= 2:
                 log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
             elif _agg_vol < 2.0:
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
-                w   = round(current_price, 2)
-                sl  = round(current_price - atr * 1.2, 2)
-                tp1 = round(swing_high, 2)
-                tp2 = round(swing_high + atr, 2)
-                rr_ok = tp1 > w and (tp1 - w) / (w - sl) >= 1.5
-                log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} rr_ok={rr_ok}")
-                if rr_ok:
-                    log_lines.append(f"    ✓ ACCEPTED (force_shadow — tryb testowy)")
-                    setups.append({
-                        "type": "impulse_aggressive_long", "direction": "long",
-                        "entries": [w], "sl": sl, "sl_after_tp1": w,
-                        "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
-                        "score": strength,
-                        "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive",
-                        "force_shadow": True,
-                    })
-                else:
-                    log_lines.append(f"    ✗ REJECTED: RR<1.5")
+                w = round(current_price, 2)
+                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
+                    _sl  = round(current_price - _vatr * 1.2, 2)
+                    _tp1 = round(current_price + _vatr * 2.0, 2)
+                    _tp2 = round(current_price + _vatr * _tp2_mult, 2)
+                    _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
+                    log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                    if _rr_ok:
+                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
+                        setups.append({
+                            "type": "impulse_aggressive_long", "direction": "long",
+                            "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                            "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
+                            "score": strength, "variant": _vname,
+                            "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
+                            "force_shadow": True,
+                        })
+                    else:
+                        log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
 
     # ── RANGE ─────────────────────────────────────────────────────────────
     elif regime_name == "RANGE":

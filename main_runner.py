@@ -277,7 +277,9 @@ def dashboard():
             f'data-qty-full="{qty_full}" data-pos-open="{pos_open}" data-tp1-done="{tp1_done}">'
             f"<td>#{sid}</td><td>{s['model']}</td>"
             f"<td>{s['direction'].upper()}</td>"
-            f"<td style='font-size:0.75em;color:#aaa;white-space:nowrap'>{s.get('type','')}</td>"
+            f"<td style='font-size:0.75em;color:#aaa;white-space:nowrap'>{s.get('type','')}"
+            + (f"<br><span style='color:#555;font-size:0.85em'>[{s['variant']}]</span>" if s.get('variant') else "")
+            + "</td>"
             f"<td>{status}</td>"
             f"<td>{w1}</td>"
             f'<td>'
@@ -990,7 +992,7 @@ function buildHistRow(s) {{
     + '<td style="font-size:0.8em;color:#aaa">' + exitDt + '</td>'
     + '<td>' + s.model + '</td>'
     + '<td>' + dir.toUpperCase() + '</td>'
-    + '<td style="font-size:0.75em;color:#aaa;white-space:nowrap">' + (s.type || '') + '</td>'
+    + '<td style="font-size:0.75em;color:#aaa;white-space:nowrap">' + (s.type || '') + (s.variant ? '<br><span style="color:#555;font-size:0.85em">[' + s.variant + ']</span>' : '') + '</td>'
     + '<td><span class="vmode avg-entry-display">' + entryStr + '</span>'
     +   '<input class="emode avg-entry-input" type="number" step="0.01" value="' + entryInp + '" oninput="onEntryChange(this)"></td>'
     + '<td><span class="vmode result-display">' + resLabel + '</span>'
@@ -1501,6 +1503,9 @@ async function loadMarketStatus() {{
     var details = [];
     if (d.score != null) details.push('score:' + d.score);
     if (d.change_24h != null) details.push('24h:' + (d.change_24h >= 0 ? '+' : '') + parseFloat(d.change_24h).toFixed(1) + '%');
+    if (d.vol_ratio != null) details.push('vol:' + parseFloat(d.vol_ratio).toFixed(1) + 'x');
+    if (d.atr != null) details.push('ATR:$' + parseFloat(d.atr).toFixed(2));
+    if (d.spike_score != null && d.spike_score > 0) details.push('spk:' + d.spike_score);
     document.getElementById('ms-regime-detail').textContent = details.join('  ');
     // Algo feedback (last_scans is now a dict keyed by model name)
     var scans = d.last_scans || {{}};
@@ -1995,19 +2000,25 @@ def api_market_status():
         price = sa.fetch_current_price(sa.SYMBOL)
     except Exception as e:
         log.warning(f"[market-status] price: {e}")
+    atr = None
     try:
         m15 = sa.fetch_klines(sa.SYMBOL, "15m", 100)
         h1  = sa.fetch_klines(sa.SYMBOL, "1h", 50)
         reg = sa.detect_market_regime(m15, h1, price or 0) or {}
+        atr = round(sa.calc_atr(h1[-20:] if len(h1) >= 20 else h1), 2)
     except Exception as e:
         log.warning(f"[market-status] regime: {e}")
     return {
-        "price":      price,
-        "regime":     reg.get("regime"),
-        "direction":  reg.get("direction"),
-        "score":      reg.get("score"),
+        "price":       price,
+        "regime":      reg.get("regime"),
+        "direction":   reg.get("direction"),
+        "score":       reg.get("score"),
         "change_24h":  reg.get("change_24h"),
         "change_48h":  reg.get("change_48h"),
+        "vol_ratio":   reg.get("vol_ratio"),
+        "spike_score": reg.get("spike_score"),
+        "details":     reg.get("details"),
+        "atr":         atr,
         "support":     reg.get("support"),
         "resistance":  reg.get("resistance"),
         "last_scans":  _get_last_scans(),
