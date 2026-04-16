@@ -2477,6 +2477,70 @@ def api_algo2_rr_analysis(period: int | None = None):
     return db.get_algo2_rr_analysis(period)
 
 
+@app.get("/api/algo2/variant-stats")
+def api_algo2_variant_stats(period: int | None = None):
+    """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
+    return db.get_algo2_variant_stats(period)
+
+
+@app.get("/api/analytics/export")
+def api_analytics_export(
+    days: int | None = None,
+    variant: str | None = None,
+    type_filter: str | None = None,
+):
+    """Eksport surowych danych setupów do analizy.
+
+    Parametry:
+      days        — ostatnie N dni (brak = wszystkie)
+      variant     — filtr po wariancie (np. 'baseline', 'shallow', 'str4')
+      type_filter — filtr po typie setupu (np. 'trend_pullback_long')
+
+    Zwraca JSON z polami kluczowymi dla każdego setupu.
+    """
+    with db._conn() as conn:
+        with db._conn().__class__() if False else conn.cursor(
+            cursor_factory=__import__("psycopg2").extras.RealDictCursor
+        ) as cur:
+            where = ["model = 'Algo2'"]
+            params: dict = {}
+            if days:
+                where.append("alert_time >= NOW() - %(interval)s::interval")
+                params["interval"] = f"{days} days"
+            if variant:
+                where.append("COALESCE(variant, 'baseline') = %(variant)s")
+                params["variant"] = variant
+            if type_filter:
+                where.append("type = %(type_filter)s")
+                params["type_filter"] = type_filter
+            where_sql = " AND ".join(where)
+            cur.execute(
+                f"""
+                SELECT
+                    setup_id, alert_time, type, direction,
+                    COALESCE(variant, 'baseline') AS variant,
+                    entries, tps, sl, sl_after_tp1, rr,
+                    entry_hit_at, result, pnl_usd, pnl_pct,
+                    avg_entry, avg_exit,
+                    hypo_result, hypo_pnl_usd,
+                    shadow, resolved, score,
+                    EXTRACT(EPOCH FROM alert_time)::bigint AS alert_ts,
+                    CASE WHEN entry_hit_at IS NOT NULL AND alert_timestamp IS NOT NULL
+                         THEN ROUND((entry_hit_at - alert_timestamp) / 3600.0, 2) END AS hours_to_entry,
+                    CASE WHEN exit_time IS NOT NULL AND entry_hit_at IS NOT NULL
+                         THEN ROUND(EXTRACT(EPOCH FROM exit_time - to_timestamp(entry_hit_at)) / 3600.0, 2)
+                    END AS hold_hours
+                FROM setups
+                WHERE {where_sql}
+                ORDER BY alert_time DESC
+                LIMIT 2000
+                """,
+                params,
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+    return {"count": len(rows), "rows": rows}
+
+
 @app.post("/admin/run-gpt5-backtest")
 def admin_run_gpt5_backtest():
     """Uruchamia backtest GPT5 (vision: wykresy PNG) w tle. Wyniki: arkusz 'GPT5 test'."""

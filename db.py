@@ -191,6 +191,7 @@ def insert_setup(row: dict) -> int | None:
         "sl_adjusted":     row.get("sl_adjusted", False),
         "shadow":          row.get("shadow", False),
         "trade_usdt":      float(os.getenv("BITGET_TRADE_USDT", "100")),
+        "variant":         row.get("variant", "baseline"),
     }
 
     with _conn() as conn:
@@ -209,7 +210,7 @@ def insert_setup(row: dict) -> int | None:
                     entry_trigger, reasoning, llm_scores,
                     entries, tps, sl, sl_after_tp1, rr,
                     entry_hit_at, entries_hit, sl_adjusted, shadow,
-                    trade_usdt
+                    trade_usdt, variant
                 )
                 SELECT
                     %(alert_time)s, %(alert_timestamp)s, %(model)s, %(rejection)s, %(type)s,
@@ -217,7 +218,7 @@ def insert_setup(row: dict) -> int | None:
                     %(entry_trigger)s, %(reasoning)s, %(llm_scores)s,
                     %(entries)s, %(tps)s, %(sl)s, %(sl_after_tp1)s, %(rr)s,
                     %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s, %(shadow)s,
-                    %(trade_usdt)s
+                    %(trade_usdt)s, %(variant)s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM setups
                     WHERE resolved = FALSE
@@ -1059,6 +1060,61 @@ def get_algo2_type_stats(period_days: int | None = None) -> list[dict]:
                   {time_sql}
                 GROUP BY type, direction
                 ORDER BY type, direction
+                """,
+                time_params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def get_algo2_variant_stats(period_days: int | None = None) -> list[dict]:
+    """Porównanie wariantów parametrów (kalibracja) dla trend_pullback_long/short.
+
+    Kolumny: variant, type, direction, total, entered, entry_rate, wins, losses,
+             win_rate, avg_pnl_usd, tp1_rate, tp2_rate, sl_rate, avg_rr, avg_hold_h
+    """
+    time_sql, time_params = _algo2_time_filter(period_days)
+    wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COALESCE(variant, 'baseline')                                          AS variant,
+                    COALESCE(NULLIF(type,''), '(brak)')                                    AS type,
+                    direction,
+                    COUNT(*)                                                               AS total,
+                    COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
+                    ROUND(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric
+                          / NULLIF(COUNT(*), 0) * 100, 1)                                 AS entry_rate,
+                    COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                                  AS losses,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
+                                 + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1)   AS win_rate,
+                    ROUND(AVG(pnl_usd) FILTER (
+                          WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    )::numeric, 2)                                                          AS avg_pnl_usd,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS tp1_rate,
+                    ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS tp2_rate,
+                    ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS sl_rate,
+                    ROUND(AVG(rr) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric, 2)    AS avg_rr,
+                    ROUND(AVG(
+                        CASE WHEN exit_time IS NOT NULL AND entry_hit_at IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM exit_time - to_timestamp(entry_hit_at)) / 3600.0
+                        END
+                    )::numeric, 1)                                                         AS avg_hold_h
+                FROM setups
+                WHERE model = 'Algo2'
+                  AND type LIKE 'trend_pullback%'
+                  {time_sql}
+                GROUP BY variant, type, direction
+                ORDER BY variant, type, direction
                 """,
                 time_params,
             )
