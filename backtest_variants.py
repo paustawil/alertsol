@@ -368,12 +368,15 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
         snap_h1 = candles_h1[max(0, h1_idx - 60):h1_idx]
 
         # Generuj setupy dla wszystkich wariantów
-        setups = gen_pullback_setups_for_snapshot(snap_h1, snap_m15, current_price, snap_ts)
-        if not setups:
+        setups_all = gen_pullback_setups_for_snapshot(snap_h1, snap_m15, current_price, snap_ts)
+        if not setups_all:
             continue
 
+        # n_vars: ile wariantów MOGŁO odpałić (przed blokadą) — do porównania Entry%
+        n_vars = len(setups_all)
+
         # Odfiltruj warianty które są aktualnie "zajęte"
-        setups = [s for s in setups
+        setups = [s for s in setups_all
                   if snap_ts >= active_until.get(f"{s['variant']}_{s['direction']}", 0)]
         if not setups:
             continue
