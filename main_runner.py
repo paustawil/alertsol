@@ -2757,6 +2757,16 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
                                       "pnl_sum": 0.0,
                                       "rr_sum": 0.0, "rr_count": 0,
                                       "rr_tp2_sum": 0.0, "rr_tp2_count": 0})
+    # Wyznacz snapshoty gdzie WSZYSTKIE warianty odpaliły jednocześnie
+    # (fair podstawa do porównania Entry% — tylko te snapshoty wchodzą do shared)
+    from collections import defaultdict as _dd
+    dt_to_vars: dict = _dd(set)
+    for r in rows:
+        dt = r.get("alert_dt", "")
+        if dt:
+            dt_to_vars[dt].add(r["variant"])
+    all_variants_set: set = set().union(*dt_to_vars.values()) if dt_to_vars else set()
+
     for r in rows:
         v = r["variant"]
         agg[v]["total"] += 1
@@ -2780,12 +2790,14 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
                 agg[v]["rr_tp2_count"] += 1
         except (ValueError, ZeroDivisionError):
             pass
-        # shared_total/shared_entered: snapshoty gdzie ≥2 wariantów mogło odpalić
-        n_vars = int(r.get("n_vars") or 1)
-        if n_vars >= 2:
+        # shared_total/shared_entered: tylko snapshoty gdzie WSZYSTKIE warianty odpaliły
+        # (identyczna podstawa → Entry% porównywalne i shallow ≥ baseline gwarantowane)
+        dt = r.get("alert_dt", "")
+        fully_comparable = all_variants_set.issubset(dt_to_vars.get(dt, set()))
+        if fully_comparable:
             agg[v]["shared_total"] += 1
         if r.get("entered") == "True":
-            if n_vars >= 2:
+            if fully_comparable:
                 agg[v]["shared_entered"] += 1
             agg[v]["entered"] += 1
             res = r.get("result", "")
