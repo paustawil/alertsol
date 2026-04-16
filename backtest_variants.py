@@ -290,8 +290,8 @@ def gen_pullback_setups_for_snapshot(
     setups = []
 
     for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, _) in _PULLBACK_VARIANTS.items():
-        if vname == "str4" and strength != 4:
-            continue
+        # Uwaga: w live systemie str4 odpala tylko przy strength==4 (baseline pokrywa >=5),
+        # ale w backteście każdy wariant jest niezależny — str4 odpala przy strength>=4.
         if strength < str_min:
             continue
 
@@ -368,12 +368,15 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
         snap_h1 = candles_h1[max(0, h1_idx - 60):h1_idx]
 
         # Generuj setupy dla wszystkich wariantów
-        setups = gen_pullback_setups_for_snapshot(snap_h1, snap_m15, current_price, snap_ts)
-        if not setups:
+        setups_all = gen_pullback_setups_for_snapshot(snap_h1, snap_m15, current_price, snap_ts)
+        if not setups_all:
             continue
 
+        # n_vars: ile wariantów MOGŁO odpałić (przed blokadą) — do porównania Entry%
+        n_vars = len(setups_all)
+
         # Odfiltruj warianty które są aktualnie "zajęte"
-        setups = [s for s in setups
+        setups = [s for s in setups_all
                   if snap_ts >= active_until.get(f"{s['variant']}_{s['direction']}", 0)]
         if not setups:
             continue
