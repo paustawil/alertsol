@@ -402,12 +402,31 @@ def _print_summary(results: list[dict]) -> None:
 
     stats: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "total": 0, "entered": 0, "sl": 0, "tp1": 0, "tp2": 0, "tp1_be": 0,
-        "pnl_sum": 0.0,
+        "pnl_sum": 0.0, "rr_sum": 0.0, "rr_count": 0,
+        "rr_tp2_sum": 0.0, "rr_tp2_count": 0,
     })
 
     for r in results:
         v = r["variant"]
         stats[v]["total"] += 1
+        try:
+            rr1 = float(r.get("rr") or 0)
+            if rr1 > 0:
+                stats[v]["rr_sum"]   += rr1
+                stats[v]["rr_count"] += 1
+        except (TypeError, ValueError):
+            pass
+        try:
+            w1  = float(r.get("w1") or 0)
+            tp2 = float(r.get("tp2") or 0)
+            slv = float(r.get("sl")  or 0)
+            denom = abs(w1 - slv)
+            numer = abs(tp2 - w1)
+            if denom > 0 and numer > 0:
+                stats[v]["rr_tp2_sum"]   += numer / denom
+                stats[v]["rr_tp2_count"] += 1
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
         if r["entered"]:
             stats[v]["entered"] += 1
             res = r.get("result")
@@ -419,25 +438,29 @@ def _print_summary(results: list[dict]) -> None:
             if r.get("pnl_pct") is not None:
                 stats[v]["pnl_sum"] += r["pnl_pct"]
 
-    print("\n" + "=" * 80)
-    print(f"{'Variant':<12} {'Total':>6} {'Entered':>7} {'Entry%':>7} "
-          f"{'SL':>5} {'TP1':>5} {'TP1+BE':>7} {'TP2':>5} "
-          f"{'Win%':>6} {'ΣPnL%':>8} {'AvgPnL%':>9}")
-    print("-" * 80)
+    print("\n" + "=" * 100)
+    print(f"{'Variant':<12} {'Total':>6} {'Entry%':>7} "
+          f"{'RR_TP1':>7} {'RR_TP2':>7} "
+          f"{'SL':>5} {'TP1+BE':>7} {'TP2':>5} "
+          f"{'WR_TP1+':>8} {'WR_TP2':>7} {'ΣPnL%':>8} {'AvgPnL%':>9}")
+    print("-" * 100)
 
     for vname, s in sorted(stats.items()):
-        total   = s["total"]
-        entered = s["entered"]
-        entry_r = f"{entered/total*100:.1f}%" if total else "-"
-        wins    = s["tp1"] + s["tp2"] + s["tp1_be"]
-        win_r   = f"{wins/entered*100:.1f}%" if entered else "-"
-        sl_r    = s["sl"]
-        pnl_sum = s["pnl_sum"]
-        avg_pnl = pnl_sum / entered if entered else 0
-        print(f"{vname:<12} {total:>6} {entered:>7} {entry_r:>7} "
-              f"{sl_r:>5} {s['tp1']:>5} {s['tp1_be']:>7} {s['tp2']:>5} "
-              f"{win_r:>6} {pnl_sum:>+8.1f}% {avg_pnl:>+9.2f}%")
-    print("=" * 80)
+        total    = s["total"]
+        entered  = s["entered"]
+        entry_r  = f"{entered/total*100:.1f}%" if total else "-"
+        tp1_plus = s["tp1"] + s["tp1_be"] + s["tp2"]
+        wr_tp1   = f"{tp1_plus/entered*100:.1f}%" if entered else "-"
+        wr_tp2   = f"{s['tp2']/entered*100:.1f}%" if entered else "-"
+        rr_tp1   = f"{s['rr_sum']/s['rr_count']:.2f}"     if s["rr_count"]      else "-"
+        rr_tp2   = f"{s['rr_tp2_sum']/s['rr_tp2_count']:.2f}" if s["rr_tp2_count"] else "-"
+        pnl_sum  = s["pnl_sum"]
+        avg_pnl  = pnl_sum / entered if entered else 0
+        print(f"{vname:<12} {total:>6} {entry_r:>7} "
+              f"{rr_tp1:>7} {rr_tp2:>7} "
+              f"{s['sl']:>5} {s['tp1_be']:>7} {s['tp2']:>5} "
+              f"{wr_tp1:>8} {wr_tp2:>7} {pnl_sum:>+8.1f}% {avg_pnl:>+9.2f}%")
+    print("=" * 100)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
