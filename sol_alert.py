@@ -799,8 +799,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             else:
                 w   = round(current_price, 2)
                 sl  = round(current_price + atr * 1.2, 2)
-                tp1 = round(swing_low, 2)
-                tp2 = round(swing_low - atr, 2)
+                # swing_low == current_price podczas IMPULSE_DOWN (po korekcji min()), więc
+                # używamy projekcji ATR od bieżącej ceny zamiast swing_low
+                tp1 = round(current_price - atr * 2.0, 2)
+                tp2 = round(current_price - atr * 3.5, 2)
                 rr_ok = tp1 < w and (w - tp1) / (sl - w) >= 1.5
                 log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} rr_ok={rr_ok}")
                 if rr_ok:
@@ -878,8 +880,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             else:
                 w   = round(current_price, 2)
                 sl  = round(current_price - atr * 1.2, 2)
-                tp1 = round(swing_high, 2)
-                tp2 = round(swing_high + atr, 2)
+                # swing_high == current_price podczas IMPULSE_UP (po korekcji max()), więc
+                # używamy projekcji ATR od bieżącej ceny zamiast swing_high
+                tp1 = round(current_price + atr * 2.0, 2)
+                tp2 = round(current_price + atr * 3.5, 2)
                 rr_ok = tp1 > w and (tp1 - w) / (w - sl) >= 1.5
                 log_lines.append(f"    W=${w:.2f} SL=${sl:.2f} TP1=${tp1:.2f} rr_ok={rr_ok}")
                 if rr_ok:
