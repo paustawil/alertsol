@@ -410,14 +410,6 @@ def dashboard():
   </div>
 </div>
 
-<!-- ── All-time stats ────────────────────────────────────────────────── -->
-<div style="margin:8px 0 12px">
-  <span class="stat">📊 Win rate (all-time): <b>{win_rate}</b></span>
-  <span class="stat">💰 Łączny PnL: <b>{total_pnl}</b></span>
-  <span class="stat">🎯 Aktywne: <b>{len(active)}</b></span>
-  <span class="stat">✅ Zamknięte: <b>{stats.get('total_resolved', 0)}</b></span>
-</div>
-
 <!-- ── Wykres SOL/USDT ─────────────────────────────────────────────────── -->
 <div style="margin-bottom:18px;background:#222;border:1px solid #444;border-radius:8px;padding:12px 16px">
   <h3 style="margin:0 0 10px;font-size:1em;color:#80deea">📈 SOL/USDT — wykres live</h3>
@@ -1316,6 +1308,10 @@ function fmtAgo(isoStr) {{
   return h + 'h ' + (diff % 60) + 'min temu';
 }}
 
+function escHtml(s) {{
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+
 function renderScanBlock(el, model, scan) {{
   var label = '<span style="color:#80deea;font-size:0.8em;font-weight:bold">' + model + ':</span> ';
   if (!scan || !scan.text) {{
@@ -1326,15 +1322,31 @@ function renderScanBlock(el, model, scan) {{
   var foundBadge = scan.found
     ? '<span style="color:lightgreen;font-size:0.8em">✓ setup</span> · '
     : '<span style="color:#888;font-size:0.8em">✗ brak setupu</span> · ';
-  // Grok-specific: bias info
-  var extra = '';
-  if (scan.bias != null) {{
-    var bClr = scan.bias === 'long' ? 'lightgreen' : scan.bias === 'short' ? 'salmon' : '#888';
-    extra = '<span style="color:' + bClr + '">' + scan.bias.toUpperCase() + ' ' + (scan.bias_proc || 0) + '%</span> · ';
+
+  var rawLines = (scan.text || '').trim().split('\n');
+  var htmlLines = [];
+  for (var i = 0; i < rawLines.length; i++) {{
+    var line = rawLines[i].trim();
+    if (!line || /^=+$/.test(line) || line.indexOf('candles count') !== -1) continue;
+    if (/^\[.*\] Algo2 analiza/.test(line)) continue;
+    var safe = escHtml(line);
+    if (line.startsWith('WYNIK:')) {{
+      var hasSetup = !/:\s*0 setup/.test(line);
+      htmlLines.push('<span style="color:' + (hasSetup ? 'lightgreen' : '#777') + ';font-size:0.8em;font-weight:bold">' + safe + '</span>');
+    }} else if (line.startsWith('→')) {{
+      var isSkip = line.indexOf('SKIP') !== -1;
+      htmlLines.push('<span style="color:' + (isSkip ? '#666' : '#ffcc66') + ';font-size:0.8em">' + safe + '</span>');
+    }} else if (line.startsWith('Cena:')) {{
+      htmlLines.push('<span style="color:#e0e0e0;font-size:0.8em;font-weight:bold">' + safe + '</span>');
+    }} else {{
+      htmlLines.push('<span style="color:#999;font-size:0.78em">' + safe + '</span>');
+    }}
   }}
-  var txt = (scan.text || '').trim();
-  el.innerHTML = label + ago + foundBadge + extra
-    + '<span style="color:#ccc;font-size:0.78em">' + txt + '</span>';
+
+  var body = htmlLines.length
+    ? '<div style="margin-top:4px;line-height:1.65">' + htmlLines.join('<br>') + '</div>'
+    : '';
+  el.innerHTML = label + ago + foundBadge + body;
 }}
 
 async function loadMarketStatus() {{

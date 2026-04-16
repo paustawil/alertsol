@@ -683,7 +683,6 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     h1_closes = [f"${c['close']:.2f}" for c in h1_12[-6:]]
     log_lines.append(f"  H1 closes (last 6): {', '.join(h1_closes)} [ostatnia H1: {h1_last_ts} UTC]")
     log_lines.append(f"  M15 last close: ${candles_m15[-1]['close']:.2f} [{m15_last_ts} UTC]")
-    log_lines.append(f"  H1 candles count: {len(candles_h1)} | M15 candles count: {len(candles_m15)}")
 
     if atr <= 0:
         log_lines.append(f"  SKIP: ATR <= 0")
