@@ -240,6 +240,26 @@ def dashboard():
         tp1_raw  = f"{tps[0]:.2f}" if len(tps) > 0 else ""
         tp2_raw  = f"{tps[1]:.2f}" if len(tps) > 1 else ""
         sl_raw   = f"{s['sl_after_tp1']:.2f}" if s.get("exchange_tp1_done") and s.get("sl_after_tp1") else (f"{s['sl']:.2f}" if s.get("sl") else "")
+        # RR calculation
+        e1_num = entries[0] if entries else None
+        t1_num = tps[0] if len(tps) > 0 else None
+        t2_num = tps[1] if len(tps) > 1 else None
+        sl_num = s.get("sl")
+        rr1_str = "—"
+        rr2_str = "—"
+        if e1_num and t1_num and sl_num and abs(e1_num - sl_num) > 0.0001:
+            if s["direction"].lower() == "long":
+                risk = e1_num - sl_num
+                if risk > 0:
+                    rr1_str = f"{(t1_num - e1_num) / risk:.2f}"
+                    if t2_num:
+                        rr2_str = f"{(t2_num - e1_num) / risk:.2f}"
+            else:
+                risk = sl_num - e1_num
+                if risk > 0:
+                    rr1_str = f"{(e1_num - t1_num) / risk:.2f}"
+                    if t2_num:
+                        rr2_str = f"{(e1_num - t2_num) / risk:.2f}"
         active_rows += (
             f'<tr data-sid="{sid}" data-plan-oid="{plan_oid}" '
             f'data-tp1-oid="{tp1_oid}" data-tp2-oid="{tp2_oid}" data-sl-oid="{sl_oid}" '
@@ -262,10 +282,8 @@ def dashboard():
             f'<input class="av-edit sl-input" type="number" step="0.01" value="{sl_raw}" style="width:72px;background:#2a2a2a;color:#e0e0e0;border:1px solid #884444;font-family:monospace;padding:2px 4px">'
             f'</td>'
             f"<td>{sl2}</td>"
-            f'<td class="qt-p"  id="qp-{sid}"><span class="qt-loading">…</span></td>'
-            f'<td class="qt-tp1" id="qt1-{sid}"><span class="qt-loading">…</span></td>'
-            f'<td class="qt-tp2" id="qt2-{sid}"><span class="qt-loading">…</span></td>'
-            f'<td class="qt-sl"  id="qsl-{sid}"><span class="qt-loading">…</span></td>'
+            f'<td style="color:#80deea;text-align:center">{rr1_str}</td>'
+            f'<td style="color:#80deea;text-align:center">{rr2_str}</td>'
             f'<td style="white-space:nowrap">'
             f'<button class="av-view btn-edit" onclick="editActiveTp(this)">Zmień TP</button>'
             f'<button class="av-edit btn-action" onclick="saveActiveTp(this)">Zapisz</button>'
@@ -323,10 +341,7 @@ def dashboard():
   .btn-edit:hover {{ background: #3a3a3a; color: #e0e0e0; }}
   .btn-action {{ background: #333; color: #e0e0e0; border: 1px solid #555; padding: 2px 8px; cursor: pointer; font-family: monospace; font-size: 0.85em; margin-right: 2px; }}
   .btn-action:hover {{ background: #444; }}
-  .qt-loading {{ color: #555; }}
-  #active-table th[title], #active-table td.qt-p,
-  #active-table td.qt-tp1, #active-table td.qt-tp2, #active-table td.qt-sl
-    {{ font-size: 0.9em; min-width: 42px; text-align: right; }}
+  #active-table th[title] {{ font-size: 0.9em; min-width: 42px; text-align: center; }}
   .av-edit {{ display: none; }}
   tr.editing-tp .av-edit {{ display: inline; }}
   tr.editing-tp .av-view {{ display: none; }}
@@ -389,12 +404,40 @@ def dashboard():
     <span id="ms-loading" style="font-size:0.75em;color:#555;margin-left:auto"></span>
   </div>
   <div id="ms-scans" style="display:flex;gap:0;background:#1e1e1e;border:1px solid #444;border-top:none;border-radius:0 0 6px 6px;flex-wrap:wrap">
-    <div id="ms-scan-Algo2" style="flex:1;min-width:300px;padding:7px 16px;border-right:1px solid #333;word-wrap:break-word;overflow-wrap:break-word">
+    <div id="ms-scan-Algo2" style="flex:1;min-width:300px;padding:7px 16px;word-wrap:break-word;overflow-wrap:break-word">
       <span style="color:#aaa;font-size:0.8em">Algo2: ładowanie...</span>
     </div>
-    <div id="ms-scan-Grok" style="flex:1;min-width:300px;padding:7px 16px;word-wrap:break-word;overflow-wrap:break-word">
-      <span style="color:#aaa;font-size:0.8em">Grok: ładowanie...</span>
-    </div>
+  </div>
+</div>
+
+<!-- ── All-time stats ────────────────────────────────────────────────── -->
+<div style="margin:8px 0 12px">
+  <span class="stat">📊 Win rate (all-time): <b>{win_rate}</b></span>
+  <span class="stat">💰 Łączny PnL: <b>{total_pnl}</b></span>
+  <span class="stat">🎯 Aktywne: <b>{len(active)}</b></span>
+  <span class="stat">✅ Zamknięte: <b>{stats.get('total_resolved', 0)}</b></span>
+</div>
+
+<!-- ── Wykres SOL/USDT ─────────────────────────────────────────────────── -->
+<div style="margin-bottom:18px;background:#222;border:1px solid #444;border-radius:8px;padding:12px 16px">
+  <h3 style="margin:0 0 10px;font-size:1em;color:#80deea">📈 SOL/USDT — wykres live</h3>
+  <div class="tradingview-widget-container" style="height:420px">
+    <div id="tradingview_sol" style="height:100%"></div>
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <script type="text/javascript">
+    new TradingView.widget({{
+      "width": "100%",
+      "height": 420,
+      "symbol": "BITGET:SOLUSDT",
+      "interval": "15",
+      "timezone": "Europe/Warsaw",
+      "theme": "dark",
+      "style": "1",
+      "locale": "pl",
+      "hide_side_toolbar": false,
+      "container_id": "tradingview_sol"
+    }});
+    </script>
   </div>
 </div>
 
@@ -443,6 +486,16 @@ def dashboard():
   </div>
 </div>
 
+<!-- ── Aktywne setupy ─────────────────────────────────────────────────── -->
+<h3>Aktywne setupy ({len(active)})</h3>
+<table id="active-table">
+<tr><th>#</th><th>Model</th><th>Kier.</th><th>Typ</th><th>Status</th><th>W1</th><th>TP1</th><th>TP2</th><th>SL</th><th>SL@TP1</th>
+<th title="Risk/Reward do TP1">RR→TP1</th>
+<th title="Risk/Reward do TP2">RR→TP2</th>
+<th>Akcje</th></tr>
+{active_rows or '<tr><td colspan=13 style="color:#888">Brak aktywnych setupów</td></tr>'}
+</table>
+
 <!-- ── Analityka Algo2 ───────────────────────────────────────────────── -->
 <div class="indicators-panel" style="margin-top:18px">
   <h3>🔬 Analityka Algo2
@@ -471,21 +524,23 @@ def dashboard():
     </table>
   </div>
 
-  <!-- Heatmapa godzinowa -->
-  <h4 style="color:#80deea;margin:16px 0 6px">Heatmapa godzinowa (czas PL)</h4>
-  <div style="overflow-x:auto">
-    <table id="a2-heatmap-table" style="min-width:580px;font-size:0.85em">
-      <tr>
-        <th>Godz.</th>
-        <th title="Liczba alertów">Alerty</th>
-        <th title="Procent alertów które weszły">% entry</th>
-        <th title="Win rate z pozycji uruchomionych o tej godzinie">Win rate</th>
-        <th title="Liczba wygranych">W</th>
-        <th title="Liczba strat">L</th>
-      </tr>
-      <tr id="a2-heatmap-loading"><td colspan="6" style="color:#888;text-align:center">ładowanie...</td></tr>
-    </table>
-  </div>
+  <!-- Heatmapa godzinowa (zwijana) -->
+  <details style="margin:16px 0 6px">
+    <summary style="color:#80deea;font-size:0.95em;font-weight:bold;cursor:pointer;user-select:none">Heatmapa godzinowa (czas PL)</summary>
+    <div style="overflow-x:auto;margin-top:8px">
+      <table id="a2-heatmap-table" style="min-width:580px;font-size:0.85em">
+        <tr>
+          <th>Godz.</th>
+          <th title="Liczba alertów">Alerty</th>
+          <th title="Procent alertów które weszły">% entry</th>
+          <th title="Win rate z pozycji uruchomionych o tej godzinie">Win rate</th>
+          <th title="Liczba wygranych">W</th>
+          <th title="Liczba strat">L</th>
+        </tr>
+        <tr id="a2-heatmap-loading"><td colspan="6" style="color:#888;text-align:center">ładowanie...</td></tr>
+      </table>
+    </div>
+  </details>
 
   <!-- Analiza RR -->
   <h4 style="color:#80deea;margin:16px 0 6px">Analiza RR i poziomów wyjścia</h4>
@@ -504,24 +559,6 @@ def dashboard():
     </table>
   </div>
 </div>
-
-<div>
-  <span class="stat">📊 Win rate (all-time): <b>{win_rate}</b></span>
-  <span class="stat">💰 Łączny PnL: <b>{total_pnl}</b></span>
-  <span class="stat">🎯 Aktywne: <b>{len(active)}</b></span>
-  <span class="stat">✅ Zamknięte: <b>{stats.get('total_resolved', 0)}</b></span>
-</div>
-
-<h3>Aktywne setupy ({len(active)}) <small style="color:#888;font-size:0.7em" id="bitget-live-status">ładowanie Bitget…</small></h3>
-<table id="active-table">
-<tr><th>#</th><th>Model</th><th>Kier.</th><th>Typ</th><th>Status</th><th>W1</th><th>TP1</th><th>TP2</th><th>SL</th><th>SL@TP1</th>
-<th title="SOL w otwartej pozycji (Bitget)" style="background:#1a2a1a">qtP</th>
-<th title="SOL na zleceniu TP1 (Bitget)" style="background:#1a2a1a">qtTP1</th>
-<th title="SOL na zleceniu TP2 (Bitget)" style="background:#1a2a1a">qtTP2</th>
-<th title="SOL na zleceniu SL (Bitget)" style="background:#1a2a1a">qtSL</th>
-<th>Akcje</th></tr>
-{active_rows or '<tr><td colspan=15 style="color:#888">Brak aktywnych setupów</td></tr>'}
-</table>
 
 <h3>Per model</h3>
 <table><tr><th>Model</th><th title="% setupów które weszły na giełdę">% entry</th><th title="% wygranych (TP1+BE+TP2) z uruchomionych">% win</th><th>PnL $</th><th>PnL %</th><th title="PnL gdyby każda pozycja wyszła na TP1">TP1-only $</th><th>TP1-only %</th></tr>
@@ -686,117 +723,6 @@ function onExitChange(inp) {{
   refreshAllCells(tr, calcPnl(res, d, parseFloat(inp.value)));
 }}
 
-// ── Bitget live data ────────────────────────────────────────────────────────
-async function loadBitgetLive() {{
-  var statusEl = document.getElementById('bitget-live-status');
-  try {{
-    var resp = await fetch('/api/bitget-live');
-    var data = await resp.json();
-    if (data.error) {{
-      if (statusEl) statusEl.textContent = '⚠️ brak Bitget';
-      clearQtCells();
-      return;
-    }}
-
-    var tpsl  = data.tpsl  || {{}};
-    var plans = data.plans || {{}};
-    var rows  = document.querySelectorAll('#active-table tr[data-sid]');
-
-    rows.forEach(function(row) {{
-      var sid     = row.dataset.sid;
-      var planOid = row.dataset.planOid;
-      var tp1Oid  = row.dataset.tp1Oid;
-      var tp2Oid  = row.dataset.tp2Oid;
-      var slOid   = row.dataset.slOid;
-      var posOpen = row.dataset.posOpen === 'true';
-      var tp1Done = row.dataset.tp1Done === 'true';
-      var qtyFull = row.dataset.qtyFull;
-
-      var qpCell  = document.getElementById('qp-'  + sid);
-      var qt1Cell = document.getElementById('qt1-' + sid);
-      var qt2Cell = document.getElementById('qt2-' + sid);
-      var qslCell = document.getElementById('qsl-' + sid);
-
-      // qtP — rozmiar otwartej pozycji
-      if (posOpen) {{
-        // Pozycja otwarta: pokaż exchange_qty_full z DB (plan order size)
-        qpCell.textContent = qtyFull || '—';
-        qpCell.style.color = '#90ee90';
-      }} else if (planOid && plans[planOid]) {{
-        // Czeka na wejście: pokaż rozmiar planu z nawiasem
-        qpCell.textContent = '(' + plans[planOid].size + ')';
-        qpCell.style.color = '#aaa';
-      }} else if (planOid) {{
-        // OID w DB ale nie znaleziono na Bitget — może wykonany lub anulowany
-        qpCell.textContent = qtyFull ? '(' + qtyFull + ')?' : '?';
-        qpCell.style.color = 'orange';
-      }} else {{
-        qpCell.textContent = qtyFull ? '(' + qtyFull + ')' : '—';
-        qpCell.style.color = '#aaa';
-      }}
-
-      // qtTP1
-      if (tp1Done && tp1Oid && tpsl[tp1Oid]) {{
-        // Anomalia: oznaczone jako done ale zlecenie wciąż aktywne na Bitget
-        qt1Cell.textContent = '⚠' + tpsl[tp1Oid].size;
-        qt1Cell.style.color = 'orange';
-      }} else if (tp1Done) {{
-        qt1Cell.textContent = '✓';
-        qt1Cell.style.color = '#90ee90';
-      }} else if (tp1Oid && tpsl[tp1Oid]) {{
-        qt1Cell.textContent = tpsl[tp1Oid].size;
-        qt1Cell.style.color = '#e0e0e0';
-      }} else if (tp1Oid) {{
-        // OID w DB ale nie znaleziono na Bitget — może anulowane lub wykonane
-        qt1Cell.textContent = '?';
-        qt1Cell.style.color = 'orange';
-      }} else {{
-        qt1Cell.textContent = '—';
-        qt1Cell.style.color = '#555';
-      }}
-
-      // qtTP2
-      if (tp2Oid && tpsl[tp2Oid]) {{
-        qt2Cell.textContent = tpsl[tp2Oid].size;
-        qt2Cell.style.color = '#e0e0e0';
-      }} else if (tp2Oid) {{
-        qt2Cell.textContent = '?';
-        qt2Cell.style.color = 'orange';
-      }} else {{
-        qt2Cell.textContent = '—';
-        qt2Cell.style.color = '#555';
-      }}
-
-      // qtSL
-      if (slOid && tpsl[slOid]) {{
-        qslCell.textContent = tpsl[slOid].size;
-        qslCell.style.color = '#e0e0e0';
-      }} else if (slOid) {{
-        qslCell.textContent = '?';
-        qslCell.style.color = 'orange';
-      }} else {{
-        qslCell.textContent = '—';
-        qslCell.style.color = '#555';
-      }}
-    }});
-
-    var now = new Date().toLocaleTimeString('pl-PL', {{hour:'2-digit',minute:'2-digit',second:'2-digit'}});
-    if (statusEl) statusEl.textContent = '✓ ' + now;
-  }} catch(e) {{
-    if (statusEl) statusEl.textContent = '⚠️ błąd: ' + e.message;
-    clearQtCells();
-  }}
-}}
-
-function clearQtCells() {{
-  document.querySelectorAll('.qt-p,.qt-tp1,.qt-tp2,.qt-sl').forEach(function(td) {{
-    td.textContent = '?';
-    td.style.color = '#888';
-  }});
-}}
-
-loadBitgetLive();
-setInterval(loadBitgetLive, 15000);
 // ── koniec Bitget live ───────────────────────────────────────────────────────
 
 // ── Zarządzanie aktywnymi setupami ───────────────────────────────────────────
@@ -1436,13 +1362,9 @@ async function loadMarketStatus() {{
       srSuffix = ' | Support: $' + parseFloat(d.support).toFixed(2) + ', Resistance: $' + parseFloat(d.resistance).toFixed(2);
     }}
     var scanAlgo2 = scans['Algo2'] ? Object.assign({{}}, scans['Algo2'], srSuffix ? {{text: (scans['Algo2'].text || '') + srSuffix}} : {{}}) : null;
-    var scanGrok  = scans['Grok']  ? Object.assign({{}}, scans['Grok'],  srSuffix ? {{text: (scans['Grok'].text  || '') + srSuffix}} : {{}}) : null;
     var el2 = document.getElementById('ms-scan-Algo2');
     if (el2) renderScanBlock(el2, 'Algo2', isRange && !scans['Algo2'] && srSuffix
       ? {{text: 'RANGE — brak skanowania.' + srSuffix}} : scanAlgo2);
-    var elG = document.getElementById('ms-scan-Grok');
-    if (elG) renderScanBlock(elG, 'Grok', isRange && !scans['Grok'] && srSuffix
-      ? {{text: 'RANGE — brak danych.' + srSuffix}} : scanGrok);
     loading.textContent = '';
   }} catch(e) {{
     document.getElementById('ms-loading').textContent = '⚠';
