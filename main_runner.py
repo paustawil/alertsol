@@ -574,13 +574,16 @@ def dashboard():
        style="display:none;color:#80deea;font-size:0.85em">⬇ Pobierz CSV</a>
   </div>
   <div id="bt-summary" style="overflow-x:auto;display:none">
-    <table id="bt-table" style="min-width:700px">
+    <table id="bt-table" style="min-width:820px">
       <tr>
         <th>Wariant</th>
         <th title="Liczba wygenerowanych setupów">Setups</th>
         <th title="% setupów które weszły w pozycję">Entry%</th>
-        <th>SL</th><th>TP1</th><th>TP1+BE</th><th>TP2</th>
-        <th title="% wygranych z wejść">Win%</th>
+        <th title="Średnie RR do TP1 (geometria setupu)">RR TP1</th>
+        <th title="Średnie RR do TP2 (geometria setupu)">RR TP2</th>
+        <th>SL</th><th>TP1+BE</th><th>TP2</th>
+        <th title="% wejść które dotarły do TP1 lub dalej">WR TP1+</th>
+        <th title="% wejść które dotarły do TP2">WR TP2</th>
         <th title="Suma PnL wszystkich wejść (% od $100 trade)">ΣPnL%</th>
         <th title="Średni PnL na jedno wejście">Avg PnL%</th>
       </tr>
@@ -1373,24 +1376,28 @@ function loadBacktestSummary() {{
       while (tbl.rows.length > 1) tbl.deleteRow(1);
       (data.summary || []).forEach(function(s) {{
         var tr = tbl.insertRow();
-        var winColor = s.win_rate >= 55 ? '#81c995' : s.win_rate >= 40 ? '#e0e0e0' : '#f28b82';
+        var wr1Color = s.wr_tp1_plus >= 55 ? '#81c995' : s.wr_tp1_plus >= 40 ? '#e0e0e0' : '#f28b82';
+        var wr2Color = s.wr_tp2     >= 35 ? '#81c995' : s.wr_tp2     >= 20 ? '#e0e0e0' : '#f28b82';
         var pnlColor = s.avg_pnl_pct >= 0 ? '#81c995' : '#f28b82';
         [
           s.variant,
           s.total,
           s.entry_rate + '%',
+          s.avg_rr_tp1,
+          s.avg_rr_tp2,
           s.sl,
-          s.tp1,
           s.tp1_be,
           s.tp2,
-          s.win_rate + '%',
+          s.wr_tp1_plus + '%',
+          s.wr_tp2      + '%',
           (s.pnl_sum_pct >= 0 ? '+' : '') + s.pnl_sum_pct + '%',
           (s.avg_pnl_pct >= 0 ? '+' : '') + s.avg_pnl_pct + '%',
         ].forEach(function(val, i) {{
           var td = tr.insertCell();
           td.textContent = val;
-          if (i === 7) td.style.color = winColor;
-          if (i === 8 || i === 9) td.style.color = pnlColor;
+          if (i === 8) td.style.color = wr1Color;
+          if (i === 9) td.style.color = wr2Color;
+          if (i === 10 || i === 11) td.style.color = pnlColor;
         }});
       }});
       document.getElementById('bt-summary').style.display = 'block';
@@ -2745,10 +2752,32 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
     # Agregaty per wariant
     from collections import defaultdict
     agg: dict = defaultdict(lambda: {"total": 0, "entered": 0, "sl": 0, "tp1": 0,
-                                      "tp1_be": 0, "tp2": 0, "pnl_sum": 0.0})
+                                      "tp1_be": 0, "tp2": 0, "pnl_sum": 0.0,
+                                      "rr_sum": 0.0, "rr_count": 0,
+                                      "rr_tp2_sum": 0.0, "rr_tp2_count": 0})
     for r in rows:
         v = r["variant"]
         agg[v]["total"] += 1
+        # RR do TP1 (pole "rr" z CSV) — na wszystkich setupach
+        try:
+            rr1 = float(r.get("rr") or 0)
+            if rr1 > 0:
+                agg[v]["rr_sum"]   += rr1
+                agg[v]["rr_count"] += 1
+        except ValueError:
+            pass
+        # RR do TP2 — obliczamy z poziomów w1/tp2/sl
+        try:
+            w1  = float(r.get("w1") or 0)
+            tp2 = float(r.get("tp2") or 0)
+            slv = float(r.get("sl")  or 0)
+            denom = abs(w1 - slv)
+            numer = abs(tp2 - w1)
+            if denom > 0 and numer > 0:
+                agg[v]["rr_tp2_sum"]   += numer / denom
+                agg[v]["rr_tp2_count"] += 1
+        except (ValueError, ZeroDivisionError):
+            pass
         if r.get("entered") == "True":
             agg[v]["entered"] += 1
             res = r.get("result", "")
@@ -2763,18 +2792,20 @@ def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
 
     summary = []
     for vname, s in sorted(agg.items()):
-        entered = s["entered"]
-        wins    = s["tp1"] + s["tp2"] + s["tp1_be"]
+        entered  = s["entered"]
+        tp1_plus = s["tp1"] + s["tp1_be"] + s["tp2"]  # trafienia ≥TP1
         summary.append({
-            "variant":    vname,
-            "total":      s["total"],
-            "entered":    entered,
-            "entry_rate": round(s["entered"] / s["total"] * 100, 1) if s["total"] else 0,
-            "sl":         s["sl"],
-            "tp1":        s["tp1"],
-            "tp1_be":     s["tp1_be"],
-            "tp2":        s["tp2"],
-            "win_rate":   round(wins / entered * 100, 1) if entered else 0,
+            "variant":     vname,
+            "total":       s["total"],
+            "entered":     entered,
+            "entry_rate":  round(s["entered"] / s["total"] * 100, 1) if s["total"] else 0,
+            "avg_rr_tp1":  round(s["rr_sum"]      / s["rr_count"],      2) if s["rr_count"]      else 0,
+            "avg_rr_tp2":  round(s["rr_tp2_sum"]  / s["rr_tp2_count"],  2) if s["rr_tp2_count"]  else 0,
+            "sl":          s["sl"],
+            "tp1_be":      s["tp1_be"],
+            "tp2":         s["tp2"],
+            "wr_tp1_plus": round(tp1_plus          / entered * 100, 1)  if entered else 0,
+            "wr_tp2":      round(s["tp2"]          / entered * 100, 1)  if entered else 0,
             "pnl_sum_pct": round(s["pnl_sum"], 1),
             "avg_pnl_pct": round(s["pnl_sum"] / entered, 2) if entered else 0,
         })
