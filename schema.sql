@@ -137,6 +137,10 @@ UPDATE setups SET status = 'open'      WHERE resolved = FALSE AND exchange_posit
 -- Kwota zlecenia (USDT) użyta przy otwieraniu pozycji — do poprawnego liczenia %
 ALTER TABLE setups ADD COLUMN IF NOT EXISTS trade_usdt NUMERIC(10,2);
 
+-- Wariant parametrów algo (kalibracja) — baseline + eksperymenty równoległe
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS variant TEXT NOT NULL DEFAULT 'baseline';
+CREATE INDEX IF NOT EXISTS idx_setups_variant ON setups (variant);
+
 -- Backfill trade_usdt: odtwórz z exchange_qty_full * avg_entry / leverage
 -- (odwrotność wzoru: qty = FLOOR(trade_usdt * leverage / entry / 0.1) * 0.1)
 UPDATE setups SET trade_usdt = ROUND(

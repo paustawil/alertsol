@@ -660,6 +660,18 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
     return None
 
 
+# ── Warianty parametrów trend_pullback (kalibracja) ──────────────────────────
+# Klucz → (fib_wejście_lo, fib_wejście_hi, fib_sl, atr_sl_mult, strength_min, force_shadow)
+# baseline  = aktualne ustawienia produkcyjne
+# str4      = identyczna geometria, ale próg strength obniżony do 4
+# shallow   = płytszy pullback (fib25-38) z ciaśniejszym SL (fib50), też strength>=4
+_PULLBACK_VARIANTS: dict[str, tuple] = {
+    "baseline": (0.38, 0.50, 0.618, 0.3, 5, False),
+    "str4":     (0.38, 0.50, 0.618, 0.3, 4, True),
+    "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
+}
+
+
 def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[dict],
                        current_price: float) -> tuple[list[dict], str]:
     """Algorytmicznie wykrywa setupy trend/impulse/range.
@@ -707,35 +719,46 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         swing_high = max(swing_high, current_price)
         log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
-        # trend_pullback_short — 38-50% korekty
+        # trend_pullback_short — warianty parametrów (baseline + eksperymenty)
         if swing_high > swing_low:
             swing_range = swing_high - swing_low
-            fib38 = swing_low + swing_range * 0.38
-            fib50 = swing_low + swing_range * 0.50
-            fib618 = swing_low + swing_range * 0.618
-            w = round((fib38 + fib50) / 2, 2)
-            sl = round(fib618 + atr * 0.3, 2)
-            tp1 = round(swing_low, 2)
-            tp2 = round(swing_low - swing_range * 0.3, 2)
-            rr_ok = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
-            above_price = w > current_price * 1.003
-            dist_ok = w - current_price <= max_entry_dist
-            log_lines.append(f"  → pullback_short: fib38=${fib38:.2f} fib50=${fib50:.2f} W=${w:.2f} dist=${w-current_price:.2f} above={above_price} dist_ok={dist_ok}")
-            if rr_ok and above_price and dist_ok:
-                log_lines.append(f"    ✓ ACCEPTED")
-                setups.append({
-                    "type": "trend_pullback_short", "direction": "short",
-                    "entries": [w], "sl": sl, "sl_after_tp1": w,
-                    "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
-                    "score": strength,
-                    "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f}",
-                })
-            else:
-                reasons = []
-                if not rr_ok: reasons.append("RR<1.5")
-                if not above_price: reasons.append("W<=cena")
-                if not dist_ok: reasons.append(f"dist>3%({w-current_price:.2f})")
-                log_lines.append(f"    ✗ REJECTED: {', '.join(reasons)}")
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
+                # str4 generuje tylko gdy strength==4 (baseline już pokrywa strength>=5)
+                if vname == "str4" and strength != 4:
+                    continue
+                if strength < str_min:
+                    continue
+                entry_mid = (fib_lo + fib_hi) / 2
+                w   = round(swing_low + entry_mid * swing_range, 2)
+                sl  = round(swing_low + fib_sl * swing_range + atr * atr_sl, 2)
+                tp1 = round(swing_low, 2)
+                tp2 = round(swing_low - swing_range * 0.3, 2)
+                rr_ok     = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
+                above_price = w > current_price * 1.003
+                dist_ok   = w - current_price <= max_entry_dist
+                rr_val    = round((w - tp1) / (sl - w), 1) if (sl - w) > 0 else 0
+                log_lines.append(
+                    f"  → pullback_short [{vname}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
+                    f"SL=${sl:.2f} RR={rr_val} dist=${w-current_price:.2f} "
+                    f"above={above_price} dist_ok={dist_ok} rr_ok={rr_ok}"
+                )
+                if rr_ok and above_price and dist_ok:
+                    log_lines.append(f"    ✓ ACCEPTED [{vname}]")
+                    setups.append({
+                        "type": "trend_pullback_short", "direction": "short",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": rr_val,
+                        "score": strength,
+                        "variant": vname,
+                        "force_shadow": v_shadow,
+                        "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
+                    })
+                else:
+                    reasons = []
+                    if not rr_ok: reasons.append(f"RR<1.5({rr_val})")
+                    if not above_price: reasons.append("W<=cena")
+                    if not dist_ok: reasons.append(f"dist>3%({w-current_price:.2f})")
+                    log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
         # impulse_continuation_short — mini-pullback w impulsie
         if regime_name.startswith("IMPULSE_"):
@@ -801,31 +824,47 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         swing_high = max(swing_high, current_price)
         log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f}")
 
-        # trend_pullback_long — 38-50% korekty (wymaga strength >= 5)
-        if swing_high > swing_low and strength >= 5:
+        # trend_pullback_long — warianty parametrów (baseline + eksperymenty)
+        if swing_high > swing_low:
             swing_range = swing_high - swing_low
-            fib38 = swing_high - swing_range * 0.38
-            fib50 = swing_high - swing_range * 0.50
-            fib618 = swing_high - swing_range * 0.618
-            w = round((fib38 + fib50) / 2, 2)
-            sl = round(fib618 - atr * 0.3, 2)
-            tp1 = round(swing_high, 2)
-            tp2 = round(swing_high + swing_range * 0.3, 2)
-            below_price = w < current_price * 0.997
-            dist_ok = current_price - w <= max_entry_dist
-            log_lines.append(f"  → pullback_long: W=${w:.2f} dist=${current_price-w:.2f} below={below_price} dist_ok={dist_ok}")
-            if (sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
-                    and below_price and dist_ok):
-                log_lines.append(f"    ✓ ACCEPTED")
-                setups.append({
-                    "type": "trend_pullback_long", "direction": "long",
-                    "entries": [w], "sl": sl, "sl_after_tp1": w,
-                    "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
-                    "score": strength,
-                    "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f}",
-                })
-        else:
-            log_lines.append(f"  → pullback_long: SKIP (strength={strength}<5 lub brak swing)")
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
+                # str4 generuje tylko gdy strength==4 (baseline już pokrywa strength>=5)
+                if vname == "str4" and strength != 4:
+                    continue
+                if strength < str_min:
+                    log_lines.append(f"  → pullback_long [{vname}]: SKIP (strength={strength}<{str_min})")
+                    continue
+                entry_mid = (fib_lo + fib_hi) / 2
+                w   = round(swing_high - entry_mid * swing_range, 2)
+                sl  = round(swing_high - fib_sl * swing_range - atr * atr_sl, 2)
+                tp1 = round(swing_high, 2)
+                tp2 = round(swing_high + swing_range * 0.3, 2)
+                rr_ok      = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
+                below_price = w < current_price * 0.997
+                dist_ok    = current_price - w <= max_entry_dist
+                rr_val     = round((tp1 - w) / (w - sl), 1) if (w - sl) > 0 else 0
+                log_lines.append(
+                    f"  → pullback_long [{vname}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
+                    f"SL=${sl:.2f} RR={rr_val} dist=${current_price-w:.2f} "
+                    f"below={below_price} dist_ok={dist_ok} rr_ok={rr_ok}"
+                )
+                if rr_ok and below_price and dist_ok:
+                    log_lines.append(f"    ✓ ACCEPTED [{vname}]")
+                    setups.append({
+                        "type": "trend_pullback_long", "direction": "long",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": rr_val,
+                        "score": strength,
+                        "variant": vname,
+                        "force_shadow": v_shadow,
+                        "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
+                    })
+                else:
+                    reasons = []
+                    if not rr_ok: reasons.append(f"RR<1.5({rr_val})")
+                    if not below_price: reasons.append("W>=cena")
+                    if not dist_ok: reasons.append(f"dist>3%({current_price-w:.2f})")
+                    log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
         # impulse_aggressive_long — market entry natychmiast, vol >= 2.0x (force_shadow — tryb testowy)
         if regime_name.startswith("IMPULSE_"):
@@ -1513,9 +1552,11 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     # Algo2 shadow mode — dedup aktywny nawet gdy shadow=True (obserwacja w warunkach live).
+    new_variant = setup.get("variant", "baseline")
     if not shadow or model == "Algo2":
         for p in db.get_active_setups():
-            if p["direction"] == direction and p["model"] == model:
+            if (p["direction"] == direction and p["model"] == model
+                    and p.get("variant", "baseline") == new_variant):
                 old_w1 = p["entries"][0] if p["entries"] else 0
                 diff = abs(old_w1 - new_level)
 
@@ -1577,6 +1618,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         "sl_adjusted":     False,
         "entries_hit":     1,
         "shadow":          shadow,
+        "variant":         setup.get("variant", "baseline"),
     }
     sid = db.insert_setup(row)
     if sid is None:

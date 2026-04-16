@@ -2477,6 +2477,195 @@ def api_algo2_rr_analysis(period: int | None = None):
     return db.get_algo2_rr_analysis(period)
 
 
+@app.get("/api/algo2/variant-stats")
+def api_algo2_variant_stats(period: int | None = None):
+    """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
+    return db.get_algo2_variant_stats(period)
+
+
+@app.get("/api/analytics/export")
+def api_analytics_export(
+    days: int | None = None,
+    variant: str | None = None,
+    type_filter: str | None = None,
+):
+    """Eksport surowych danych setupów do analizy.
+
+    Parametry:
+      days        — ostatnie N dni (brak = wszystkie)
+      variant     — filtr po wariancie (np. 'baseline', 'shallow', 'str4')
+      type_filter — filtr po typie setupu (np. 'trend_pullback_long')
+
+    Zwraca JSON z polami kluczowymi dla każdego setupu.
+    """
+    with db._conn() as conn:
+        with db._conn().__class__() if False else conn.cursor(
+            cursor_factory=__import__("psycopg2").extras.RealDictCursor
+        ) as cur:
+            where = ["model = 'Algo2'"]
+            params: dict = {}
+            if days:
+                where.append("alert_time >= NOW() - %(interval)s::interval")
+                params["interval"] = f"{days} days"
+            if variant:
+                where.append("COALESCE(variant, 'baseline') = %(variant)s")
+                params["variant"] = variant
+            if type_filter:
+                where.append("type = %(type_filter)s")
+                params["type_filter"] = type_filter
+            where_sql = " AND ".join(where)
+            cur.execute(
+                f"""
+                SELECT
+                    setup_id, alert_time, type, direction,
+                    COALESCE(variant, 'baseline') AS variant,
+                    entries, tps, sl, sl_after_tp1, rr,
+                    entry_hit_at, result, pnl_usd, pnl_pct,
+                    avg_entry, avg_exit,
+                    hypo_result, hypo_pnl_usd,
+                    shadow, resolved, score,
+                    EXTRACT(EPOCH FROM alert_time)::bigint AS alert_ts,
+                    CASE WHEN entry_hit_at IS NOT NULL AND alert_timestamp IS NOT NULL
+                         THEN ROUND((entry_hit_at - alert_timestamp) / 3600.0, 2) END AS hours_to_entry,
+                    CASE WHEN exit_time IS NOT NULL AND entry_hit_at IS NOT NULL
+                         THEN ROUND(EXTRACT(EPOCH FROM exit_time - to_timestamp(entry_hit_at)) / 3600.0, 2)
+                    END AS hold_hours
+                FROM setups
+                WHERE {where_sql}
+                ORDER BY alert_time DESC
+                LIMIT 2000
+                """,
+                params,
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+    return {"count": len(rows), "rows": rows}
+
+
+_backtest_variants_status: dict = {"running": False, "done": False, "error": None, "rows": 0, "started_at": None}
+_BACKTEST_VARIANTS_CSV = "/tmp/backtest_variants_result.csv"
+
+
+@app.post("/admin/run-backtest-variants")
+def admin_run_backtest_variants(days: int = 60):
+    """Uruchamia backtest wariantów trend_pullback w tle (Railway).
+
+    Parametry query:
+      days — liczba dni historii (domyślnie 60)
+
+    Wyniki dostępne pod GET /api/backtest-variants/result (JSON)
+    i GET /api/backtest-variants/csv (plik CSV).
+    """
+    global _backtest_variants_status
+    if _backtest_variants_status["running"]:
+        return {"ok": False, "message": "Backtest już działa — poczekaj na zakończenie."}
+
+    import threading
+    import backtest_variants
+
+    def _run():
+        global _backtest_variants_status
+        _backtest_variants_status = {
+            "running": True, "done": False, "error": None, "rows": 0,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            backtest_variants.run_backtest(days=days, out_path=_BACKTEST_VARIANTS_CSV)
+            import csv as _csv
+            with open(_BACKTEST_VARIANTS_CSV, newline="", encoding="utf-8") as f:
+                rows = sum(1 for _ in _csv.DictReader(f))
+            _backtest_variants_status.update({"running": False, "done": True, "rows": rows})
+        except Exception as e:
+            logging.error(f"[backtest-variants] Błąd: {e}", exc_info=True)
+            _backtest_variants_status.update({"running": False, "done": False, "error": str(e)})
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {
+        "ok": True,
+        "message": f"Backtest wariantów uruchomiony w tle ({days} dni). Sprawdź status: GET /api/backtest-variants/status",
+    }
+
+
+@app.get("/api/backtest-variants/status")
+def api_backtest_variants_status():
+    """Status ostatniego uruchomienia backtestów wariantów."""
+    return _backtest_variants_status
+
+
+@app.get("/api/backtest-variants/result")
+def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
+    """Wyniki backtestów wariantów jako JSON.
+
+    Parametry query:
+      variant — filtr po wariancie (np. 'baseline', 'shallow', 'str4')
+      limit   — max liczba wierszy (domyślnie 2000)
+    """
+    import csv as _csv
+    import os
+    if not os.path.exists(_BACKTEST_VARIANTS_CSV):
+        return {"error": "Brak wyników — uruchom najpierw POST /admin/run-backtest-variants"}
+    rows = []
+    with open(_BACKTEST_VARIANTS_CSV, newline="", encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            if variant and row.get("variant") != variant:
+                continue
+            rows.append(row)
+            if len(rows) >= limit:
+                break
+
+    # Agregaty per wariant
+    from collections import defaultdict
+    agg: dict = defaultdict(lambda: {"total": 0, "entered": 0, "sl": 0, "tp1": 0,
+                                      "tp1_be": 0, "tp2": 0, "pnl_sum": 0.0})
+    for r in rows:
+        v = r["variant"]
+        agg[v]["total"] += 1
+        if r.get("entered") == "True":
+            agg[v]["entered"] += 1
+            res = r.get("result", "")
+            if res == "SL":                   agg[v]["sl"]     += 1
+            elif res == "TP1":                agg[v]["tp1"]    += 1
+            elif res == "TP2":                agg[v]["tp2"]    += 1
+            elif res in ("TP1+BE", "TP1+SL"): agg[v]["tp1_be"] += 1
+            try:
+                agg[v]["pnl_sum"] += float(r.get("pnl_pct") or 0)
+            except ValueError:
+                pass
+
+    summary = []
+    for vname, s in sorted(agg.items()):
+        entered = s["entered"]
+        wins    = s["tp1"] + s["tp2"] + s["tp1_be"]
+        summary.append({
+            "variant":    vname,
+            "total":      s["total"],
+            "entered":    entered,
+            "entry_rate": round(s["entered"] / s["total"] * 100, 1) if s["total"] else 0,
+            "sl":         s["sl"],
+            "tp1":        s["tp1"],
+            "tp1_be":     s["tp1_be"],
+            "tp2":        s["tp2"],
+            "win_rate":   round(wins / entered * 100, 1) if entered else 0,
+            "pnl_sum_pct": round(s["pnl_sum"], 1),
+            "avg_pnl_pct": round(s["pnl_sum"] / entered, 2) if entered else 0,
+        })
+
+    return {"summary": summary, "rows": rows[:limit]}
+
+
+@app.get("/api/backtest-variants/csv")
+def api_backtest_variants_csv():
+    """Pobierz surowy CSV z wynikami backtestów wariantów."""
+    import os
+    from fastapi.responses import FileResponse
+    if not os.path.exists(_BACKTEST_VARIANTS_CSV):
+        return {"error": "Brak wyników — uruchom najpierw POST /admin/run-backtest-variants"}
+    return FileResponse(
+        _BACKTEST_VARIANTS_CSV,
+        media_type="text/csv",
+        filename="backtest_variants_result.csv",
+    )
+
+
 @app.post("/admin/run-gpt5-backtest")
 def admin_run_gpt5_backtest():
     """Uruchamia backtest GPT5 (vision: wykresy PNG) w tle. Wyniki: arkusz 'GPT5 test'."""
