@@ -21,8 +21,9 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security
 from fastapi.responses import HTMLResponse
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 
 import db
@@ -198,6 +199,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AlertSol Dashboard", lifespan=lifespan)
+
+# ── Prosta autoryzacja kluczem dla endpointów analitycznych ──────────────────
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def _require_api_key(key: str | None = Security(_api_key_header)):
+    """Dependency: sprawdza X-API-Key względem env var CLAUDE_API_KEY.
+    Jeśli CLAUDE_API_KEY nie jest ustawione — endpoint jest otwarty (dev mode)."""
+    expected = os.getenv("CLAUDE_API_KEY", "")
+    if expected and key != expected:
+        raise HTTPException(status_code=403, detail="Invalid API key")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2593,7 +2604,7 @@ def api_algo2_rr_analysis(period: int | None = None):
 
 
 @app.get("/api/algo2/variant-stats")
-def api_algo2_variant_stats(period: int | None = None):
+def api_algo2_variant_stats(period: int | None = None, _: None = Security(_require_api_key)):
     """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
     return db.get_algo2_variant_stats(period)
 
@@ -2603,6 +2614,7 @@ def api_analytics_export(
     days: int | None = None,
     variant: str | None = None,
     type_filter: str | None = None,
+    _: None = Security(_require_api_key),
 ):
     """Eksport surowych danych setupów do analizy.
 
@@ -2701,13 +2713,13 @@ def admin_run_backtest_variants(days: int = 60):
 
 
 @app.get("/api/backtest-variants/status")
-def api_backtest_variants_status():
+def api_backtest_variants_status(_: None = Security(_require_api_key)):
     """Status ostatniego uruchomienia backtestów wariantów."""
     return _backtest_variants_status
 
 
 @app.get("/api/backtest-variants/result")
-def api_backtest_variants_result(variant: str | None = None, limit: int = 2000):
+def api_backtest_variants_result(variant: str | None = None, limit: int = 2000, _: None = Security(_require_api_key)):
     """Wyniki backtestów wariantów jako JSON.
 
     Parametry query:
