@@ -50,6 +50,15 @@ ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
 _last_feedback: dict = {}  # {"Algo2": {...}, "Grok": {...}}
 
+# ── Stan ostatniego potwierdzonego impulsu (filtr fałszywych odwrotów) ─────────
+# Zapisywany przy każdym IMPULSE detection score >= IMPULSE_COOLDOWN_MIN_SCORE.
+# Blokuje impuls w przeciwnym kierunku przez IMPULSE_COOLDOWN_SEC LUB do momentu
+# gdy cena cofnie się o IMPULSE_COOLDOWN_RETRACE_PCT pierwotnego ruchu.
+IMPULSE_COOLDOWN_SEC          = 3 * 3600   # 3 godziny
+IMPULSE_COOLDOWN_MIN_SCORE    = 5          # tylko silne impulsy aktywują blokadę
+IMPULSE_COOLDOWN_RETRACE_PCT  = 0.50       # 50% retrace = blokada odpada
+_last_confirmed_impulse: dict = {}         # direction, time, start_price, peak_price, score
+
 
 def _clean_log(text: str) -> str:
     """Usuwa linie separatorów (===) i timestamp-header z logów algo."""
@@ -366,83 +375,63 @@ def detect_market_regime(
         "change_24h": round(change_24h, 1), "change_48h": round(change_48h, 1),
     }
 
-    # ── IMPULSE: gwałtowny ruch w ostatnich godzinach ────────────────────────
-    impulse_score = 0
-    impulse_dir = "none"
+    # ── IMPULSE: breakout 24h high/low + vol >= 2.0x + mocne ciała M15 ──────
+    # Impuls = przebicie lokalnego max/min z ostatnich 24 H1, podwyższony wolumen
+    # i silne ciała M15. Naturalne wygasanie do TREND gdy vol spada poniżej 2.0x.
+    _ref = (candles_h1[-26:-2] if len(candles_h1) >= 26
+            else candles_h1[:-2] if len(candles_h1) > 2
+            else candles_h1)
+    ref_high = max(c["high"] for c in _ref)
+    ref_low  = min(c["low"]  for c in _ref)
 
-    if imp_str >= 2:
-        impulse_score += 1
-    if vol_ratio >= 1.5:
-        impulse_score += 1
-    # Zmiana 4h LUB silna zmiana 2h (łapie świeże impulsy)
-    if abs(change_4h) >= 2.0:
-        impulse_score += 1
-    elif abs(change_4h) >= 1.5 and vol_ratio >= 1.3:
-        impulse_score += 1
-    if abs(change_2h) >= 1.2:
-        impulse_score += 1
-        if impulse_dir == "none":
-            impulse_dir = "down" if change_2h < 0 else "up"
-    # Kierunek z ostatnich 6 M15 (4+ bearish/bullish = silny kierunek)
-    if bearish_closes >= 4:
-        impulse_score += 1
-        impulse_dir = "down"
-    elif bullish_closes >= 4:
-        impulse_score += 1
-        impulse_dir = "up"
+    broke_high = current_price > ref_high
+    broke_low  = current_price < ref_low
+    _vol_ok    = vol_ratio >= 2.0
+    _imp_ok    = imp_str >= 2
 
-    # Próg obniżony do 2 gdy ruch 4h jest bardzo silny (>= 3%) —
-    # łapie aktywny impuls w fazie krótkiego pullbacku, gdy vol/bearish_closes
-    # chwilowo nie spełniają pełnego kryterium.
-    impulse_min_score = 2 if abs(change_4h) >= 3.0 else 3
+    if (broke_high or broke_low) and _vol_ok and _imp_ok:
+        impulse_dir = "up" if broke_high else "down"
+        strength    = min(10, int(vol_ratio) + imp_str * 2)
 
-    # ── SPIKE-REVERSAL FILTER ────────────────────────────────────────────────
-    # Wykrywa sytuacje gdy change_4h sugeruje impuls, ale krótkoterminowe dane
-    # wskazują że ruch już się odwraca (spike pump-and-dump / wick rejection).
-    # Jeśli ≥ 2 sygnały aktywne → podnosimy próg do 4 (trudniejsze wejście).
-    spike_reversal_score = 0
-    _idir = impulse_dir if impulse_dir != "none" else ("down" if change_4h < 0 else "up")
+        # Spike-reversal: rejection wicks na ostatnich 3 M15
+        spike_reversal_score = 0
+        _r3     = candles_m15[-3:]
+        _bodies = [abs(c["close"] - c["open"]) + 0.001 for c in _r3]
+        _wicks  = (
+            [c["high"] - max(c["open"], c["close"]) for c in _r3] if impulse_dir == "up"
+            else [min(c["open"], c["close"]) - c["low"] for c in _r3]
+        )
+        if sum(w / b for w, b in zip(_wicks, _bodies)) / 3 > 1.5:
+            spike_reversal_score = 1
+            log.info("[REGIME] Spike-reversal: rejection wicks na ostatnich 3 M15")
 
-    # Sygnał 1: zmiana 1h silnie przeciwna do kierunku impulsu (odwrót już trwa)
-    if _idir == "up"   and change_1h < -0.8:
-        spike_reversal_score += 1
-    elif _idir == "down" and change_1h >  0.8:
-        spike_reversal_score += 1
+        # Śledź peak bieżącego impulsu (kontekst dla setupów i potencjalnego cooldownu)
+        global _last_confirmed_impulse
+        _prev_lci = _last_confirmed_impulse
+        if _prev_lci and _prev_lci.get("direction") == impulse_dir:
+            _new_peak = (max(current_price, _prev_lci["peak_price"]) if impulse_dir == "up"
+                         else min(current_price, _prev_lci["peak_price"]))
+            _last_confirmed_impulse = {**_prev_lci, "peak_price": _new_peak, "score": strength}
+        else:
+            _last_confirmed_impulse = {
+                "direction":   impulse_dir,
+                "time":        time.time(),
+                "start_price": ref_high if impulse_dir == "up" else ref_low,
+                "peak_price":  current_price,
+                "score":       strength,
+            }
 
-    # Sygnał 2: zmiana 2h też już pod prąd (odwrót trwa dłużej)
-    if _idir == "up"   and change_2h < -0.6:
-        spike_reversal_score += 1
-    elif _idir == "down" and change_2h >  0.6:
-        spike_reversal_score += 1
-
-    # Sygnał 3: rejection wicks na ostatnich 3 świecach M15
-    # (cień po stronie impulsu > 1.5× ciało → odrzucenie poziomu)
-    _recent3 = candles_m15[-3:]
-    _bodies  = [abs(c["close"] - c["open"]) + 0.001 for c in _recent3]
-    if _idir == "up":
-        _wicks = [c["high"] - max(c["open"], c["close"]) for c in _recent3]
-    else:
-        _wicks = [min(c["open"], c["close"]) - c["low"]  for c in _recent3]
-    if sum(w / b for w, b in zip(_wicks, _bodies)) / 3 > 1.5:
-        spike_reversal_score += 1
-
-    if spike_reversal_score >= 2:
-        impulse_min_score = max(impulse_min_score, 4)
-        log.info(f"[REGIME] Spike-reversal filter: score={spike_reversal_score}, "
-                 f"1h:{change_1h:+.1f}% 2h:{change_2h:+.1f}%, min_score→{impulse_min_score}")
-
-    if impulse_score >= impulse_min_score:
-        if impulse_dir == "none":
-            impulse_dir = "down" if change_4h < 0 else "up"
-        strength = min(10, impulse_score * 2 + imp_str)
-        details = (f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; "
-                   f"vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6; spk:{spike_reversal_score}")
+        _ref_level = ref_high if impulse_dir == "up" else ref_low
+        details = (f"breakout:${_ref_level:.2f}; vol:{vol_ratio:.1f}x; imp:{imp_str}; "
+                   f"4h:{change_4h:+.1f}%; spk:{spike_reversal_score}")
         return {
             **base,
-            "regime": f"IMPULSE_{impulse_dir.upper()}",
-            "direction": impulse_dir, "score": strength,
+            "regime":      f"IMPULSE_{impulse_dir.upper()}",
+            "direction":   impulse_dir,
+            "score":       strength,
             "spike_score": spike_reversal_score,
-            "pct_outside": 0, "details": details,
+            "pct_outside": 0,
+            "details":     details,
         }
 
     # ── TREND: change_24h / change_48h (wygładzone) + lower_lows/higher_highs ──
