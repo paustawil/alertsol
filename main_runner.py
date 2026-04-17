@@ -512,22 +512,42 @@ def dashboard():
     <span id="a2-loading" style="margin-left:8px;font-size:0.7em;color:#888"></span>
   </h3>
 
-  <!-- Per typ setupu -->
-  <h4 style="color:#80deea;margin:10px 0 6px">Per typ setupu</h4>
+  <!-- Per wariant -->
+  <h4 style="color:#80deea;margin:10px 0 6px">Per wariant</h4>
   <div style="overflow-x:auto">
-    <table id="a2-type-table" style="min-width:760px">
+    <table id="a2-variant-table" style="min-width:680px">
       <tr>
-        <th>Typ</th><th>Kier.</th><th title="Łączna liczba setupów">Ilość</th>
+        <th>Wariant</th>
+        <th title="Łączna liczba setupów">Ilość</th>
         <th title="Procent setupów które weszły w pozycję">% entry</th>
         <th title="Win rate: TP1/TP2/TP1+BE/TP1+SL z uruchomionych">Win rate</th>
-        <th title="Średni PnL z zamkniętych pozycji">Avg PnL $</th>
         <th title="Procent setupów które dotarły do TP2">TP2 rate</th>
-        <th title="Średni czas od alertu do wejścia w pozycję">Śr. do entry</th>
-        <th title="Średni czas trzymania pozycji">Śr. hold</th>
+        <th title="Procent setupów zamkniętych na SL">SL rate</th>
+        <th title="Średni PnL z zamkniętych pozycji">Avg PnL $</th>
+        <th title="Suma PnL wszystkich zamkniętych pozycji">Σ PnL $</th>
       </tr>
-      <tr id="a2-type-loading"><td colspan="9" style="color:#888;text-align:center">ładowanie...</td></tr>
+      <tr id="a2-variant-loading"><td colspan="8" style="color:#888;text-align:center">ładowanie...</td></tr>
     </table>
   </div>
+
+  <!-- Per typ setupu (zwijany) -->
+  <details style="margin:16px 0 6px">
+    <summary style="color:#80deea;font-size:0.95em;font-weight:bold;cursor:pointer;user-select:none">Per typ setupu</summary>
+    <div style="overflow-x:auto;margin-top:8px">
+      <table id="a2-type-table" style="min-width:760px">
+        <tr>
+          <th>Typ</th><th>Kier.</th><th title="Łączna liczba setupów">Ilość</th>
+          <th title="Procent setupów które weszły w pozycję">% entry</th>
+          <th title="Win rate: TP1/TP2/TP1+BE/TP1+SL z uruchomionych">Win rate</th>
+          <th title="Średni PnL z zamkniętych pozycji">Avg PnL $</th>
+          <th title="Procent setupów które dotarły do TP2">TP2 rate</th>
+          <th title="Średni czas od alertu do wejścia w pozycję">Śr. do entry</th>
+          <th title="Średni czas trzymania pozycji">Śr. hold</th>
+        </tr>
+        <tr id="a2-type-loading"><td colspan="9" style="color:#888;text-align:center">ładowanie...</td></tr>
+      </table>
+    </div>
+  </details>
 
   <!-- Heatmapa godzinowa (zwijana) -->
   <details style="margin:16px 0 6px">
@@ -561,6 +581,23 @@ def dashboard():
         <th title="% setupów zamkniętych na SL">SL rate</th>
       </tr>
       <tr id="a2-rr-loading"><td colspan="8" style="color:#888;text-align:center">ładowanie...</td></tr>
+    </table>
+  </div>
+
+  <!-- Per dzień -->
+  <h4 style="color:#80deea;margin:20px 0 6px">Per dzień</h4>
+  <div style="overflow-x:auto">
+    <table id="a2-daily-table" style="min-width:520px">
+      <tr>
+        <th>Data</th>
+        <th title="Łączna liczba setupów">Ilość</th>
+        <th title="Setupy które weszły w pozycję">Weszło</th>
+        <th title="Wygrane (TP1/TP2/TP1+BE/TP1+SL)">W</th>
+        <th title="Stopy">L</th>
+        <th title="Win rate z uruchomionych">Win rate</th>
+        <th title="Suma PnL dnia">Σ PnL $</th>
+      </tr>
+      <tr id="a2-daily-loading"><td colspan="7" style="color:#888;text-align:center">ładowanie...</td></tr>
     </table>
   </div>
 
@@ -1209,21 +1246,88 @@ async function loadAlgo2Analytics() {{
   loading.textContent = 'ładowanie...';
   var periodParam = currentA2Period ? '?period=' + currentA2Period : '';
   try {{
-    var [tsResp, hmResp, rrResp] = await Promise.all([
+    var [vsResp, tsResp, hmResp, rrResp, dsResp] = await Promise.all([
+      fetch('/api/algo2/variant-summary' + periodParam),
       fetch('/api/algo2/type-stats' + periodParam),
       fetch('/api/algo2/time-heatmap' + periodParam),
       fetch('/api/algo2/rr-analysis' + periodParam),
+      fetch('/api/algo2/daily-stats' + periodParam),
     ]);
-    var typeData = await tsResp.json();
-    var hmData   = await hmResp.json();
-    var rrData   = await rrResp.json();
+    var variantData = await vsResp.json();
+    var typeData    = await tsResp.json();
+    var hmData      = await hmResp.json();
+    var rrData      = await rrResp.json();
+    var dailyData   = await dsResp.json();
+    renderA2VariantTable(variantData);
     renderA2TypeTable(typeData);
     renderA2Heatmap(hmData);
     renderA2RR(rrData);
+    renderA2Daily(dailyData);
     loading.textContent = '';
   }} catch(e) {{
     loading.textContent = '⚠️ ' + e.message;
   }}
+}}
+
+function renderA2VariantTable(rows) {{
+  var tbl = document.getElementById('a2-variant-table');
+  while (tbl.rows.length > 1) tbl.deleteRow(1);
+  if (!rows || rows.length === 0) {{
+    var tr = tbl.insertRow();
+    tr.insertCell().colSpan = 8; tr.cells[0].colSpan = 8;
+    tr.cells[0].textContent = 'Brak danych'; tr.cells[0].style.color = '#888';
+    return;
+  }}
+  rows.forEach(function(r) {{
+    var tr = tbl.insertRow();
+    [
+      r.variant,
+      r.total,
+      r.entry_rate != null ? r.entry_rate.toFixed(1) + '%' : '—',
+      r.win_rate   != null ? r.win_rate.toFixed(1)   + '%' : '—',
+      r.tp2_rate   != null ? r.tp2_rate.toFixed(1)   + '%' : '—',
+      r.sl_rate    != null ? r.sl_rate.toFixed(1)    + '%' : '—',
+      fmtPnl(r.avg_pnl_usd),
+      fmtPnl(r.total_pnl_usd),
+    ].forEach(function(val, i) {{
+      var td = tr.insertCell();
+      td.textContent = val;
+      if (i === 0) td.style.fontWeight = 'bold';
+      if (i === 3 && r.win_rate   != null) td.style.color = pctColor(r.win_rate, 40, 55);
+      if (i === 4 && r.tp2_rate   != null) td.style.color = pctColor(r.tp2_rate, 20, 40);
+      if (i === 5 && r.sl_rate    != null) td.style.color = pctColor(100 - r.sl_rate, 40, 60);
+      if (i === 6 && r.avg_pnl_usd   != null) td.style.color = pnlColor(r.avg_pnl_usd);
+      if (i === 7 && r.total_pnl_usd != null) td.style.color = pnlColor(r.total_pnl_usd);
+    }});
+  }});
+}}
+
+function renderA2Daily(rows) {{
+  var tbl = document.getElementById('a2-daily-table');
+  while (tbl.rows.length > 1) tbl.deleteRow(1);
+  if (!rows || rows.length === 0) {{
+    var tr = tbl.insertRow();
+    tr.insertCell().colSpan = 7; tr.cells[0].colSpan = 7;
+    tr.cells[0].textContent = 'Brak danych'; tr.cells[0].style.color = '#888';
+    return;
+  }}
+  rows.forEach(function(r) {{
+    var tr = tbl.insertRow();
+    [
+      r.day,
+      r.total,
+      r.entered || 0,
+      r.wins    || 0,
+      r.losses  || 0,
+      r.win_rate != null ? r.win_rate.toFixed(1) + '%' : '—',
+      fmtPnl(r.total_pnl_usd),
+    ].forEach(function(val, i) {{
+      var td = tr.insertCell();
+      td.textContent = val;
+      if (i === 5 && r.win_rate      != null) td.style.color = pctColor(r.win_rate, 40, 55);
+      if (i === 6 && r.total_pnl_usd != null) td.style.color = pnlColor(r.total_pnl_usd);
+    }});
+  }});
 }}
 
 function renderA2TypeTable(rows) {{
@@ -1526,9 +1630,12 @@ async function loadMarketStatus() {{
 loadMarketStatus();
 setInterval(loadMarketStatus, 60000);
 
-// ── Default filter: exclude 'nie weszlo' ─────────────────────────────────────
+// ── Default filter: Algo2 only; only setups with actual trade result ──────────
 document.querySelectorAll('.res-filter').forEach(function(cb) {{
-  if (cb.value !== 'nie weszlo') cb.checked = true;
+  cb.checked = ['TP1','TP2','TP1+BE','TP1+SL','SL'].indexOf(cb.value) >= 0;
+}});
+document.querySelectorAll('.model-filter').forEach(function(cb) {{
+  cb.checked = cb.value === 'Algo2';
 }});
 loadHistory(true);
 
@@ -2628,6 +2735,18 @@ def api_algo2_rr_analysis(period: int | None = None):
 def api_algo2_variant_stats(period: int | None = None, _: None = Security(_require_api_key)):
     """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
     return db.get_algo2_variant_stats(period)
+
+
+@app.get("/api/algo2/variant-summary")
+def api_algo2_variant_summary(period: int | None = None):
+    """Zestawienie wyników per wariant (wszystkie typy łącznie). period = dni lub brak = all-time."""
+    return db.get_algo2_variant_summary(period)
+
+
+@app.get("/api/algo2/daily-stats")
+def api_algo2_daily_stats(period: int | None = None):
+    """Zestawienie wyników per dzień kalendarzowy. period = dni lub brak = all-time."""
+    return db.get_algo2_daily_stats(period)
 
 
 @app.get("/api/analytics/export")
