@@ -50,6 +50,15 @@ ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
 _last_feedback: dict = {}  # {"Algo2": {...}, "Grok": {...}}
 
+# ── Stan ostatniego potwierdzonego impulsu (filtr fałszywych odwrotów) ─────────
+# Zapisywany przy każdym IMPULSE detection score >= IMPULSE_COOLDOWN_MIN_SCORE.
+# Blokuje impuls w przeciwnym kierunku przez IMPULSE_COOLDOWN_SEC LUB do momentu
+# gdy cena cofnie się o IMPULSE_COOLDOWN_RETRACE_PCT pierwotnego ruchu.
+IMPULSE_COOLDOWN_SEC          = 3 * 3600   # 3 godziny
+IMPULSE_COOLDOWN_MIN_SCORE    = 5          # tylko silne impulsy aktywują blokadę
+IMPULSE_COOLDOWN_RETRACE_PCT  = 0.50       # 50% retrace = blokada odpada
+_last_confirmed_impulse: dict = {}         # direction, time, start_price, peak_price, score
+
 
 def _clean_log(text: str) -> str:
     """Usuwa linie separatorów (===) i timestamp-header z logów algo."""
@@ -435,15 +444,61 @@ def detect_market_regime(
         if impulse_dir == "none":
             impulse_dir = "down" if change_4h < 0 else "up"
         strength = min(10, impulse_score * 2 + imp_str)
-        details = (f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; "
-                   f"vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6; spk:{spike_reversal_score}")
-        return {
-            **base,
-            "regime": f"IMPULSE_{impulse_dir.upper()}",
-            "direction": impulse_dir, "score": strength,
-            "spike_score": spike_reversal_score,
-            "pct_outside": 0, "details": details,
-        }
+
+        # ── Filtr cooldown: blokuj impuls przeciwny do niedawnego silnego impulsu ──
+        global _last_confirmed_impulse
+        _lci = _last_confirmed_impulse
+        _now_ts = time.time()
+        _blocked = False
+        if _lci and _lci.get("direction") != impulse_dir and _lci.get("score", 0) >= IMPULSE_COOLDOWN_MIN_SCORE:
+            _time_since = _now_ts - _lci["time"]
+            if _time_since < IMPULSE_COOLDOWN_SEC:
+                _start = _lci["start_price"]
+                _peak  = _lci["peak_price"]
+                _move  = abs(_peak - _start)
+                if _move > 0:
+                    if _lci["direction"] == "up":
+                        _retrace = (_peak - current_price) / _move
+                    else:
+                        _retrace = (current_price - _peak) / _move
+                    if _retrace < IMPULSE_COOLDOWN_RETRACE_PCT:
+                        _blocked = True
+                        log.info(
+                            f"[REGIME] Cooldown: blokuję IMPULSE_{impulse_dir.upper()} "
+                            f"(ostatni: {_lci['direction'].upper()} {_time_since/60:.0f} min temu, "
+                            f"retrace={_retrace:.0%}<50%)"
+                        )
+
+        if _blocked:
+            # Korekcja po silnym impulsie — traktuj jako kontynuację trendu, nie nowy impuls
+            pass  # spada do TREND/RANGE poniżej
+        else:
+            # Potwierdź impuls i zapisz/zaktualizuj stan
+            if strength >= IMPULSE_COOLDOWN_MIN_SCORE:
+                _prev = _last_confirmed_impulse
+                if _prev and _prev.get("direction") == impulse_dir:
+                    # Ten sam kierunek — aktualizuj peak (śledź nowe ekstrema)
+                    new_peak = (max(current_price, _prev["peak_price"]) if impulse_dir == "up"
+                                else min(current_price, _prev["peak_price"]))
+                    _last_confirmed_impulse = {**_prev, "peak_price": new_peak, "score": strength}
+                else:
+                    # Nowy impuls — zapisz od nowa
+                    _last_confirmed_impulse = {
+                        "direction":   impulse_dir,
+                        "time":        _now_ts,
+                        "start_price": price_4h,
+                        "peak_price":  current_price,
+                        "score":       strength,
+                    }
+            details = (f"2h:{change_2h:+.1f}% 4h:{change_4h:+.1f}%; imp:{imp_str}; "
+                       f"vol:{vol_ratio:.1f}x; bear:{bearish_closes}/6; spk:{spike_reversal_score}")
+            return {
+                **base,
+                "regime": f"IMPULSE_{impulse_dir.upper()}",
+                "direction": impulse_dir, "score": strength,
+                "spike_score": spike_reversal_score,
+                "pct_outside": 0, "details": details,
+            }
 
     # ── TREND: change_24h / change_48h (wygładzone) + lower_lows/higher_highs ──
     h1_12 = candles_h1[-12:]
