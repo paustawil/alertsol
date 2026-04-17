@@ -700,6 +700,44 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     max_entry_dist = current_price * 0.03  # 3%
     log_lines.append(f"  Max dystans entry: ${max_entry_dist:.2f} (3%)")
 
+    # ── SYGNAŁY WYCZERPANIA — logowanie bez blokowania setupów ───────────────
+    # Dane zbierane w shadow; docelowo jeden sygnał = shadow_on przy wyłączaniu shadow
+    exhaustion_signals: list[str] = []
+
+    # Sygnał 1: Malejąca amplituda kolejnych ekstremów H1
+    if len(h1_12) >= 4:
+        highs = [c["high"] for c in h1_12[-4:]]
+        lows  = [c["low"]  for c in h1_12[-4:]]
+        hh_deltas = [highs[i+1] - highs[i] for i in range(len(highs) - 1)]
+        ll_deltas = [lows[i] - lows[i+1]   for i in range(len(lows)  - 1)]
+        if direction == "up"   and len(hh_deltas) >= 2 and hh_deltas[-1] < hh_deltas[-2]:
+            exhaustion_signals.append("malejace_HH")
+        if direction == "down" and len(ll_deltas) >= 2 and ll_deltas[-1] < ll_deltas[-2]:
+            exhaustion_signals.append("malejace_LL")
+
+    # Sygnał 2: Malejący wolumen na ostatnich 3 świecach M15
+    if len(candles_m15) >= 4:
+        vols = [c["volume"] for c in candles_m15[-4:]]
+        if vols[-1] < vols[-2] < vols[-3]:
+            exhaustion_signals.append("malejacy_wolumen_M15")
+
+    # Sygnał 3: Malejące body świec M15 (słabnące momentum)
+    if len(candles_m15) >= 4:
+        bodies = [abs(c["close"] - c["open"]) for c in candles_m15[-4:]]
+        if bodies[-1] < bodies[-2] < bodies[-3]:
+            exhaustion_signals.append("malejace_body_M15")
+
+    # Sygnał 4: Cena blisko MA20 H1 — konwergencja do średniej
+    if len(candles_h1) >= 20:
+        ma20_h1 = sum(c["close"] for c in candles_h1[-20:]) / 20
+        dist_to_ma = abs(current_price - ma20_h1)
+        if dist_to_ma < atr * 0.5:
+            exhaustion_signals.append(f"konwergencja_MA20(${dist_to_ma:.2f})")
+
+    exh_str = ", ".join(exhaustion_signals) if exhaustion_signals else "brak"
+    log_lines.append(f"  Exhaustion signals: [{exh_str}]")
+    # ─────────────────────────────────────────────────────────────────────────
+
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
@@ -1016,6 +1054,12 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 })
     else:
         log_lines.append(f"  Brak setupów dla direction={direction}")
+
+    # Dołącz sygnały wyczerpania do reasoning każdego setupu (widoczne w DB i Sheets)
+    if exhaustion_signals:
+        exh_tag = " | EXH:" + ",".join(exhaustion_signals)
+        for s in setups:
+            s["reasoning"] = s.get("reasoning", "") + exh_tag
 
     log_lines.append(f"  WYNIK: {len(setups)} setupów")
     return setups, "\n".join(log_lines)
