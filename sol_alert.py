@@ -303,6 +303,20 @@ def impulse_strength(candles_m15: list[dict]) -> int:
     if ratio >= 0.5: return 1
     return 0
 
+def _count_touches(candles: list[dict], in_zone_fn, min_away: int = 2) -> int:
+    """Count independent approaches to a zone, separated by ≥ min_away candles outside it."""
+    count = 0
+    away_streak = min_away  # treat start as already-away so first touch always counts
+    for c in candles:
+        if in_zone_fn(c):
+            if away_streak >= min_away:
+                count += 1
+            away_streak = 0
+        else:
+            away_streak += 1
+    return count
+
+
 def detect_range(candles: list[dict], n: int = 32) -> dict:
     recent     = candles[-n:]
     resistance = max(c["high"] for c in recent)
@@ -312,8 +326,8 @@ def detect_range(candles: list[dict], n: int = 32) -> dict:
     return {
         "resistance": round(resistance, 2), "support": round(support, 2),
         "range_size": round(rng_size, 2),
-        "r_touches": sum(1 for c in recent if c["high"] >= resistance - zone),
-        "s_touches": sum(1 for c in recent if c["low"]  <= support    + zone),
+        "r_touches": _count_touches(recent, lambda c: c["high"] >= resistance - zone),
+        "s_touches": _count_touches(recent, lambda c: c["low"]  <= support    + zone),
     }
 
 

@@ -1121,6 +1121,79 @@ def get_algo2_variant_stats(period_days: int | None = None) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
+    """Zestawienie wyników Algo2 per wariant (wszystkie typy setupów łącznie)."""
+    time_sql, time_params = _algo2_time_filter(period_days)
+    wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COALESCE(variant, 'baseline')                                          AS variant,
+                    COUNT(*)                                                               AS total,
+                    COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
+                    ROUND(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric
+                          / NULLIF(COUNT(*), 0) * 100, 1)                                 AS entry_rate,
+                    COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                                  AS losses,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
+                                 + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1)   AS win_rate,
+                    ROUND(AVG(pnl_usd) FILTER (
+                          WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    )::numeric, 2)                                                          AS avg_pnl_usd,
+                    ROUND(SUM(pnl_usd) FILTER (
+                          WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    )::numeric, 2)                                                          AS total_pnl_usd,
+                    ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS tp2_rate,
+                    ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS sl_rate
+                FROM setups
+                WHERE model = 'Algo2'
+                  {time_sql}
+                GROUP BY variant
+                ORDER BY variant
+                """,
+                time_params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
+    """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw)."""
+    time_sql, time_params = _algo2_time_filter(period_days)
+    wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    (alert_time AT TIME ZONE 'Europe/Warsaw')::date                        AS day,
+                    COUNT(*)                                                               AS total,
+                    COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
+                    COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
+                    COUNT(*) FILTER (WHERE result = 'SL')                                  AS losses,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
+                                 + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1)   AS win_rate,
+                    ROUND(SUM(pnl_usd) FILTER (
+                          WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                    )::numeric, 2)                                                          AS total_pnl_usd
+                FROM setups
+                WHERE model = 'Algo2'
+                  {time_sql}
+                GROUP BY day
+                ORDER BY day DESC
+                """,
+                time_params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
 def get_algo2_time_heatmap(period_days: int | None = None) -> list[dict]:
     """Heatmapa godzinowa dla Algo2: liczba alertów, % entry, % wygranych per godzina (czas Warsaw).
 
