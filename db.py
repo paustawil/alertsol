@@ -1159,9 +1159,6 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                           / NULLIF(COUNT(*), 0) * 100, 1)                                 AS entry_rate,
                     COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
                     COUNT(*) FILTER (WHERE result = 'SL')                                  AS losses,
-                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
-                          / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
-                                 + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1)   AS win_rate,
                     ROUND(AVG(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS avg_pnl_usd,
                     ROUND(SUM(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS total_pnl_usd,
                     ROUND(SUM({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS total_tp1only_usd,
