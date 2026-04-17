@@ -515,18 +515,22 @@ def dashboard():
   <!-- Per wariant -->
   <h4 style="color:#80deea;margin:10px 0 6px">Per wariant</h4>
   <div style="overflow-x:auto">
-    <table id="a2-variant-table" style="min-width:680px">
+    <table id="a2-variant-table" style="min-width:900px">
       <tr>
         <th>Wariant</th>
         <th title="Łączna liczba setupów">Ilość</th>
         <th title="Procent setupów które weszły w pozycję">% entry</th>
-        <th title="Win rate: TP1/TP2/TP1+BE/TP1+SL z uruchomionych">Win rate</th>
-        <th title="Procent setupów które dotarły do TP2">TP2 rate</th>
-        <th title="Procent setupów zamkniętych na SL">SL rate</th>
+        <th title="Średnie deklarowane R:R setupów które weszły">Avg RR</th>
+        <th title="% uruchomionych który dotarł do TP1 lub wyżej (TP1/TP2/TP1+BE/TP1+SL)">TP1 rate</th>
+        <th title="% uruchomionych który dotarł do TP2">TP2 rate</th>
+        <th title="Liczba pozycji z TP1 ale wyjście na SL lub BE — 'częściowe wygrane'">TP1+BE/SL</th>
+        <th title="% uruchomionych zamkniętych na SL">SL rate</th>
+        <th title="Tradycyjny win rate: (TP1+) / (TP1+ + SL)">Win rate</th>
         <th title="Średni PnL z zamkniętych pozycji">Avg PnL $</th>
         <th title="Suma PnL wszystkich zamkniętych pozycji">Σ PnL $</th>
+        <th title="Suma PnL gdyby cała pozycja wyszła na TP1 (dla SL = rzeczywisty PnL)">Σ TP1-only $</th>
       </tr>
-      <tr id="a2-variant-loading"><td colspan="8" style="color:#888;text-align:center">ładowanie...</td></tr>
+      <tr id="a2-variant-loading"><td colspan="12" style="color:#888;text-align:center">ładowanie...</td></tr>
     </table>
   </div>
 
@@ -1274,7 +1278,7 @@ function renderA2VariantTable(rows) {{
   while (tbl.rows.length > 1) tbl.deleteRow(1);
   if (!rows || rows.length === 0) {{
     var tr = tbl.insertRow();
-    tr.insertCell().colSpan = 8; tr.cells[0].colSpan = 8;
+    tr.insertCell().colSpan = 12; tr.cells[0].colSpan = 12;
     tr.cells[0].textContent = 'Brak danych'; tr.cells[0].style.color = '#888';
     return;
   }}
@@ -1283,21 +1287,27 @@ function renderA2VariantTable(rows) {{
     [
       r.variant,
       r.total,
-      r.entry_rate != null ? r.entry_rate.toFixed(1) + '%' : '—',
-      r.win_rate   != null ? r.win_rate.toFixed(1)   + '%' : '—',
-      r.tp2_rate   != null ? r.tp2_rate.toFixed(1)   + '%' : '—',
-      r.sl_rate    != null ? r.sl_rate.toFixed(1)    + '%' : '—',
+      r.entry_rate      != null ? r.entry_rate.toFixed(1)  + '%' : '—',
+      r.avg_rr          != null ? r.avg_rr.toFixed(2)             : '—',
+      r.tp1_rate        != null ? r.tp1_rate.toFixed(1)    + '%' : '—',
+      r.tp2_rate        != null ? r.tp2_rate.toFixed(1)    + '%' : '—',
+      r.tp1_be_sl_hits  != null ? r.tp1_be_sl_hits                : '—',
+      r.sl_rate         != null ? r.sl_rate.toFixed(1)     + '%' : '—',
+      r.win_rate        != null ? r.win_rate.toFixed(1)    + '%' : '—',
       fmtPnl(r.avg_pnl_usd),
       fmtPnl(r.total_pnl_usd),
+      fmtPnl(r.total_tp1only_usd),
     ].forEach(function(val, i) {{
       var td = tr.insertCell();
       td.textContent = val;
       if (i === 0) td.style.fontWeight = 'bold';
-      if (i === 3 && r.win_rate   != null) td.style.color = pctColor(r.win_rate, 40, 55);
-      if (i === 4 && r.tp2_rate   != null) td.style.color = pctColor(r.tp2_rate, 20, 40);
-      if (i === 5 && r.sl_rate    != null) td.style.color = pctColor(100 - r.sl_rate, 40, 60);
-      if (i === 6 && r.avg_pnl_usd   != null) td.style.color = pnlColor(r.avg_pnl_usd);
-      if (i === 7 && r.total_pnl_usd != null) td.style.color = pnlColor(r.total_pnl_usd);
+      if (i === 4 && r.tp1_rate  != null) td.style.color = pctColor(r.tp1_rate,  40, 60);
+      if (i === 5 && r.tp2_rate  != null) td.style.color = pctColor(r.tp2_rate,  20, 40);
+      if (i === 7 && r.sl_rate   != null) td.style.color = pctColor(100 - r.sl_rate, 40, 60);
+      if (i === 8 && r.win_rate  != null) td.style.color = pctColor(r.win_rate,   40, 55);
+      if (i === 9  && r.avg_pnl_usd      != null) td.style.color = pnlColor(r.avg_pnl_usd);
+      if (i === 10 && r.total_pnl_usd    != null) td.style.color = pnlColor(r.total_pnl_usd);
+      if (i === 11 && r.total_tp1only_usd != null) td.style.color = pnlColor(r.total_tp1only_usd);
     }});
   }});
 }}

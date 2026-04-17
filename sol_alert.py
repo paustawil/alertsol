@@ -317,12 +317,45 @@ def _count_touches(candles: list[dict], in_zone_fn, min_away: int = 2) -> int:
     return count
 
 
+def _find_effective_level(
+    candles: list[dict],
+    start: float,
+    atr: float,
+    direction: str,
+    min_touches: int = 2,
+    max_steps: int = 30,
+) -> float:
+    """Walk inward from a spike extreme until ≥ min_touches independent approaches are found.
+
+    For support: walks upward from the spike low.
+    For resistance: walks downward from the spike high.
+    Uses a fixed ATR-based proximity zone to avoid circular dependency with range_size.
+    """
+    zone = atr * 0.4
+    step = atr * 0.25
+    level = start
+    for _ in range(max_steps):
+        if direction == "support":
+            t = _count_touches(candles, lambda c, l=level: c["low"] <= l + zone)
+        else:
+            t = _count_touches(candles, lambda c, l=level: c["high"] >= l - zone)
+        if t >= min_touches:
+            return level
+        level = level + step if direction == "support" else level - step
+    return level
+
+
 def detect_range(candles: list[dict], n: int = 32) -> dict:
-    recent     = candles[-n:]
-    resistance = max(c["high"] for c in recent)
-    support    = min(c["low"]  for c in recent)
-    rng_size   = resistance - support
-    zone       = rng_size * 0.06
+    recent         = candles[-n:]
+    atr            = calc_atr(candles) or 1.0
+    abs_support    = min(c["low"]  for c in recent)
+    abs_resistance = max(c["high"] for c in recent)
+    support    = _find_effective_level(recent, abs_support,    atr, "support")
+    resistance = _find_effective_level(recent, abs_resistance, atr, "resistance")
+    if support >= resistance:
+        support, resistance = abs_support, abs_resistance
+    rng_size = resistance - support
+    zone     = rng_size * 0.06
     return {
         "resistance": round(resistance, 2), "support": round(support, 2),
         "range_size": round(rng_size, 2),

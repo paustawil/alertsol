@@ -1124,7 +1124,29 @@ def get_algo2_variant_stats(period_days: int | None = None) -> list[dict]:
 def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
     """Zestawienie wyników Algo2 per wariant (wszystkie typy setupów łącznie)."""
     time_sql, time_params = _algo2_time_filter(period_days)
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage   = 20
+    _tu        = f"COALESCE(trade_usdt, {trade_usdt})"
     wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+    trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
+    # TP1-only PnL: dla wygranych liczy jakby cała pozycja wyszła na TP1,
+    # dla SL używa rzeczywistego pnl_usd (pełna strata pozostaje stratą).
+    tp1_only = f"""
+        CASE
+            WHEN result = 'SL'
+                THEN pnl_usd
+            WHEN {wins_filter}
+                 AND (tps->>0) IS NOT NULL
+                 AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                 END
+        END"""
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -1140,15 +1162,17 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                     ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
                                  + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1)   AS win_rate,
-                    ROUND(AVG(pnl_usd) FILTER (
-                          WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
-                    )::numeric, 2)                                                          AS avg_pnl_usd,
-                    ROUND(SUM(pnl_usd) FILTER (
-                          WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
-                    )::numeric, 2)                                                          AS total_pnl_usd,
+                    ROUND(AVG(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS avg_pnl_usd,
+                    ROUND(SUM(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS total_pnl_usd,
+                    ROUND(SUM({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS total_tp1only_usd,
+                    ROUND(AVG(rr) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric, 2)    AS avg_rr,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS tp1_rate,
                     ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS tp2_rate,
+                    COUNT(*) FILTER (WHERE result IN ('TP1+BE','TP1+SL'))                  AS tp1_be_sl_hits,
                     ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS sl_rate
