@@ -1146,9 +1146,14 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                     ROUND(SUM(pnl_usd) FILTER (
                           WHERE result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
                     )::numeric, 2)                                                          AS total_pnl_usd,
+                    ROUND(AVG(rr) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric, 2)    AS avg_rr,
+                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS tp1_rate,
                     ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS tp2_rate,
+                    COUNT(*) FILTER (WHERE result IN ('TP1+BE','TP1+SL'))                  AS tp1_be_sl_hits,
                     ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS sl_rate
