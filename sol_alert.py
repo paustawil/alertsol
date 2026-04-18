@@ -298,8 +298,18 @@ def impulse_strength(candles_m15: list[dict]) -> int:
     ratio_recent = (sum(sizes_recent) / len(sizes_recent)) / atr if sizes_recent else 0
     # Bierz większy z dwóch — łapie zarówno trwające jak i świeże impulsy
     ratio = max(ratio_old, ratio_recent)
+
+    # Fresh-impulse: 2 ostatnie zamknięte świece z body ≥ 0.9·ATR w tym samym
+    # kierunku. Średnia z 6 świec rozcieńcza świeży impuls — czekałaby aż do 3.
+    fresh_strong = False
+    if len(candles_m15) >= 2:
+        b1 = candles_m15[-2]["close"] - candles_m15[-2]["open"]
+        b2 = candles_m15[-1]["close"] - candles_m15[-1]["open"]
+        thr = atr * 0.9
+        fresh_strong = (b1 <= -thr and b2 <= -thr) or (b1 >= thr and b2 >= thr)
+
     if ratio >= 1.4: return 3
-    if ratio >= 0.9: return 2
+    if ratio >= 0.9 or fresh_strong: return 2
     if ratio >= 0.5: return 1
     return 0
 

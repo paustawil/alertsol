@@ -6,6 +6,25 @@ Zmiany infrastrukturalne (dashboard, baza, Telegram) są tu pominięte.
 
 ---
 
+## 2026-04-18
+
+### `impulse_strength()` — fresh-impulse path (szybsza detekcja IMPULSE)
+
+Średnia ciał z 6 świec M15 (`[-6:]`) rozcieńczała świeży impuls — próg `ratio ≥ 0.9`
+(imp_str=2) wymagał zwykle **3 mocnych świec w oknie**, przez co IMPULSE był łapany
+dopiero po 3. silnej świecy zamiast po 2.
+
+Dodano drugą ścieżkę: jeśli **2 ostatnie zamknięte świece M15 mają body ≥ 0.9·ATR
+w tym samym kierunku** → `imp_str = 2`. Stara ścieżka (średnia) pozostaje dla
+trwających impulsów. Nie ruszano `vol_ratio` — `max(ratio_old, ratio_recent)`
+progu ≥ 2.0x jest spełniany po 2. świecy samoistnie.
+
+Efekt: IMPULSE_DOWN/UP łapany 15 min wcześniej w scenariuszu „dwie świeżo zamknięte
+mocne świece w jednym kierunku". Zachowana ochrona przed false-positive: wymaga
+**tego samego kierunku** na 2 świecach (1 mocna świeca nie wystarczy).
+
+---
+
 ## 2026-04-14
 
 ### Nowy entry trigger dla range setupów (potwierdzenie M15)
