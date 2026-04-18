@@ -1732,7 +1732,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         "sl_adjusted":     False,
         "entries_hit":     1,
         "shadow":          shadow,
-        "variant":         setup.get("variant", "baseline"),
+        "variant":         setup.get("variant") or setup.get("type", "baseline"),
     }
     sid = db.insert_setup(row)
     if sid is None:

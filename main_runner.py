@@ -641,8 +641,15 @@ def dashboard():
 
 <h3>Zamknięte setupy <span id="hist-count" style="color:#888;font-size:0.7em"></span></h3>
 <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-  <label style="color:#aaa;font-size:0.85em">Model:</label>
-  {model_checkboxes}
+  <label style="color:#aaa;font-size:0.85em">Scenariusz:</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="baseline" checked> tp·baseline</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="shallow" checked> tp·shallow</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="impulse_continuation_short" checked> imp_cont·S</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="impulse_continuation_long" checked> imp_cont·L</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="h1_atr" checked> imp_agg·h1</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="m15_atr" checked> imp_agg·m15</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_resistance_short" checked> range·S</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_support_long" checked> range·L</label>
   <span style="width:1px;height:16px;background:#444;display:inline-block;margin:0 4px"></span>
   <label style="color:#aaa;font-size:0.85em">Wynik:</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="TP1"> TP1</label>
@@ -653,10 +660,6 @@ def dashboard():
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="nie weszlo"> Nie weszło</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="anulowany"> Anulowane</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="nieokreslone"> Nieokreślone</label>
-  <span style="width:1px;height:16px;background:#444;display:inline-block;margin:0 4px"></span>
-  <label style="color:#aaa;font-size:0.85em">Wariant:</label>
-  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="baseline" checked> baseline</label>
-  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="shallow" checked> shallow</label>
   <span style="margin-left:12px;color:#aaa;font-size:0.85em">Od:</span>
   <input type="date" id="date-from" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;font-family:monospace;padding:2px 4px">
   <span style="color:#aaa;font-size:0.85em">Do:</span>
@@ -931,13 +934,10 @@ var HIST_PAGE  = 50;
 function getFilterParams() {{
   var checked = [];
   document.querySelectorAll('.res-filter:checked').forEach(function(cb) {{ checked.push(cb.value); }});
-  var models = [];
-  document.querySelectorAll('.model-filter:checked').forEach(function(cb) {{ models.push(cb.value); }});
   var variants = [];
   document.querySelectorAll('.variant-filter:checked').forEach(function(cb) {{ variants.push(cb.value); }});
   var params = new URLSearchParams();
   if (checked.length)   params.set('results',  checked.join(','));
-  if (models.length)    params.set('models',   models.join(','));
   if (variants.length)  params.set('variants', variants.join(','));
   var df = document.getElementById('date-from').value;
   var dt = document.getElementById('date-to').value;
@@ -1647,12 +1647,9 @@ async function loadMarketStatus() {{
 loadMarketStatus();
 setInterval(loadMarketStatus, 60000);
 
-// ── Default filter: Algo2 only; only setups with actual trade result ──────────
+// ── Default filter: only setups with actual trade result ──────────────────────
 document.querySelectorAll('.res-filter').forEach(function(cb) {{
   cb.checked = ['TP1','TP2','TP1+BE','TP1+SL','SL'].indexOf(cb.value) >= 0;
-}});
-document.querySelectorAll('.model-filter').forEach(function(cb) {{
-  cb.checked = cb.value === 'Algo2';
 }});
 loadHistory(true);
 

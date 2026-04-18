@@ -101,6 +101,7 @@ def init_schema():
             cur.execute(sql)
     log.info("Schema zainicjalizowana.")
     _migrate_tp1_pnl()
+    _migrate_variant_from_type()
 
 
 def _migrate_tp1_pnl() -> None:
@@ -147,6 +148,24 @@ def _migrate_tp1_pnl() -> None:
             updated = cur.rowcount
     if updated:
         log.info(f"[migrate] Naprawiono pnl_usd/pnl_pct dla {updated} rekordów TP1.")
+
+
+def _migrate_variant_from_type() -> None:
+    """Jednorazowa migracja: dla setupów które nie są trend_pullback
+    ustaw variant = type (zamiast domyślnego 'baseline')."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE setups
+                SET variant = type
+                WHERE variant = 'baseline'
+                  AND type NOT IN ('trend_pullback_long', 'trend_pullback_short')
+                """,
+            )
+            updated = cur.rowcount
+    if updated:
+        log.info(f"[migrate] Naprawiono variant dla {updated} setupów (variant=type).")
 
 
 # ── Setups ────────────────────────────────────────────────────────────────────
