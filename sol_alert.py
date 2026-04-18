@@ -854,7 +854,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✗ SKIP: spike_score={_cont_spike}>=2 (odwrót)")
             elif len(greens) >= 1 and len(greens) <= 2:
                 pullback_high = max(c["high"] for c in last6[-2:])
-                w = round(pullback_high, 2)
+                # Liberalne wejście: 15% haircut głębokości pullbacka — wolimy fill
+                # niż idealną cenę, gdy pullback zatrzymuje się tuż przed szczytem.
+                entry_offset = max(pullback_high - current_price, 0) * 0.15
+                w = round(pullback_high - entry_offset, 2)
                 sl = round(pullback_high + atr * 0.8, 2)
                 # TP: projekcja ATR_M15 poniżej bieżącej ceny (kontynuacja impulsu w dół)
                 tp1 = round(current_price - atr_m15 * 1.5, 2)
@@ -964,7 +967,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✗ SKIP: spike_score={_cont_spike}>=2 (odwrót)")
             elif len(reds) >= 1 and len(reds) <= 2:
                 pullback_low = min(c["low"] for c in last6[-2:])
-                w = round(pullback_low, 2)
+                # Liberalne wejście: 15% haircut głębokości pullbacka — wolimy fill
+                # niż idealną cenę, gdy pullback zatrzymuje się tuż przed dnem.
+                entry_offset = max(current_price - pullback_low, 0) * 0.15
+                w = round(pullback_low + entry_offset, 2)
                 sl = round(pullback_low - atr * 0.8, 2)
                 # TP: projekcja ATR_M15 powyżej bieżącej ceny (kontynuacja impulsu w górę)
                 tp1 = round(current_price + atr_m15 * 1.5, 2)
