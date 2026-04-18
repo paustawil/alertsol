@@ -861,6 +861,7 @@ def get_resolved_filtered(
     limit: int = 50,
     offset: int = 0,
     models: list[str] | None = None,
+    variants: list[str] | None = None,
 ) -> dict:
     """Zwraca zamknięte setupy z filtrami + total count."""
     where = ["resolved = TRUE"]
@@ -873,6 +874,10 @@ def get_resolved_filtered(
     if models:
         where.append("model = ANY(%(models)s)")
         params["models"] = models
+
+    if variants:
+        where.append("COALESCE(variant, 'baseline') = ANY(%(variants)s)")
+        params["variants"] = variants
 
     if date_from:
         where.append("resolved_at >= %(date_from)s::date")
