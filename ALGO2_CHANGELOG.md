@@ -8,6 +8,22 @@ Zmiany infrastrukturalne (dashboard, baza, Telegram) są tu pominięte.
 
 ## 2026-04-18
 
+### `impulse_continuation_*` — liberalniejsze wejście (15% haircut pullbacka)
+
+Entry `W` był ustawiany dokładnie na `pullback_high` (short) / `pullback_low` (long)
+— 100% ekstremum ostatnich 2 świec M15. Jeśli cena cofała się o kilka centów
+krócej niż do ekstremum, zlecenie nie wchodziło, a impuls leciał dalej bez nas.
+
+Zmiana: `W = ekstremum ± 15% · głębokości_pullbacka_od_current_price`.
+Haircut skaluje się z pullbackiem — duży pullback daje większy ustępek, mały
+ledwo zauważalny (kilka centów). SL zostaje odniesiony do pullback ekstremum
+(strukturalny stop), więc dystans SL lekko się rozszerza, RR spada o ~10–15%
+ale pozostaje ≥ 2.0 w typowych scenariuszach (weryfikacja: 0.3–2.0 ATR pullback
+→ RR spada z 2.25→2.08 / 4.38→2.91, wszędzie ≥ 1.5 progu).
+
+Motywacja: „wolimy trochę mniej zarobić ale wejść" — preferujemy fill reliability
+niż idealną cenę wejścia w setupach kontynuacji.
+
 ### `impulse_strength()` — fresh-impulse path (szybsza detekcja IMPULSE)
 
 Średnia ciał z 6 świec M15 (`[-6:]`) rozcieńczała świeży impuls — próg `ratio ≥ 0.9`
