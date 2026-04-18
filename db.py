@@ -153,19 +153,24 @@ def _migrate_tp1_pnl() -> None:
 def _migrate_variant_from_type() -> None:
     """Jednorazowa migracja: dla setupów które nie są trend_pullback
     ustaw variant = type (zamiast domyślnego 'baseline')."""
-    with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE setups
-                SET variant = type
-                WHERE variant = 'baseline'
-                  AND type NOT IN ('trend_pullback_long', 'trend_pullback_short')
-                """,
-            )
-            updated = cur.rowcount
-    if updated:
-        log.info(f"[migrate] Naprawiono variant dla {updated} setupów (variant=type).")
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE setups
+                    SET variant = "type"
+                    WHERE variant = 'baseline'
+                      AND "type" NOT IN ('trend_pullback_long', 'trend_pullback_short')
+                      AND "type" IS NOT NULL
+                      AND "type" <> ''
+                    """,
+                )
+                updated = cur.rowcount
+        if updated:
+            log.info(f"[migrate] Naprawiono variant dla {updated} setupów (variant=type).")
+    except Exception as e:
+        log.error(f"[migrate] _migrate_variant_from_type failed: {e}")
 
 
 # ── Setups ────────────────────────────────────────────────────────────────────
