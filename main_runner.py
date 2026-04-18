@@ -653,6 +653,10 @@ def dashboard():
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="nie weszlo"> Nie weszło</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="anulowany"> Anulowane</label>
   <label style="font-size:0.85em"><input type="checkbox" class="res-filter" value="nieokreslone"> Nieokreślone</label>
+  <span style="width:1px;height:16px;background:#444;display:inline-block;margin:0 4px"></span>
+  <label style="color:#aaa;font-size:0.85em">Wariant:</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="baseline" checked> baseline</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="shallow" checked> shallow</label>
   <span style="margin-left:12px;color:#aaa;font-size:0.85em">Od:</span>
   <input type="date" id="date-from" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;font-family:monospace;padding:2px 4px">
   <span style="color:#aaa;font-size:0.85em">Do:</span>
@@ -929,9 +933,12 @@ function getFilterParams() {{
   document.querySelectorAll('.res-filter:checked').forEach(function(cb) {{ checked.push(cb.value); }});
   var models = [];
   document.querySelectorAll('.model-filter:checked').forEach(function(cb) {{ models.push(cb.value); }});
+  var variants = [];
+  document.querySelectorAll('.variant-filter:checked').forEach(function(cb) {{ variants.push(cb.value); }});
   var params = new URLSearchParams();
-  if (checked.length) params.set('results', checked.join(','));
-  if (models.length)  params.set('models',  models.join(','));
+  if (checked.length)   params.set('results',  checked.join(','));
+  if (models.length)    params.set('models',   models.join(','));
+  if (variants.length)  params.set('variants', variants.join(','));
   var df = document.getElementById('date-from').value;
   var dt = document.getElementById('date-to').value;
   if (df) params.set('date_from', df);
@@ -2224,15 +2231,17 @@ def api_stats():
 def api_resolved(
     results: str | None = None,
     models:  str | None = None,
+    variants: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ):
-    """Zamknięte setupy z filtrami. results/models = listy oddzielone przecinkami."""
-    result_list = [r.strip() for r in results.split(",") if r.strip()] if results else None
-    model_list  = [m.strip() for m in models.split(",")  if m.strip()] if models  else None
-    data = db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset, model_list)
+    """Zamknięte setupy z filtrami. results/models/variants = listy oddzielone przecinkami."""
+    result_list  = [r.strip() for r in results.split(",")  if r.strip()] if results  else None
+    model_list   = [m.strip() for m in models.split(",")   if m.strip()] if models   else None
+    variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
+    data = db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset, model_list, variant_list)
     return data
 
 
@@ -2240,6 +2249,7 @@ def api_resolved(
 def api_resolved_csv(
     results: str | None = None,
     models:  str | None = None,
+    variants: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
@@ -2248,9 +2258,10 @@ def api_resolved_csv(
     import csv
     import io
 
-    result_list = [r.strip() for r in results.split(",") if r.strip()] if results else None
-    model_list  = [m.strip() for m in models.split(",")  if m.strip()] if models  else None
-    data = db.get_resolved_filtered(result_list, date_from, date_to, limit=5000, offset=0, models=model_list)
+    result_list  = [r.strip() for r in results.split(",")  if r.strip()] if results  else None
+    model_list   = [m.strip() for m in models.split(",")   if m.strip()] if models   else None
+    variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
+    data = db.get_resolved_filtered(result_list, date_from, date_to, limit=5000, offset=0, models=model_list, variants=variant_list)
     rows = data["rows"]
 
     buf = io.StringIO()

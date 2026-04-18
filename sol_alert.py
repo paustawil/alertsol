@@ -703,7 +703,6 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 # shallow   = płytszy pullback (fib25-38) z ciaśniejszym SL (fib50), też strength>=4
 _PULLBACK_VARIANTS: dict[str, tuple] = {
     "baseline": (0.38, 0.50, 0.618, 0.3, 5, False),
-    "str4":     (0.38, 0.50, 0.618, 0.3, 4, True),
     "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
 }
 
@@ -2067,7 +2066,7 @@ def check_pending(candles_m15: list[dict]):
                     )
                 except Exception:
                     pass
-        elif age_h > TRADE_TIMEOUT_H:
+        elif not s.get("shadow") and age_h > TRADE_TIMEOUT_H:
             db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
             still_pending.append(s)
