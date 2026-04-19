@@ -1176,7 +1176,8 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
             cur.execute(
                 f"""
                 SELECT
-                    COALESCE(variant, 'baseline')                                          AS variant,
+                    COALESCE(NULLIF(type,''), '(brak)')
+                        || '·' || COALESCE(variant, 'baseline')                            AS variant,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
                     ROUND(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric
@@ -1200,8 +1201,8 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
-                GROUP BY variant
-                ORDER BY variant
+                GROUP BY type, COALESCE(variant, 'baseline')
+                ORDER BY type, COALESCE(variant, 'baseline')
                 """,
                 time_params,
             )
@@ -1237,7 +1238,10 @@ def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
             cur.execute(
                 f"""
                 SELECT
-                    (alert_time AT TIME ZONE 'Europe/Warsaw')::date                        AS day,
+                    COALESCE(
+                        (exit_time AT TIME ZONE 'Europe/Warsaw')::date,
+                        (alert_time AT TIME ZONE 'Europe/Warsaw')::date
+                    )                                                                      AS day,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
                     COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
@@ -1249,11 +1253,14 @@ def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
                     ROUND(SUM({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS total_tp1only_usd
                 FROM setups
                 WHERE model = 'Algo2'
-                  {time_sql}
+                  AND (
+                      alert_time >= NOW() - COALESCE(%(interval)s, '100 years')::interval
+                      OR exit_time >= NOW() - COALESCE(%(interval)s, '100 years')::interval
+                  )
                 GROUP BY day
                 ORDER BY day DESC
                 """,
-                time_params,
+                {"interval": time_params.get("interval")},
             )
             return [dict(r) for r in cur.fetchall()]
 
