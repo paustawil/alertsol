@@ -589,6 +589,18 @@ def dashboard():
 
   <!-- Per dzień -->
   <h4 style="color:#80deea;margin:20px 0 6px">Per dzień</h4>
+  <div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <label style="color:#aaa;font-size:0.85em">Scenariusz:</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="baseline" checked> tp·baseline</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="shallow" checked> tp·shallow</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="impulse_continuation_short" checked> imp_cont·S</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="impulse_continuation_long" checked> imp_cont·L</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="h1_atr" checked> imp_agg·h1</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="m15_atr" checked> imp_agg·m15</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="range_resistance_short" checked> range·S</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="range_support_long" checked> range·L</label>
+    <button class="btn-action" onclick="loadA2Daily()">Filtruj</button>
+  </div>
   <div style="overflow-x:auto">
     <table id="a2-daily-table" style="min-width:520px">
       <tr>
@@ -1252,6 +1264,32 @@ function heatColor(v, max) {{
   return 'rgba(64,' + g + ',64,0.35)';
 }}
 
+function buildA2DailyUrl() {{
+  var params = new URLSearchParams();
+  if (currentA2Period) params.set('period', currentA2Period);
+  var variants = [];
+  document.querySelectorAll('.daily-variant-filter:checked').forEach(function(cb) {{
+    variants.push(cb.value);
+  }});
+  if (variants.length) params.set('variants', variants.join(','));
+  var qs = params.toString();
+  return '/api/algo2/daily-stats' + (qs ? '?' + qs : '');
+}}
+
+async function loadA2Daily() {{
+  try {{
+    var resp = await fetch(buildA2DailyUrl());
+    var data = await resp.json();
+    renderA2Daily(data);
+  }} catch(e) {{
+    var tbl = document.getElementById('a2-daily-table');
+    while (tbl.rows.length > 1) tbl.deleteRow(1);
+    var tr = tbl.insertRow();
+    tr.insertCell().colSpan = 8; tr.cells[0].colSpan = 8;
+    tr.cells[0].textContent = '⚠️ ' + e.message; tr.cells[0].style.color = '#f88';
+  }}
+}}
+
 async function loadAlgo2Analytics() {{
   var loading = document.getElementById('a2-loading');
   loading.textContent = 'ładowanie...';
@@ -1262,7 +1300,7 @@ async function loadAlgo2Analytics() {{
       fetch('/api/algo2/type-stats' + periodParam),
       fetch('/api/algo2/time-heatmap' + periodParam),
       fetch('/api/algo2/rr-analysis' + periodParam),
-      fetch('/api/algo2/daily-stats' + periodParam),
+      fetch(buildA2DailyUrl()),
     ]);
     var variantData = await vsResp.json();
     var typeData    = await tsResp.json();
@@ -2762,9 +2800,15 @@ def api_algo2_variant_summary(period: int | None = None):
 
 
 @app.get("/api/algo2/daily-stats")
-def api_algo2_daily_stats(period: int | None = None):
-    """Zestawienie wyników per dzień kalendarzowy. period = dni lub brak = all-time."""
-    return db.get_algo2_daily_stats(period)
+def api_algo2_daily_stats(period: int | None = None, variants: str | None = None):
+    """Zestawienie wyników per dzień kalendarzowy.
+
+    period   — liczba dni (brak = all-time)
+    variants — opcjonalna lista wariantów po przecinku (np. 'baseline,shallow').
+               Brak = wszystkie warianty.
+    """
+    variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
+    return db.get_algo2_daily_stats(period, variant_list)
 
 
 @app.get("/api/analytics/export")

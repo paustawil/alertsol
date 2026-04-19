@@ -1209,14 +1209,24 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
-    """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw)."""
+def get_algo2_daily_stats(
+    period_days: int | None = None,
+    variants: list[str] | None = None,
+) -> list[dict]:
+    """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw).
+
+    variants — opcjonalna lista nazw wariantów do uwzględnienia (np. ['baseline','shallow']).
+    Pusta/None = wszystkie warianty.
+    """
     time_sql, time_params = _algo2_time_filter(period_days)
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
     _tu        = f"COALESCE(trade_usdt, {trade_usdt})"
     wins_filter    = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
     trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
+    variant_sql = ""
+    if variants:
+        variant_sql = "AND COALESCE(variant, 'baseline') = ANY(%(variants)s)"
     tp1_only = f"""
         CASE
             WHEN result = 'SL'
@@ -1257,10 +1267,14 @@ def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
                       alert_time >= NOW() - COALESCE(%(interval)s, '100 years')::interval
                       OR exit_time >= NOW() - COALESCE(%(interval)s, '100 years')::interval
                   )
+                  {variant_sql}
                 GROUP BY day
                 ORDER BY day DESC
                 """,
-                {"interval": time_params.get("interval")},
+                {
+                    "interval": time_params.get("interval"),
+                    "variants": variants or [],
+                },
             )
             return [dict(r) for r in cur.fetchall()]
 
