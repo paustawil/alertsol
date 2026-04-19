@@ -1245,6 +1245,9 @@ def get_algo2_daily_stats(
         END"""
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            sql_params: dict = {"interval": time_params.get("interval")}
+            if variants:
+                sql_params["variants"] = variants
             cur.execute(
                 f"""
                 SELECT
@@ -1271,10 +1274,7 @@ def get_algo2_daily_stats(
                 GROUP BY day
                 ORDER BY day DESC
                 """,
-                {
-                    "interval": time_params.get("interval"),
-                    "variants": variants or [],
-                },
+                sql_params,
             )
             return [dict(r) for r in cur.fetchall()]
 
