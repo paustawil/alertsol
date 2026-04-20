@@ -707,13 +707,14 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 
 
 # ── Warianty parametrów trend_pullback (kalibracja) ──────────────────────────
-# Klucz → (fib_wejście_lo, fib_wejście_hi, fib_sl, atr_sl_mult, strength_min, force_shadow)
-# baseline  = aktualne ustawienia produkcyjne
-# str4      = identyczna geometria, ale próg strength obniżony do 4
-# shallow   = płytszy pullback (fib25-38) z ciaśniejszym SL (fib50), też strength>=4
+# Klucz → (fib_lo, fib_hi, fib_sl, atr_sl, str_min, force_shadow, tp1_only)
+# Live warianty (force_shadow=False, tp1_only=True): pełna pozycja wychodzi na TP1
+# Shadow warianty (*_tp2): identyczna geometria, obie TP — tylko do porównania w panelu
 _PULLBACK_VARIANTS: dict[str, tuple] = {
-    "baseline": (0.38, 0.50, 0.618, 0.3, 5, False),
-    "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
+    "baseline":     (0.38, 0.50, 0.618, 0.3, 5, False, True),   # live, tylko TP1
+    "shallow":      (0.25, 0.38, 0.500, 0.1, 4, False, True),   # live, tylko TP1
+    "baseline_tp2": (0.38, 0.50, 0.618, 0.3, 5, True,  False),  # shadow, TP1+TP2 (panel)
+    "shallow_tp2":  (0.25, 0.38, 0.500, 0.1, 4, True,  False),  # shadow, TP1+TP2 (panel)
 }
 
 
@@ -794,6 +795,13 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     log_lines.append(f"  Exhaustion signals: [{exh_str}]")
     # ─────────────────────────────────────────────────────────────────────────
 
+    # Filtr makrotrendu: change_48h > +3% = silny uptrend, < -3% = silny downtrend
+    # Dotyczy TYLKO pullback + range — impulse_aggressive/continuation nie blokowane.
+    _change48  = regime.get("change_48h", 0.0)
+    _macro_up   = _change48 > 3.0
+    _macro_down = _change48 < -3.0
+    log_lines.append(f"  Makrotend 48h: {_change48:+.1f}% → up={_macro_up} down={_macro_down}")
+
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
@@ -803,12 +811,11 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
         # trend_pullback_short — warianty parametrów (baseline + eksperymenty)
-        if swing_high > swing_low:
+        if _macro_up:
+            log_lines.append(f"  ✗ SKIP pullback_short: macro_up (48h={_change48:+.1f}%)")
+        elif swing_high > swing_low:
             swing_range = swing_high - swing_low
-            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
-                # str4 generuje tylko gdy strength==4 (baseline już pokrywa strength>=5)
-                if vname == "str4" and strength != 4:
-                    continue
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow, v_tp1_only) in _PULLBACK_VARIANTS.items():
                 if strength < str_min:
                     continue
                 entry_mid = (fib_lo + fib_hi) / 2
@@ -816,12 +823,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 sl  = round(swing_low + fib_sl * swing_range + atr * atr_sl, 2)
                 tp1 = round(swing_low, 2)
                 tp2 = round(swing_low - swing_range * 0.3, 2)
+                tps_list = [tp1] if v_tp1_only else [tp1, tp2]
                 rr_ok     = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
                 above_price = w > current_price * 1.003
                 dist_ok   = w - current_price <= max_entry_dist
                 rr_val    = round((w - tp1) / (sl - w), 1) if (sl - w) > 0 else 0
+                tp1_only_tag = " tp1only" if v_tp1_only else ""
                 log_lines.append(
-                    f"  → pullback_short [{vname}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
+                    f"  → pullback_short [{vname}{tp1_only_tag}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
                     f"SL=${sl:.2f} RR={rr_val} dist=${w-current_price:.2f} "
                     f"above={above_price} dist_ok={dist_ok} rr_ok={rr_ok}"
                 )
@@ -830,7 +839,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     setups.append({
                         "type": "trend_pullback_short", "direction": "short",
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
-                        "tps": [tp1, tp2], "rr": rr_val,
+                        "tps": tps_list, "rr": rr_val,
                         "score": strength,
                         "variant": vname,
                         "force_shadow": v_shadow,
@@ -875,36 +884,51 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
 
-        # impulse_aggressive_short — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
-        if regime_name.startswith("IMPULSE_"):
-            _agg_vol   = regime.get("vol_ratio", 1.0)
-            _agg_spike = regime.get("spike_score", 0)
-            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
-            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike} ATR_H1=${atr:.2f} ATR_M15=${atr_m15:.2f}")
+        # impulse_aggressive_short — proto-impulse: wykryj na 1. świecy M15, wejdź na 2.
+        _agg_vol   = regime.get("vol_ratio", 1.0)
+        _agg_spike = regime.get("spike_score", 0)
+        atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+        _ref_agg  = candles_h1[-26:-2] if len(candles_h1) >= 26 else candles_h1[:-2]
+        _ref_low_agg  = min(c["low"] for c in _ref_agg)
+        _last_body_s  = candles_m15[-1]["close"] - candles_m15[-1]["open"]
+        _proto_short  = (current_price < _ref_low_agg
+                         and _agg_vol >= 2.0
+                         and _last_body_s <= -atr_m15 * 0.8)
+        _trigger_agg_short = regime_name.startswith("IMPULSE_") or _proto_short
+        log_lines.append(
+            f"  → impulse_aggressive_short: vol={_agg_vol:.1f}x spike={_agg_spike} "
+            f"proto={_proto_short}(body={_last_body_s:.2f} vs -{atr_m15*0.8:.2f}) trigger={_trigger_agg_short}"
+        )
+        if _trigger_agg_short:
             if _agg_spike >= 2:
                 log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
             elif _agg_vol < 2.0:
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
-                w = round(current_price, 2)
-                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
-                    _sl  = round(current_price + _vatr * 1.2, 2)
-                    _tp1 = round(current_price - _vatr * 2.0, 2)
-                    _tp2 = round(current_price - _vatr * _tp2_mult, 2)
-                    _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
-                    log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
-                    if _rr_ok:
-                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
-                        setups.append({
-                            "type": "impulse_aggressive_short", "direction": "short",
-                            "entries": [w], "sl": _sl, "sl_after_tp1": w,
-                            "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
-                            "score": strength, "variant": _vname,
-                            "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
-                            "force_shadow": True,
-                        })
-                    else:
-                        log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
+                _body_fade = "malejace_body_M15" in exhaustion_signals
+                _vol_fade  = "malejacy_wolumen_M15" in exhaustion_signals
+                if _body_fade and _vol_fade:
+                    log_lines.append(f"    ✗ SKIP: body+vol wyczerpanie (impuls wygasający)")
+                else:
+                    w = round(current_price, 2)
+                    for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
+                        _sl  = round(current_price + _vatr * 1.2, 2)
+                        _tp1 = round(current_price - _vatr * 2.0, 2)
+                        _tp2 = round(current_price - _vatr * _tp2_mult, 2)
+                        _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
+                        log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                        if _rr_ok:
+                            log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
+                            setups.append({
+                                "type": "impulse_aggressive_short", "direction": "short",
+                                "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                                "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
+                                "score": strength, "variant": _vname,
+                                "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
+                                "force_shadow": True,
+                            })
+                        else:
+                            log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
@@ -915,12 +939,11 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f}")
 
         # trend_pullback_long — warianty parametrów (baseline + eksperymenty)
-        if swing_high > swing_low:
+        if _macro_down:
+            log_lines.append(f"  ✗ SKIP pullback_long: macro_down (48h={_change48:+.1f}%)")
+        elif swing_high > swing_low:
             swing_range = swing_high - swing_low
-            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
-                # str4 generuje tylko gdy strength==4 (baseline już pokrywa strength>=5)
-                if vname == "str4" and strength != 4:
-                    continue
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow, v_tp1_only) in _PULLBACK_VARIANTS.items():
                 if strength < str_min:
                     log_lines.append(f"  → pullback_long [{vname}]: SKIP (strength={strength}<{str_min})")
                     continue
@@ -929,12 +952,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 sl  = round(swing_high - fib_sl * swing_range - atr * atr_sl, 2)
                 tp1 = round(swing_high, 2)
                 tp2 = round(swing_high + swing_range * 0.3, 2)
+                tps_list = [tp1] if v_tp1_only else [tp1, tp2]
                 rr_ok      = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
                 below_price = w < current_price * 0.997
                 dist_ok    = current_price - w <= max_entry_dist
                 rr_val     = round((tp1 - w) / (w - sl), 1) if (w - sl) > 0 else 0
+                tp1_only_tag = " tp1only" if v_tp1_only else ""
                 log_lines.append(
-                    f"  → pullback_long [{vname}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
+                    f"  → pullback_long [{vname}{tp1_only_tag}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
                     f"SL=${sl:.2f} RR={rr_val} dist=${current_price-w:.2f} "
                     f"below={below_price} dist_ok={dist_ok} rr_ok={rr_ok}"
                 )
@@ -943,7 +968,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     setups.append({
                         "type": "trend_pullback_long", "direction": "long",
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
-                        "tps": [tp1, tp2], "rr": rr_val,
+                        "tps": tps_list, "rr": rr_val,
                         "score": strength,
                         "variant": vname,
                         "force_shadow": v_shadow,
@@ -988,36 +1013,51 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
 
-        # impulse_aggressive_long — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
-        if regime_name.startswith("IMPULSE_"):
-            _agg_vol   = regime.get("vol_ratio", 1.0)
-            _agg_spike = regime.get("spike_score", 0)
-            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
-            log_lines.append(f"  → impulse_aggressive: vol={_agg_vol:.1f}x spike={_agg_spike} ATR_H1=${atr:.2f} ATR_M15=${atr_m15:.2f}")
+        # impulse_aggressive_long — proto-impulse: wykryj na 1. świecy M15, wejdź na 2.
+        _agg_vol   = regime.get("vol_ratio", 1.0)
+        _agg_spike = regime.get("spike_score", 0)
+        atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+        _ref_agg  = candles_h1[-26:-2] if len(candles_h1) >= 26 else candles_h1[:-2]
+        _ref_high_agg = max(c["high"] for c in _ref_agg)
+        _last_body_l  = candles_m15[-1]["close"] - candles_m15[-1]["open"]
+        _proto_long   = (current_price > _ref_high_agg
+                         and _agg_vol >= 2.0
+                         and _last_body_l >= atr_m15 * 0.8)
+        _trigger_agg_long = regime_name.startswith("IMPULSE_") or _proto_long
+        log_lines.append(
+            f"  → impulse_aggressive_long: vol={_agg_vol:.1f}x spike={_agg_spike} "
+            f"proto={_proto_long}(body={_last_body_l:.2f} vs {atr_m15*0.8:.2f}) trigger={_trigger_agg_long}"
+        )
+        if _trigger_agg_long:
             if _agg_spike >= 2:
                 log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
             elif _agg_vol < 2.0:
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
-                w = round(current_price, 2)
-                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
-                    _sl  = round(current_price - _vatr * 1.2, 2)
-                    _tp1 = round(current_price + _vatr * 2.0, 2)
-                    _tp2 = round(current_price + _vatr * _tp2_mult, 2)
-                    _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
-                    log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
-                    if _rr_ok:
-                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
-                        setups.append({
-                            "type": "impulse_aggressive_long", "direction": "long",
-                            "entries": [w], "sl": _sl, "sl_after_tp1": w,
-                            "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
-                            "score": strength, "variant": _vname,
-                            "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
-                            "force_shadow": True,
-                        })
-                    else:
-                        log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
+                _body_fade = "malejace_body_M15" in exhaustion_signals
+                _vol_fade  = "malejacy_wolumen_M15" in exhaustion_signals
+                if _body_fade and _vol_fade:
+                    log_lines.append(f"    ✗ SKIP: body+vol wyczerpanie (impuls wygasający)")
+                else:
+                    w = round(current_price, 2)
+                    for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
+                        _sl  = round(current_price - _vatr * 1.2, 2)
+                        _tp1 = round(current_price + _vatr * 2.0, 2)
+                        _tp2 = round(current_price + _vatr * _tp2_mult, 2)
+                        _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
+                        log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                        if _rr_ok:
+                            log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
+                            setups.append({
+                                "type": "impulse_aggressive_long", "direction": "long",
+                                "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                                "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
+                                "score": strength, "variant": _vname,
+                                "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
+                                "force_shadow": True,
+                            })
+                        else:
+                            log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
 
     # ── RANGE ─────────────────────────────────────────────────────────────
     elif regime_name == "RANGE":
@@ -1025,7 +1065,9 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         sup, res = rng["support"], rng["resistance"]
         rng_size = res - sup
         log_lines.append(f"  Range: S=${sup:.2f} R=${res:.2f} size=${rng_size:.2f} (min={atr*1.5:.2f})")
-        if rng_size > atr * 1.5:
+        if abs(_change48) > 2.0:
+            log_lines.append(f"  ✗ SKIP range: macro trend (48h={_change48:+.1f}%)")
+        elif rng_size > atr * 1.5:
             # range_resistance_short
             w = res - rng_size * 0.1
             sl = res + atr * 1.0

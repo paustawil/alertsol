@@ -278,13 +278,15 @@ def _place_entry_plan_orders(
 def _place_tpsl_orders_split(
     client: BitgetClient,
     s: dict,
-    half_qty: float,
+    qty: float,
 ) -> tuple[str | None, str | None, str | None, str | None]:
     """
-    Fallback: ręcznie składa 4 TPSL ordery gdy preset z plan order nie zadziałał.
-      TP1: profit_plan, half_qty, trigger=TP1  → tp1_id
-      TP2: profit_plan, half_qty, trigger=TP2  → tp2_id
-      SL1: loss_plan,   half_qty, trigger=SL   → sl1_id  (para z TP1)
+    Fallback: ręcznie składa TPSL ordery gdy preset z plan order nie zadziałał.
+    tp1-only (len(tps)==1): TP1 full_qty + SL1 full_qty (brak TP2/SL2).
+    split (len(tps)==2): TP1 half_qty + TP2 half_qty + SL1 half_qty + SL2 half_qty.
+      TP1: profit_plan, qty, trigger=TP1  → tp1_id
+      TP2: profit_plan, qty, trigger=TP2  → tp2_id
+      SL1: loss_plan,   qty, trigger=SL   → sl1_id  (para z TP1)
       SL2: loss_plan,   half_qty, trigger=SL   → sl2_id  (para z TP2, zmodyfikowany na BE po TP1)
     Zwraca (tp1_id, tp2_id, sl1_id, sl2_id).
     """
@@ -311,7 +313,7 @@ def _place_tpsl_orders_split(
                 "triggerType":  "mark_price",
                 "executePrice": "0",
                 "holdSide":     hold_side,
-                "size":         _fmt_qty(half_qty),
+                "size":         _fmt_qty(qty),
             })
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
@@ -335,7 +337,7 @@ def _place_tpsl_orders_split(
                 "triggerType":  "mark_price",
                 "executePrice": "0",
                 "holdSide":     hold_side,
-                "size":         _fmt_qty(half_qty),
+                "size":         _fmt_qty(qty),
             })
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
@@ -349,7 +351,7 @@ def _place_tpsl_orders_split(
     tp1_id = _place_tp(tp1, "TP1")
     tp2_id = _place_tp(tp2, "TP2")
     sl1_id = _place_sl("SL1")
-    sl2_id = _place_sl("SL2")
+    sl2_id = _place_sl("SL2") if tp2 is not None else None
     return tp1_id, tp2_id, sl1_id, sl2_id
 
 
@@ -877,12 +879,14 @@ def _sync_inner():
                     continue
 
                 full_qty = _round_qty(calc_full)
-                half_qty = _round_qty(half_qty or full_qty / 2)
-
-                # Szukaj 4 preset TPSL orderów (z obu plan orderów)
                 tps      = s.get("tps", [])
                 tp1_price = float(tps[0]) if len(tps) > 0 else None
                 tp2_price = float(tps[1]) if len(tps) > 1 else None
+                # tp1-only: pełna pozycja zamknięta przy TP1 (brak TP2)
+                tp1_only_setup = tp2_price is None
+                qty = full_qty if tp1_only_setup else _round_qty(half_qty or full_qty / 2)
+                half_qty = qty  # alias — dalszy kod używa half_qty do zapis
+
                 tp1_id, tp2_id, sl1_id, sl2_id = _find_preset_tpsl_pair(
                     client, direction, tp1_price, tp2_price
                 )
@@ -891,13 +895,13 @@ def _sync_inner():
                     print(f"[exchange] {label}: preset TPSL znalezione "
                           f"(TP1={tp1_id} TP2={tp2_id} SL1={sl1_id} SL2={sl2_id})")
                 else:
-                    # Fallback — złóż 4 TPSL ręcznie
+                    # Fallback — złóż TPSL ręcznie
                     log.warning(f"[exchange] {label}: brak preset TPSL, składam ręcznie...")
-                    tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, half_qty)
+                    tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, qty)
 
                 s["exchange_position_opened"] = True
                 s["exchange_qty_full"]        = _fmt_qty(full_qty)
-                s["exchange_qty_half"]        = _fmt_qty(half_qty)
+                s["exchange_qty_half"]        = _fmt_qty(qty)
                 s["exchange_tp1_oid"]         = tp1_id
                 s["exchange_tp2_oid"]         = tp2_id
                 s["exchange_sl_oid"]          = sl1_id
@@ -986,47 +990,60 @@ def _sync_inner():
                 if tp1_status == "executed":
                     tps_list   = s.get("tps") or []
                     tp1_price  = float(tps_list[0]) if tps_list else None
+                    tp1_only_s = len(tps_list) < 2   # pełna pozycja zamknięta przy TP1
                     avg_entry  = s.get("avg_entry")
-                    # Użyj sl_after_tp1 jeśli dostępny, fallback na avg_entry (break-even)
-                    sl_new_raw = s.get("sl_after_tp1")
-                    sl_new     = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
                     half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
 
                     # Anuluj SL1 (Bitget mógł już auto-anulować)
                     if sl_oid:
                         _cancel_order(client, sl_oid, "loss_plan")
 
-                    # Przesuń SL2 → nowy SL (sl_after_tp1 lub BE)
-                    # Bitget często auto-anuluje SL2 gdy TP1 zamknie połowę pozycji —
-                    # dlatego próbujemy modify, a jeśli się nie uda, składamy nowy order.
-                    new_sl2_oid = sl2_oid
-                    if sl_new and half_qty_f > 0:
-                        if sl2_oid and _modify_sl(client, sl2_oid, sl_new, half_qty_f):
-                            print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new}")
-                        else:
-                            # modify nie powiodło się — anuluj stary i złóż nowy loss_plan
-                            if sl2_oid:
-                                _cancel_order(client, sl2_oid, "loss_plan")
-                            new_sl2_oid = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
-                            if new_sl2_oid:
-                                print(f"[exchange] {label}: nowy SL2 złożony → {new_sl2_oid} @ {sl_new}")
-                            else:
-                                log.warning(f"[exchange] {label}: nie udało się złożyć nowego SL2!")
-
                     pnl_usd = None
                     if avg_entry and tp1_price and half_qty_f:
                         sign    = 1 if s.get("direction") == "long" else -1
                         pnl_usd = sign * half_qty_f * (tp1_price - float(avg_entry))
-                    s["pnl_usd"] = pnl_usd  # zachowaj w pamięci dla późniejszego TP1+BE/TP1+TP2
 
-                    s["exchange_tp1_oid"]  = None
-                    s["exchange_tp1_done"] = True
-                    s["exchange_sl_oid"]   = None
-                    s["exchange_sl2_oid"]  = new_sl2_oid  # zaktualizuj OID jeśli złożony nowy
-                    modified = True
-                    print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 (SL2={new_sl2_oid})")
-                    if sid and sid != "?":
-                        db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
+                    if tp1_only_s:
+                        # tp1-only: cała pozycja zamknięta — resolve od razu
+                        s["exchange_tp1_oid"]  = None
+                        s["exchange_tp1_done"] = True
+                        s["exchange_sl_oid"]   = None
+                        s["exchange_done"]     = True
+                        modified = True
+                        print(f"[exchange] {label}: TP1 wykonany (tp1-only) — zamykam setup")
+                        if sid and sid != "?":
+                            db.resolve_setup(int(sid), "TP1", avg_entry, tp1_price, pnl_usd, None)
+                    else:
+                        # split: pierwsza połowa zamknięta — czekaj na TP2 lub SL2-BE
+                        # Użyj sl_after_tp1 jeśli dostępny, fallback na avg_entry (break-even)
+                        sl_new_raw = s.get("sl_after_tp1")
+                        sl_new     = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
+
+                        # Przesuń SL2 → nowy SL (sl_after_tp1 lub BE)
+                        # Bitget często auto-anuluje SL2 gdy TP1 zamknie połowę pozycji —
+                        # dlatego próbujemy modify, a jeśli się nie uda, składamy nowy order.
+                        new_sl2_oid = sl2_oid
+                        if sl_new and half_qty_f > 0:
+                            if sl2_oid and _modify_sl(client, sl2_oid, sl_new, half_qty_f):
+                                print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new}")
+                            else:
+                                if sl2_oid:
+                                    _cancel_order(client, sl2_oid, "loss_plan")
+                                new_sl2_oid = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
+                                if new_sl2_oid:
+                                    print(f"[exchange] {label}: nowy SL2 złożony → {new_sl2_oid} @ {sl_new}")
+                                else:
+                                    log.warning(f"[exchange] {label}: nie udało się złożyć nowego SL2!")
+
+                        s["pnl_usd"] = pnl_usd  # zachowaj w pamięci dla późniejszego TP1+BE/TP1+TP2
+                        s["exchange_tp1_oid"]  = None
+                        s["exchange_tp1_done"] = True
+                        s["exchange_sl_oid"]   = None
+                        s["exchange_sl2_oid"]  = new_sl2_oid
+                        modified = True
+                        print(f"[exchange] {label}: TP1 wykonany (split) — czekamy na TP2 lub SL2 (SL2={new_sl2_oid})")
+                        if sid and sid != "?":
+                            db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
                     continue
 
                 elif tp1_status == "cancelled":

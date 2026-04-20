@@ -244,7 +244,7 @@ def insert_setup(row: dict) -> int | None:
                       AND direction = %(direction)s
                       AND model = %(model)s
                       AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
-                ) OR %(shadow)s = TRUE
+                ) OR (%(shadow)s = TRUE AND %(model)s != 'Algo2')
                 RETURNING setup_id
                 """,
                 params,
