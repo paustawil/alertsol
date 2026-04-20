@@ -2778,7 +2778,11 @@ def api_algo2_type_stats(period: int | None = None):
 @app.get("/api/algo2/time-heatmap")
 def api_algo2_time_heatmap(period: int | None = None):
     """Heatmapa godzinowa alertów Algo2 (czas Warsaw). period = liczba dni lub brak = all-time."""
-    return db.get_algo2_time_heatmap(period)
+    try:
+        return db.get_algo2_time_heatmap(period)
+    except Exception:
+        log.exception("api_algo2_time_heatmap failed (period=%s)", period)
+        raise
 
 
 @app.get("/api/algo2/rr-analysis")
@@ -2796,7 +2800,11 @@ def api_algo2_variant_stats(period: int | None = None, _: None = Security(_requi
 @app.get("/api/algo2/variant-summary")
 def api_algo2_variant_summary(period: int | None = None):
     """Zestawienie wyników per wariant (wszystkie typy łącznie). period = dni lub brak = all-time."""
-    return db.get_algo2_variant_summary(period)
+    try:
+        return db.get_algo2_variant_summary(period)
+    except Exception:
+        log.exception("api_algo2_variant_summary failed (period=%s)", period)
+        raise
 
 
 @app.get("/api/algo2/daily-stats")
