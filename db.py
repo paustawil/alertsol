@@ -1153,6 +1153,8 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
     _tu        = f"COALESCE(trade_usdt, {trade_usdt})"
     wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
     trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
+    # Bezpieczny cast qty: pomija wartości nienumeryczne (np. błędne dane)
+    _safe_qty = "CASE WHEN exchange_qty_full ~ '^[0-9]+(\\.[0-9]+)?$' THEN exchange_qty_full::numeric ELSE NULL END"
     # TP1-only PnL: dla wygranych liczy jakby cała pozycja wyszła na TP1,
     # dla SL używa rzeczywistego pnl_usd (pełna strata pozostaje stratą).
     tp1_only = f"""
@@ -1164,10 +1166,10 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      COALESCE({_safe_qty},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      COALESCE({_safe_qty},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
@@ -1227,6 +1229,7 @@ def get_algo2_daily_stats(
     variant_sql = ""
     if variants:
         variant_sql = "AND COALESCE(variant, 'baseline') = ANY(%(variants)s)"
+    _safe_qty = "CASE WHEN exchange_qty_full ~ '^[0-9]+(\\.[0-9]+)?$' THEN exchange_qty_full::numeric ELSE NULL END"
     tp1_only = f"""
         CASE
             WHEN result = 'SL'
@@ -1236,10 +1239,10 @@ def get_algo2_daily_stats(
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      COALESCE({_safe_qty},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      COALESCE({_safe_qty},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
@@ -1304,8 +1307,8 @@ def get_algo2_time_heatmap(period_days: int | None = None) -> list[dict]:
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
-                GROUP BY hour
-                ORDER BY hour
+                GROUP BY 1
+                ORDER BY 1
                 """,
                 time_params,
             )
