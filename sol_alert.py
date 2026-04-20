@@ -707,12 +707,14 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 
 
 # ── Warianty parametrów trend_pullback (kalibracja) ──────────────────────────
-# Klucz → (fib_wejście_lo, fib_wejście_hi, fib_sl, atr_sl_mult, strength_min, force_shadow)
-# baseline  = aktualne ustawienia produkcyjne
-# shallow   = płytszy pullback (fib25-38) z ciaśniejszym SL (fib50), też strength>=4
+# Klucz → (fib_lo, fib_hi, fib_sl, atr_sl, str_min, force_shadow, tp1_only)
+# Live warianty (force_shadow=False, tp1_only=True): pełna pozycja wychodzi na TP1
+# Shadow warianty (*_tp2): identyczna geometria, obie TP — tylko do porównania w panelu
 _PULLBACK_VARIANTS: dict[str, tuple] = {
-    "baseline": (0.38, 0.50, 0.618, 0.3, 5, False),
-    "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
+    "baseline":     (0.38, 0.50, 0.618, 0.3, 5, False, True),   # live, tylko TP1
+    "shallow":      (0.25, 0.38, 0.500, 0.1, 4, False, True),   # live, tylko TP1
+    "baseline_tp2": (0.38, 0.50, 0.618, 0.3, 5, True,  False),  # shadow, TP1+TP2 (panel)
+    "shallow_tp2":  (0.25, 0.38, 0.500, 0.1, 4, True,  False),  # shadow, TP1+TP2 (panel)
 }
 
 
@@ -813,7 +815,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             log_lines.append(f"  ✗ SKIP pullback_short: macro_up (48h={_change48:+.1f}%)")
         elif swing_high > swing_low:
             swing_range = swing_high - swing_low
-            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow, v_tp1_only) in _PULLBACK_VARIANTS.items():
                 if strength < str_min:
                     continue
                 entry_mid = (fib_lo + fib_hi) / 2
@@ -821,12 +823,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 sl  = round(swing_low + fib_sl * swing_range + atr * atr_sl, 2)
                 tp1 = round(swing_low, 2)
                 tp2 = round(swing_low - swing_range * 0.3, 2)
+                tps_list = [tp1] if v_tp1_only else [tp1, tp2]
                 rr_ok     = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
                 above_price = w > current_price * 1.003
                 dist_ok   = w - current_price <= max_entry_dist
                 rr_val    = round((w - tp1) / (sl - w), 1) if (sl - w) > 0 else 0
+                tp1_only_tag = " tp1only" if v_tp1_only else ""
                 log_lines.append(
-                    f"  → pullback_short [{vname}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
+                    f"  → pullback_short [{vname}{tp1_only_tag}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
                     f"SL=${sl:.2f} RR={rr_val} dist=${w-current_price:.2f} "
                     f"above={above_price} dist_ok={dist_ok} rr_ok={rr_ok}"
                 )
@@ -835,7 +839,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     setups.append({
                         "type": "trend_pullback_short", "direction": "short",
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
-                        "tps": [tp1, tp2], "rr": rr_val,
+                        "tps": tps_list, "rr": rr_val,
                         "score": strength,
                         "variant": vname,
                         "force_shadow": v_shadow,
@@ -939,7 +943,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             log_lines.append(f"  ✗ SKIP pullback_long: macro_down (48h={_change48:+.1f}%)")
         elif swing_high > swing_low:
             swing_range = swing_high - swing_low
-            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow, v_tp1_only) in _PULLBACK_VARIANTS.items():
                 if strength < str_min:
                     log_lines.append(f"  → pullback_long [{vname}]: SKIP (strength={strength}<{str_min})")
                     continue
@@ -948,12 +952,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 sl  = round(swing_high - fib_sl * swing_range - atr * atr_sl, 2)
                 tp1 = round(swing_high, 2)
                 tp2 = round(swing_high + swing_range * 0.3, 2)
+                tps_list = [tp1] if v_tp1_only else [tp1, tp2]
                 rr_ok      = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
                 below_price = w < current_price * 0.997
                 dist_ok    = current_price - w <= max_entry_dist
                 rr_val     = round((tp1 - w) / (w - sl), 1) if (w - sl) > 0 else 0
+                tp1_only_tag = " tp1only" if v_tp1_only else ""
                 log_lines.append(
-                    f"  → pullback_long [{vname}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
+                    f"  → pullback_long [{vname}{tp1_only_tag}]: fib{fib_lo:.0%}-{fib_hi:.0%} W=${w:.2f} "
                     f"SL=${sl:.2f} RR={rr_val} dist=${current_price-w:.2f} "
                     f"below={below_price} dist_ok={dist_ok} rr_ok={rr_ok}"
                 )
@@ -962,7 +968,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     setups.append({
                         "type": "trend_pullback_long", "direction": "long",
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
-                        "tps": [tp1, tp2], "rr": rr_val,
+                        "tps": tps_list, "rr": rr_val,
                         "score": strength,
                         "variant": vname,
                         "force_shadow": v_shadow,
@@ -1058,10 +1064,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         rng = detect_range(candles_h1)
         sup, res = rng["support"], rng["resistance"]
         rng_size = res - sup
-        log_lines.append(f"  Range: S=${sup:.2f} R=${res:.2f} size=${rng_size:.2f} (min={atr*2.0:.2f})")
+        log_lines.append(f"  Range: S=${sup:.2f} R=${res:.2f} size=${rng_size:.2f} (min={atr*1.5:.2f})")
         if abs(_change48) > 2.0:
             log_lines.append(f"  ✗ SKIP range: macro trend (48h={_change48:+.1f}%)")
-        elif rng_size > atr * 2.0:
+        elif rng_size > atr * 1.5:
             # range_resistance_short
             w = res - rng_size * 0.1
             sl = res + atr * 1.0
@@ -1077,10 +1083,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             momentum_ok_s = not (bullish_count_s >= 5 or m15_rise > 1.5)
             log_lines.append(f"    momentum: {bullish_count_s}/6 bullish, rise={m15_rise:+.2f}% → {'OK' if momentum_ok_s else 'BLOCKED'}")
 
-            # ── Filtr 2: Resistance touches – opór musi mieć min 3 wcześniejsze testy
+            # ── Filtr 2: Resistance touches – opór musi mieć min 2 wcześniejsze testy
             r_touches = rng["r_touches"]
-            touches_ok_s = r_touches >= 3
-            log_lines.append(f"    r_touches: {r_touches} → {'OK' if touches_ok_s else 'BLOCKED (min 3)'}")
+            touches_ok_s = r_touches >= 2
+            log_lines.append(f"    r_touches: {r_touches} → {'OK' if touches_ok_s else 'BLOCKED (min 2)'}")
 
             # ── Filtr 3: MA alignment – nie shortuj gdy cena > MA30 > MA60 (bullish alignment)
             m15_closes_s = [c["close"] for c in candles_m15]
@@ -1121,10 +1127,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             momentum_ok = not (bearish_count >= 5 or m15_drop < -1.5)
             log_lines.append(f"    momentum: {bearish_count}/6 bearish, drop={m15_drop:+.2f}% → {'OK' if momentum_ok else 'BLOCKED'}")
 
-            # ── Filtr 2: Support touches – wsparcie musi mieć min 3 wcześniejsze odbicia
+            # ── Filtr 2: Support touches – wsparcie musi mieć min 2 wcześniejsze odbicia
             s_touches = rng["s_touches"]
-            touches_ok = s_touches >= 3
-            log_lines.append(f"    s_touches: {s_touches} → {'OK' if touches_ok else 'BLOCKED (min 3)'}")
+            touches_ok = s_touches >= 2
+            log_lines.append(f"    s_touches: {s_touches} → {'OK' if touches_ok else 'BLOCKED (min 2)'}")
 
             # ── Filtr 3: MA alignment – nie kupuj gdy cena < MA30 < MA60 (bearish alignment)
             m15_closes = [c["close"] for c in candles_m15]
@@ -1719,16 +1725,12 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     # Algo2 shadow mode — dedup aktywny nawet gdy shadow=True (obserwacja w warunkach live).
     new_variant = setup.get("variant", "baseline")
-    new_type    = setup.get("type", "")
     if not shadow or model == "Algo2":
         for p in db.get_active_setups():
-            _p_type = p.get("type") or ""
-            _agg    = new_type.startswith("impulse_aggressive") and _p_type.startswith("impulse_aggressive")
             if (p["direction"] == direction and p["model"] == model
-                    and (_agg or p.get("variant", "baseline") == new_variant)):
+                    and p.get("variant", "baseline") == new_variant):
                 old_w1 = p["entries"][0] if p["entries"] else 0
                 diff = abs(old_w1 - new_level)
-                _max_diff = 1.00 if _agg else REPLACE_MAX_DIFF
 
                 if diff < REPLACE_MIN_DIFF:
                     # Identyczny poziom — prawdziwy duplikat
@@ -1736,7 +1738,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
                           f"(już istnieje #{p['setup_id']} od {p['model']})")
                     return
 
-                if diff < _max_diff:
+                if diff < REPLACE_MAX_DIFF:
                     if p.get("entry_hit_at") is not None:
                         # Stary setup już wszedł w pozycję — nie ruszaj
                         print(f"[pending] Pominięto zastępowanie #{p['setup_id']} — już w pozycji")
