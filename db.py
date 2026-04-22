@@ -42,6 +42,10 @@ _EXCHANGE_FIELDS = [
     "exchange_done",
 ]
 
+# Bezpieczny cast qty: pomija wartości nienumeryczne (np. 'PENDING', puste, przecinek zamiast kropki).
+# Używane we wszystkich zapytaniach read-only, żeby pojedynczy zepsuty rekord nie wywracał całego endpointu 500.
+_SAFE_QTY_SQL = "CASE WHEN exchange_qty_full ~ '^[0-9]+(\\.[0-9]+)?$' THEN exchange_qty_full::numeric ELSE NULL END"
+
 
 def get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
@@ -243,6 +247,7 @@ def insert_setup(row: dict) -> int | None:
                     WHERE resolved = FALSE
                       AND direction = %(direction)s
                       AND model = %(model)s
+                      AND COALESCE(variant, 'baseline') = %(variant)s
                       AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
                 ) OR (%(shadow)s = TRUE AND %(model)s != 'Algo2')
                 RETURNING setup_id
@@ -251,7 +256,7 @@ def insert_setup(row: dict) -> int | None:
             )
             result = cur.fetchone()
             if result is None:
-                log.info(f"[db] Duplikat na poziomie DB — pominięto ({row.get('model')} {row.get('direction')})")
+                log.info(f"[db] Duplikat na poziomie DB — pominięto ({row.get('model')} {row.get('direction')} variant={row.get('variant', 'baseline')})")
                 return None
             setup_id = result[0]
     log.info(f"[db] Nowy setup #{setup_id} ({row.get('model')} {row.get('direction')})")
@@ -583,7 +588,7 @@ def get_summary_stats() -> dict:
                     THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
                     ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                 END *
-                COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                COALESCE({_SAFE_QTY_SQL},
                      FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
             END
         )"""
@@ -626,10 +631,10 @@ def get_summary_stats() -> dict:
                          AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
                     THEN CASE direction WHEN 'long'
                          THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                              COALESCE({_SAFE_QTY_SQL},
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                              COALESCE({_SAFE_QTY_SQL},
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          END
                 END"""
@@ -711,7 +716,7 @@ def get_period_stats(period: str) -> dict:
                             THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
                             ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                         END *
-                        COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                        COALESCE({_SAFE_QTY_SQL},
                              FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                     END
                 )"""
@@ -724,10 +729,10 @@ def get_period_stats(period: str) -> dict:
                          AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
                     THEN CASE direction WHEN 'long'
                          THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                              COALESCE({_SAFE_QTY_SQL},
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                              COALESCE({_SAFE_QTY_SQL},
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          END
                 END"""
@@ -920,7 +925,7 @@ def get_resolved_filtered(
                  THEN (avg_exit - COALESCE(avg_entry,(entries->>0)::numeric))
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - avg_exit)
                  END *
-                 COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                 COALESCE({_SAFE_QTY_SQL},
                       FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
             END
         )"""
@@ -933,10 +938,10 @@ def get_resolved_filtered(
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      COALESCE({_SAFE_QTY_SQL},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      COALESCE({_SAFE_QTY_SQL},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
@@ -1153,8 +1158,6 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
     _tu        = f"COALESCE(trade_usdt, {trade_usdt})"
     wins_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
     trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
-    # Bezpieczny cast qty: pomija wartości nienumeryczne (np. błędne dane)
-    _safe_qty = "CASE WHEN exchange_qty_full ~ '^[0-9]+(\\.[0-9]+)?$' THEN exchange_qty_full::numeric ELSE NULL END"
     # TP1-only PnL: dla wygranych liczy jakby cała pozycja wyszła na TP1,
     # dla SL używa rzeczywistego pnl_usd (pełna strata pozostaje stratą).
     tp1_only = f"""
@@ -1166,10 +1169,10 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE({_safe_qty},
+                      COALESCE({_SAFE_QTY_SQL},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE({_safe_qty},
+                      COALESCE({_SAFE_QTY_SQL},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
@@ -1229,7 +1232,6 @@ def get_algo2_daily_stats(
     variant_sql = ""
     if variants:
         variant_sql = "AND COALESCE(variant, 'baseline') = ANY(%(variants)s)"
-    _safe_qty = "CASE WHEN exchange_qty_full ~ '^[0-9]+(\\.[0-9]+)?$' THEN exchange_qty_full::numeric ELSE NULL END"
     tp1_only = f"""
         CASE
             WHEN result = 'SL'
@@ -1239,10 +1241,10 @@ def get_algo2_daily_stats(
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE({_safe_qty},
+                      COALESCE({_SAFE_QTY_SQL},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE({_safe_qty},
+                      COALESCE({_SAFE_QTY_SQL},
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""

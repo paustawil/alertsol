@@ -2276,8 +2276,12 @@ def api_resolved(
     result_list  = [r.strip() for r in results.split(",")  if r.strip()] if results  else None
     model_list   = [m.strip() for m in models.split(",")   if m.strip()] if models   else None
     variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
-    data = db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset, model_list, variant_list)
-    return data
+    try:
+        return db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset, model_list, variant_list)
+    except Exception:
+        log.exception("api_resolved failed (results=%s, models=%s, variants=%s, date_from=%s, date_to=%s)",
+                      results, models, variants, date_from, date_to)
+        raise
 
 
 @app.get("/api/resolved/csv")
@@ -2772,7 +2776,11 @@ def api_period_stats(period: str = "24h"):
 @app.get("/api/algo2/type-stats")
 def api_algo2_type_stats(period: int | None = None):
     """Statystyki per typ setupu dla Algo2. period = liczba dni (np. 7, 30) lub brak = all-time."""
-    return db.get_algo2_type_stats(period)
+    try:
+        return db.get_algo2_type_stats(period)
+    except Exception:
+        log.exception("api_algo2_type_stats failed (period=%s)", period)
+        raise
 
 
 @app.get("/api/algo2/time-heatmap")
@@ -2788,13 +2796,21 @@ def api_algo2_time_heatmap(period: int | None = None):
 @app.get("/api/algo2/rr-analysis")
 def api_algo2_rr_analysis(period: int | None = None):
     """Analiza RR dla Algo2: deklarowany RR vs TP1/TP2 hit rate. period = liczba dni lub brak = all-time."""
-    return db.get_algo2_rr_analysis(period)
+    try:
+        return db.get_algo2_rr_analysis(period)
+    except Exception:
+        log.exception("api_algo2_rr_analysis failed (period=%s)", period)
+        raise
 
 
 @app.get("/api/algo2/variant-stats")
 def api_algo2_variant_stats(period: int | None = None, _: None = Security(_require_api_key)):
     """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
-    return db.get_algo2_variant_stats(period)
+    try:
+        return db.get_algo2_variant_stats(period)
+    except Exception:
+        log.exception("api_algo2_variant_stats failed (period=%s)", period)
+        raise
 
 
 @app.get("/api/algo2/variant-summary")
@@ -2816,7 +2832,11 @@ def api_algo2_daily_stats(period: int | None = None, variants: str | None = None
                Brak = wszystkie warianty.
     """
     variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
-    return db.get_algo2_daily_stats(period, variant_list)
+    try:
+        return db.get_algo2_daily_stats(period, variant_list)
+    except Exception:
+        log.exception("api_algo2_daily_stats failed (period=%s, variants=%s)", period, variants)
+        raise
 
 
 @app.get("/api/analytics/export")

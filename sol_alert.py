@@ -2456,8 +2456,9 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     Zakłada, że throttle został już sprawdzony i _last_algo2_ts zaktualizowany przez wywołującego.
 
     Logika zapisu:
-    - force_shadow (np. impulse_aggressive): zawsze shadow=True, bez GPT3, bez Telegrama.
-    - regularne (pozostałe): najlepszy RR → walidacja → GPT3 → real order;
+    - force_shadow=True (np. impulse_aggressive, *_tp2): zawsze shadow=True, bez GPT3, bez Telegrama.
+    - regularne (force_shadow=False lub brak): najlepszy RR → walidacja → GPT3 → real order;
+      shadow = best.get("force_shadow", ALGO2_SHADOW_MODE) — fallback do globalnego trybu;
       gorsze RR → shadow=True dla analizy porównawczej.
 
     Zwraca: 'rejected' gdy GPT3 Validator odrzucił best (main() powinien wtedy return),
@@ -2552,7 +2553,9 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         print("[algo2] IMPULSE — GPT3 Validator pominięty.")
     # ── koniec walidatora ─────────────────────────────────────────────────
 
-    is_shadow = ALGO2_SHADOW_MODE
+    # Respektuj per-wariant force_shadow (np. baseline/shallow pullback = False → live),
+    # a dla setupów bez jawnie ustawionego flaga — fallback do globalnego ALGO2_SHADOW_MODE.
+    is_shadow = best.get("force_shadow", ALGO2_SHADOW_MODE)
     save_pending(best, "Algo2", "", current, shadow=is_shadow)
     if best.get("setup_id"):
         log_to_alerty("Algo2", "", best)
