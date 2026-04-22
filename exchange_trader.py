@@ -207,17 +207,18 @@ def _set_leverage(client: BitgetClient):
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
 def _place_entry_plan_orders(
-    client: BitgetClient, s: dict, half_qty: float
+    client: BitgetClient, s: dict, full_qty: float
 ) -> tuple[str | None, str | None]:
     """
-    Składa DWA plan ordery przy W1, każdy na half_qty z preset TP i SL:
-      Plan 1: half_qty, preset TP=TP1, preset SL=SL
-      Plan 2: half_qty, preset TP=TP2, preset SL=SL
+    Składa plan order(s) przy W1 z preset TP i SL.
+
+    tp1-only (tps=[tp1]): JEDEN plan order, full_qty, preset TP=TP1, preset SL=SL.
+    split (tps=[tp1,tp2]): DWA plan ordery, każdy half_qty, preset TP=TP1/TP2, preset SL=SL.
 
     Po triggerze każdego plan order Bitget automatycznie tworzy odpowiednie
-    TPSL ordery (profit_plan + loss_plan) dla tej połowy pozycji.
+    TPSL ordery (profit_plan + loss_plan) dla tej części pozycji.
 
-    Zwraca (plan1_oid, plan2_oid) lub (None, None) przy błędzie.
+    Zwraca (plan1_oid, plan2_oid). Dla tp1-only plan2_oid=None.
     """
     direction = s["direction"]
     w1        = s["entries"][0]
@@ -228,14 +229,14 @@ def _place_entry_plan_orders(
     sl        = s.get("sl")
     sid       = s.get("setup_id", "?")
 
-    def _place_one(tp: float | None, label: str) -> str | None:
+    def _place_one(tp: float | None, qty: float, label: str) -> str | None:
         params = {
             "symbol":       SYMBOL,
             "productType":  PRODUCT_TYPE,
             "marginMode":   MARGIN_MODE,
             "marginCoin":   MARGIN_COIN,
             "planType":     "normal_plan",
-            "size":         _fmt_qty(half_qty),
+            "size":         _fmt_qty(qty),
             "triggerPrice": _fmt_price(w1),
             "triggerType":  "mark_price",
             "side":         side,
@@ -253,7 +254,7 @@ def _place_entry_plan_orders(
             resp = client.post("/api/v2/mix/order/place-plan-order", params)
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
-                print(f"[exchange] #{sid} Plan {label}: {oid} | {side} {_fmt_qty(half_qty)} SOL"
+                print(f"[exchange] #{sid} Plan {label}: {oid} | {side} {_fmt_qty(qty)} SOL"
                       f" @ W1={w1} | TP={tp} SL={sl}")
                 return oid
             log.error(f"[exchange] #{sid} place plan {label}: code={resp.get('code')} msg={resp.get('msg')}")
@@ -261,11 +262,18 @@ def _place_entry_plan_orders(
             log.error(f"[exchange] #{sid} place plan {label}: {e}")
         return None
 
-    plan1_oid = _place_one(tp1, "1(TP1)")
+    if tp2 is None:
+        # tp1-only: JEDEN plan order z full_qty — całość pozycji zamyka się na TP1
+        plan1_oid = _place_one(tp1, full_qty, "1(TP1-only, full_qty)")
+        return plan1_oid, None
+
+    # split: DWA plan ordery z half_qty każdy (klasyczny TP1+TP2)
+    half_qty  = _round_qty(full_qty / 2)
+    plan1_oid = _place_one(tp1, half_qty, "1(TP1)")
     if not plan1_oid:
         return None, None
 
-    plan2_oid = _place_one(tp2, "2(TP2)")
+    plan2_oid = _place_one(tp2, half_qty, "2(TP2)")
     if not plan2_oid:
         # Cofnij plan1 żeby nie zostawić samotnego half-qty plan order
         log.error(f"[exchange] #{sid} plan2 nieudany — anuluję plan1 {plan1_oid}")
@@ -317,7 +325,7 @@ def _place_tpsl_orders_split(
             })
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
-                print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(half_qty)} SOL @ {price}")
+                print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(qty)} SOL @ {price}")
                 return oid
             log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
         except Exception as e:
@@ -341,7 +349,7 @@ def _place_tpsl_orders_split(
             })
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
-                print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(half_qty)} SOL @ {sl}")
+                print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(qty)} SOL @ {sl}")
                 return oid
             log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
         except Exception as e:
@@ -815,16 +823,26 @@ def _sync_inner():
                 continue
             w1       = entries[0]
             full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-            half_qty = _round_qty(full_qty / 2)
-            plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, half_qty)
-            if plan1_oid and plan2_oid:
+            tp1_only = len(s.get("tps", [])) <= 1
+            plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, full_qty)
+            # Dla tp1-only oczekujemy plan2_oid=None (jeden plan order na full_qty).
+            # Dla split oczekujemy obu oid.
+            placement_ok = plan1_oid and (plan2_oid or tp1_only)
+            if placement_ok:
+                # exchange_qty_half = qty użyty dla pojedynczej pary TP/SL:
+                #   tp1-only: full_qty (jedna para TP1/SL na całej pozycji)
+                #   split:    half_qty (dwie pary TP1/SL i TP2/SL po połowie)
+                qty_half = full_qty if tp1_only else _round_qty(full_qty / 2)
                 s["exchange_plan_oid"]        = plan1_oid
                 s["exchange_plan2_oid"]       = plan2_oid
                 s["exchange_qty_full"]        = _fmt_qty(full_qty)
-                s["exchange_qty_half"]        = _fmt_qty(half_qty)
+                s["exchange_qty_half"]        = _fmt_qty(qty_half)
                 s["exchange_position_opened"] = False
                 modified = True
-                print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
+                if tp1_only:
+                    print(f"[exchange] {label}: plan order złożony tp1-only ({_fmt_qty(full_qty)} SOL @ W1={w1})")
+                else:
+                    print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(qty_half)} SOL each @ W1={w1})")
             else:
                 db.release_plan_order_claim(s["setup_id"])
             continue

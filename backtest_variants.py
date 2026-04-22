@@ -27,7 +27,7 @@ from sol_alert import (
     detect_market_regime,
     _PULLBACK_VARIANTS,
     calc_atr,
-    find_swing_points,
+    find_structural_swing,
     _hits,
     SYMBOL,
 )
@@ -261,9 +261,9 @@ def gen_pullback_setups_for_snapshot(
     max_entry_dist = current_price * 0.03
 
     if direction == "down":
-        swing_high, swing_low = find_swing_points(candles_h1, n=12)
-        swing_low  = min(swing_low,  current_price)
-        swing_high = max(swing_high, current_price)
+        swing_high, swing_low = find_structural_swing(
+            candles_h1, "down", current_price, lookback=12, pre_peak_window=4
+        )
         tp_direction = "short"
         tp1_base = swing_low
         tp2_base = lambda r: swing_low - r * 0.3
@@ -272,9 +272,9 @@ def gen_pullback_setups_for_snapshot(
         def _rr(w, tp1, sl): return round((w - tp1) / (sl - w), 1) if sl > w else 0
         def _ok(w): return w > current_price * 1.003 and (w - current_price) <= max_entry_dist
     else:
-        swing_high, swing_low = find_swing_points(candles_h1, n=12)
-        swing_low  = min(swing_low,  current_price)
-        swing_high = max(swing_high, current_price)
+        swing_high, swing_low = find_structural_swing(
+            candles_h1, "up", current_price, lookback=12, pre_peak_window=4
+        )
         tp_direction = "long"
         tp1_base = swing_high
         tp2_base = lambda r: swing_high + r * 0.3
