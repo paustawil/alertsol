@@ -872,12 +872,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
 
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
-        # Swing strukturalny: zakotwiczony w świecy z najniższym low; swing_high
-        # start impulsu: cofamy się od dołka, szukamy lokalnego max z zakresem >= 2*ATR
-        swing_high, swing_low = find_structural_swing(
-            candles_h1, "down", current_price
-        )
-        log_lines.append(f"  Swing (strukturalny): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+        swing_low  = min(swing_low,  current_price)
+        swing_high = max(swing_high, current_price)
+        log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
         # trend_pullback_short — warianty parametrów (baseline + eksperymenty)
         if _macro_up:
@@ -1015,12 +1013,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
-        # Swing strukturalny: zakotwiczony w świecy z najwyższym high; swing_low
-        # start impulsu: cofamy się od szczytu, szukamy lokalnego min z zakresem >= 2*ATR
-        swing_high, swing_low = find_structural_swing(
-            candles_h1, "up", current_price
-        )
-        log_lines.append(f"  Swing (strukturalny): high=${swing_high:.2f} low=${swing_low:.2f}")
+        swing_high, swing_low = find_swing_points(candles_h1, n=12)
+        swing_low  = min(swing_low,  current_price)
+        swing_high = max(swing_high, current_price)
+        log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f}")
 
         # trend_pullback_long — warianty parametrów (baseline + eksperymenty)
         if _macro_down:
