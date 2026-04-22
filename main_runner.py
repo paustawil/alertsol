@@ -593,10 +593,14 @@ def dashboard():
     <label style="color:#aaa;font-size:0.85em">Scenariusz:</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="baseline" checked> tp·baseline</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="shallow" checked> tp·shallow</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="anchored_baseline" checked> tp·anch·base</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="anchored_shallow" checked> tp·anch·shal</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="impulse_continuation_short" checked> imp_cont·S</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="impulse_continuation_long" checked> imp_cont·L</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="h1_atr" checked> imp_agg·h1</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="m15_atr" checked> imp_agg·m15</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="closed_h1" checked> imp_agg·closed</label>
+    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="forming_h1" checked> imp_agg·forming</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="range_resistance_short" checked> range·S</label>
     <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="range_support_long" checked> range·L</label>
     <button class="btn-action" onclick="loadA2Daily()">Filtruj</button>
@@ -656,10 +660,14 @@ def dashboard():
   <label style="color:#aaa;font-size:0.85em">Scenariusz:</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="baseline" checked> tp·baseline</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="shallow" checked> tp·shallow</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="anchored_baseline" checked> tp·anch·base</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="anchored_shallow" checked> tp·anch·shal</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="impulse_continuation_short" checked> imp_cont·S</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="impulse_continuation_long" checked> imp_cont·L</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="h1_atr" checked> imp_agg·h1</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="m15_atr" checked> imp_agg·m15</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="closed_h1" checked> imp_agg·closed</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="forming_h1" checked> imp_agg·forming</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_resistance_short" checked> range·S</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_support_long" checked> range·L</label>
   <span style="width:1px;height:16px;background:#444;display:inline-block;margin:0 4px"></span>

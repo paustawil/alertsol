@@ -989,11 +989,20 @@ def get_resolved_filtered(
                 params,
             )
             totals_row = dict(cur.fetchone())
+            def _safe_float(v) -> float:
+                # Decimal('NaN') raises InvalidOperation in bool context — guard it.
+                if v is None:
+                    return 0.0
+                try:
+                    f = float(v)
+                    return f if f == f else 0.0  # f != f iff NaN
+                except Exception:
+                    return 0.0
             totals = {
-                "sum_pnl_usd":      float(totals_row["sum_pnl_usd"] or 0),
-                "sum_pnl_pct":      float(totals_row["sum_pnl_pct"] or 0),
-                "sum_tp1_only_usd": float(totals_row["sum_tp1_only_usd"] or 0),
-                "sum_tp1_only_pct": float(totals_row["sum_tp1_only_pct"] or 0),
+                "sum_pnl_usd":      _safe_float(totals_row["sum_pnl_usd"]),
+                "sum_pnl_pct":      _safe_float(totals_row["sum_pnl_pct"]),
+                "sum_tp1_only_usd": _safe_float(totals_row["sum_tp1_only_usd"]),
+                "sum_tp1_only_pct": _safe_float(totals_row["sum_tp1_only_pct"]),
                 "trade_usdt":       trade_usdt,
             }
 

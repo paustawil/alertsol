@@ -143,13 +143,17 @@ CREATE INDEX IF NOT EXISTS idx_setups_variant ON setups (variant);
 
 -- Backfill trade_usdt: odtwórz z exchange_qty_full * avg_entry / leverage
 -- (odwrotność wzoru: qty = FLOOR(trade_usdt * leverage / entry / 0.1) * 0.1)
+-- Bezpieczny cast: pomija rekordy z nienumerycznym qty (np. 'PENDING', zepsute dane
+-- migracyjne) żeby startup nie failował gdy w DB jest taki rekord.
 UPDATE setups SET trade_usdt = ROUND(
-    NULLIF(exchange_qty_full, '')::numeric
+    (CASE WHEN exchange_qty_full ~ '^[0-9]+(\.[0-9]+)?$'
+          THEN exchange_qty_full::numeric ELSE NULL END)
     * COALESCE(avg_entry, (entries->>0)::numeric)
     / 20, 2)
 WHERE trade_usdt IS NULL
   AND exchange_qty_full IS NOT NULL
   AND exchange_qty_full != ''
+  AND exchange_qty_full ~ '^[0-9]+(\.[0-9]+)?$'
   AND COALESCE(avg_entry, (entries->>0)::numeric) IS NOT NULL;
 
 -- Przelicz pnl_pct dla setupów z odtworzonym trade_usdt (naprawia błędne %)
