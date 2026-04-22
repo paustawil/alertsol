@@ -689,6 +689,43 @@ def find_swing_points(candles_h1: list[dict], n: int = 12):
     return max(c["high"] for c in recent), min(c["low"] for c in recent)
 
 
+def find_structural_swing(
+    candles_h1: list[dict],
+    direction: str,
+    current_price: float,
+    lookback: int = 12,
+    pre_peak_window: int = 4,
+) -> tuple[float, float]:
+    """Swing strukturalny — zakotwiczony na aktualnym ruchu, nie zwykłe min/max.
+
+    Dla direction='up':
+      swing_high = max(high, current_price) w `lookback` ostatnich H1 świec
+      swing_low  = min(low) w oknie `pre_peak_window` świec kończącym się na swing_high_idx
+    Dla direction='down': mirror (swing_low od lookback, swing_high z okna przed swing_low).
+
+    Intuicja: jeżeli peak w trendzie up powstał 2h temu, to swing_low szukamy tylko
+    w 4h przed tym peakiem (strefa z której zaczął się ruch), nie w pełnym 12h oknie
+    które może zawierać lowy z zupełnie innej fazy rynku.
+    """
+    recent = candles_h1[-lookback:]
+    if not recent:
+        return current_price, current_price
+    if direction == "up":
+        highs = [c["high"] for c in recent]
+        idx = max(range(len(highs)), key=lambda i: highs[i])
+        swing_high = max(highs[idx], current_price)
+        start = max(0, idx - pre_peak_window + 1)
+        swing_low = min(c["low"] for c in recent[start:idx + 1])
+        return swing_high, swing_low
+    # down
+    lows = [c["low"] for c in recent]
+    idx = min(range(len(lows)), key=lambda i: lows[i])
+    swing_low = min(lows[idx], current_price)
+    start = max(0, idx - pre_peak_window + 1)
+    swing_high = max(c["high"] for c in recent[start:idx + 1])
+    return swing_high, swing_low
+
+
 def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles: int = 10):
     """Szuka konsolidacji — wąski zakres w ostatnich świecach H1.
     Iteruje od najszerszego okna do najwęższego, żeby uchwycić faktyczne granice
@@ -708,13 +745,16 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 
 # ── Warianty parametrów trend_pullback (kalibracja) ──────────────────────────
 # Klucz → (fib_lo, fib_hi, fib_sl, atr_sl, str_min, force_shadow, tp1_only)
+# Prefix `anchored_` oznacza swing strukturalny (find_structural_swing) zamiast
+# prostego min/max w 12h oknie — swing_low liczony w 4h oknie kończącym się
+# w swing_high_idx (strefa startu aktualnego ruchu).
 # Live warianty (force_shadow=False, tp1_only=True): pełna pozycja wychodzi na TP1
 # Shadow warianty (*_tp2): identyczna geometria, obie TP — tylko do porównania w panelu
 _PULLBACK_VARIANTS: dict[str, tuple] = {
-    "baseline":     (0.38, 0.50, 0.618, 0.3, 5, False, True),   # live, tylko TP1
-    "shallow":      (0.25, 0.38, 0.500, 0.1, 4, False, True),   # live, tylko TP1
-    "baseline_tp2": (0.38, 0.50, 0.618, 0.3, 5, True,  False),  # shadow, TP1+TP2 (panel)
-    "shallow_tp2":  (0.25, 0.38, 0.500, 0.1, 4, True,  False),  # shadow, TP1+TP2 (panel)
+    "anchored_baseline":     (0.38, 0.50, 0.618, 0.3, 5, False, True),   # live, tylko TP1
+    "anchored_shallow":      (0.25, 0.38, 0.500, 0.1, 4, False, True),   # live, tylko TP1
+    "anchored_baseline_tp2": (0.38, 0.50, 0.618, 0.3, 5, True,  False),  # shadow, TP1+TP2 (panel)
+    "anchored_shallow_tp2":  (0.25, 0.38, 0.500, 0.1, 4, True,  False),  # shadow, TP1+TP2 (panel)
 }
 
 
@@ -804,11 +844,12 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
 
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
-        swing_high, swing_low = find_swing_points(candles_h1, n=12)
-        # Uwzględnij aktualną cenę jako przybliżenie niezamkniętej świecy H1
-        swing_low = min(swing_low, current_price)
-        swing_high = max(swing_high, current_price)
-        log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
+        # Swing strukturalny: zakotwiczony w świecy z najniższym low; swing_high
+        # liczony z 4h okna kończącego się w tej świecy (strefa startu ruchu w dół).
+        swing_high, swing_low = find_structural_swing(
+            candles_h1, "down", current_price, lookback=12, pre_peak_window=4
+        )
+        log_lines.append(f"  Swing (strukturalny, pre_peak=4h): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
         # trend_pullback_short — warianty parametrów (baseline + eksperymenty)
         if _macro_up:
@@ -884,59 +925,74 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
 
-        # impulse_aggressive_short — proto-impulse: wykryj na 1. świecy M15, wejdź na 2.
-        _agg_vol   = regime.get("vol_ratio", 1.0)
-        _agg_spike = regime.get("spike_score", 0)
-        atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
-        _ref_agg  = candles_h1[-26:-2] if len(candles_h1) >= 26 else candles_h1[:-2]
+        # impulse_aggressive_short — dwa warianty porównujące świece zamknięte vs w formacji.
+        # Każdy wariant spójnie używa tego samego podzbioru świec M15 dla wszystkich
+        # wskaźników (vol_ratio, spike_score, ATR_M15, last_body), żeby mieć czysty test
+        # wpływu świecy w formacji na detekcję proto-impulsu.
+        _ref_agg      = candles_h1[-26:-2] if len(candles_h1) >= 26 else candles_h1[:-2]
         _ref_low_agg  = min(c["low"] for c in _ref_agg)
-        _last_body_s  = candles_m15[-1]["close"] - candles_m15[-1]["open"]
-        _proto_short  = (current_price < _ref_low_agg
-                         and _agg_vol >= 2.0
-                         and _last_body_s <= -atr_m15 * 0.8)
-        _trigger_agg_short = regime_name.startswith("IMPULSE_") or _proto_short
-        log_lines.append(
-            f"  → impulse_aggressive_short: vol={_agg_vol:.1f}x spike={_agg_spike} "
-            f"proto={_proto_short}(body={_last_body_s:.2f} vs -{atr_m15*0.8:.2f}) trigger={_trigger_agg_short}"
-        )
-        if _trigger_agg_short:
-            if _agg_spike >= 2:
-                log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
-            elif _agg_vol < 2.0:
-                log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
+        for _mode, _c_m15 in [("closed_h1", candles_m15[:-1]), ("forming_h1", candles_m15)]:
+            if len(_c_m15) < 20:
+                continue
+            _atr_m15_v = calc_atr(_c_m15[-20:])
+            _last_body_s = _c_m15[-1]["close"] - _c_m15[-1]["open"]
+            _r12 = _c_m15[-12:]
+            _avg_v = sum(c["volume"] for c in _r12[:-2]) / max(len(_r12[:-2]), 1)
+            _last_v = sum(c["volume"] for c in _r12[-2:]) / 2
+            _agg_vol_v = _last_v / _avg_v if _avg_v > 0 else 1.0
+            _r3 = _c_m15[-3:]
+            _bodies = [abs(c["close"] - c["open"]) + 0.001 for c in _r3]
+            _up_wicks = [min(c["open"], c["close"]) - c["low"] for c in _r3]  # rejection w dół dla short (świece odbijające w górę)
+            _agg_spike_v = 1 if sum(w / b for w, b in zip(_up_wicks, _bodies)) / 3 > 1.5 else 0
+            _proto_short = (current_price < _ref_low_agg
+                            and _agg_vol_v >= 2.0
+                            and _last_body_s <= -_atr_m15_v * 0.8)
+            _trigger = regime_name.startswith("IMPULSE_") or _proto_short
+            log_lines.append(
+                f"  → impulse_aggressive_short [{_mode}]: vol={_agg_vol_v:.1f}x spike={_agg_spike_v} "
+                f"proto={_proto_short}(body={_last_body_s:.2f} vs -{_atr_m15_v*0.8:.2f}) trigger={_trigger}"
+            )
+            if not _trigger:
+                continue
+            if _agg_spike_v >= 2:
+                log_lines.append(f"    ✗ SKIP [{_mode}]: spike_score={_agg_spike_v}>=2")
+                continue
+            if _agg_vol_v < 2.0:
+                log_lines.append(f"    ✗ SKIP [{_mode}]: vol={_agg_vol_v:.1f}x<2.0")
+                continue
+            _body_fade = "malejace_body_M15" in exhaustion_signals
+            _vol_fade  = "malejacy_wolumen_M15" in exhaustion_signals
+            if _body_fade and _vol_fade:
+                log_lines.append(f"    ✗ SKIP [{_mode}]: body+vol wyczerpanie (impuls wygasający)")
+                continue
+            w = round(current_price, 2)
+            _vatr, _tp2_mult = atr, 3.0
+            _sl  = round(current_price + _vatr * 1.2, 2)
+            _tp1 = round(current_price - _vatr * 2.0, 2)
+            _tp2 = round(current_price - _vatr * _tp2_mult, 2)
+            _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
+            log_lines.append(f"    [{_mode}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+            if _rr_ok:
+                log_lines.append(f"    ✓ ACCEPTED [{_mode}] (force_shadow — tryb testowy)")
+                setups.append({
+                    "type": "impulse_aggressive_short", "direction": "short",
+                    "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                    "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
+                    "score": strength, "variant": _mode,
+                    "reasoning": f"{regime_name}({strength}); vol={_agg_vol_v:.1f}x aggressive [{_mode}]",
+                    "force_shadow": True,
+                })
             else:
-                _body_fade = "malejace_body_M15" in exhaustion_signals
-                _vol_fade  = "malejacy_wolumen_M15" in exhaustion_signals
-                if _body_fade and _vol_fade:
-                    log_lines.append(f"    ✗ SKIP: body+vol wyczerpanie (impuls wygasający)")
-                else:
-                    w = round(current_price, 2)
-                    for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
-                        _sl  = round(current_price + _vatr * 1.2, 2)
-                        _tp1 = round(current_price - _vatr * 2.0, 2)
-                        _tp2 = round(current_price - _vatr * _tp2_mult, 2)
-                        _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
-                        log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
-                        if _rr_ok:
-                            log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
-                            setups.append({
-                                "type": "impulse_aggressive_short", "direction": "short",
-                                "entries": [w], "sl": _sl, "sl_after_tp1": w,
-                                "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
-                                "score": strength, "variant": _vname,
-                                "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
-                                "force_shadow": True,
-                            })
-                        else:
-                            log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
+                log_lines.append(f"    ✗ REJECTED [{_mode}]: RR<1.5")
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
-        swing_high, swing_low = find_swing_points(candles_h1, n=12)
-        # Uwzględnij aktualną cenę jako przybliżenie niezamkniętej świecy H1
-        swing_low = min(swing_low, current_price)
-        swing_high = max(swing_high, current_price)
-        log_lines.append(f"  Swing (12 H1+cena): high=${swing_high:.2f} low=${swing_low:.2f}")
+        # Swing strukturalny: zakotwiczony w świecy z najwyższym high; swing_low
+        # liczony z 4h okna kończącego się w tej świecy (strefa startu rally).
+        swing_high, swing_low = find_structural_swing(
+            candles_h1, "up", current_price, lookback=12, pre_peak_window=4
+        )
+        log_lines.append(f"  Swing (strukturalny, pre_peak=4h): high=${swing_high:.2f} low=${swing_low:.2f}")
 
         # trend_pullback_long — warianty parametrów (baseline + eksperymenty)
         if _macro_down:
@@ -1013,51 +1069,64 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
 
-        # impulse_aggressive_long — proto-impulse: wykryj na 1. świecy M15, wejdź na 2.
-        _agg_vol   = regime.get("vol_ratio", 1.0)
-        _agg_spike = regime.get("spike_score", 0)
-        atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
-        _ref_agg  = candles_h1[-26:-2] if len(candles_h1) >= 26 else candles_h1[:-2]
+        # impulse_aggressive_long — dwa warianty porównujące świece zamknięte vs w formacji.
+        # Każdy wariant spójnie używa tego samego podzbioru świec M15 dla wszystkich
+        # wskaźników (vol_ratio, spike_score, ATR_M15, last_body).
+        _ref_agg      = candles_h1[-26:-2] if len(candles_h1) >= 26 else candles_h1[:-2]
         _ref_high_agg = max(c["high"] for c in _ref_agg)
-        _last_body_l  = candles_m15[-1]["close"] - candles_m15[-1]["open"]
-        _proto_long   = (current_price > _ref_high_agg
-                         and _agg_vol >= 2.0
-                         and _last_body_l >= atr_m15 * 0.8)
-        _trigger_agg_long = regime_name.startswith("IMPULSE_") or _proto_long
-        log_lines.append(
-            f"  → impulse_aggressive_long: vol={_agg_vol:.1f}x spike={_agg_spike} "
-            f"proto={_proto_long}(body={_last_body_l:.2f} vs {atr_m15*0.8:.2f}) trigger={_trigger_agg_long}"
-        )
-        if _trigger_agg_long:
-            if _agg_spike >= 2:
-                log_lines.append(f"    ✗ SKIP: spike_score={_agg_spike}>=2")
-            elif _agg_vol < 2.0:
-                log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
+        for _mode, _c_m15 in [("closed_h1", candles_m15[:-1]), ("forming_h1", candles_m15)]:
+            if len(_c_m15) < 20:
+                continue
+            _atr_m15_v = calc_atr(_c_m15[-20:])
+            _last_body_l = _c_m15[-1]["close"] - _c_m15[-1]["open"]
+            _r12 = _c_m15[-12:]
+            _avg_v = sum(c["volume"] for c in _r12[:-2]) / max(len(_r12[:-2]), 1)
+            _last_v = sum(c["volume"] for c in _r12[-2:]) / 2
+            _agg_vol_v = _last_v / _avg_v if _avg_v > 0 else 1.0
+            _r3 = _c_m15[-3:]
+            _bodies = [abs(c["close"] - c["open"]) + 0.001 for c in _r3]
+            _down_wicks = [c["high"] - max(c["open"], c["close"]) for c in _r3]  # rejection w górę dla long
+            _agg_spike_v = 1 if sum(w / b for w, b in zip(_down_wicks, _bodies)) / 3 > 1.5 else 0
+            _proto_long = (current_price > _ref_high_agg
+                           and _agg_vol_v >= 2.0
+                           and _last_body_l >= _atr_m15_v * 0.8)
+            _trigger = regime_name.startswith("IMPULSE_") or _proto_long
+            log_lines.append(
+                f"  → impulse_aggressive_long [{_mode}]: vol={_agg_vol_v:.1f}x spike={_agg_spike_v} "
+                f"proto={_proto_long}(body={_last_body_l:.2f} vs {_atr_m15_v*0.8:.2f}) trigger={_trigger}"
+            )
+            if not _trigger:
+                continue
+            if _agg_spike_v >= 2:
+                log_lines.append(f"    ✗ SKIP [{_mode}]: spike_score={_agg_spike_v}>=2")
+                continue
+            if _agg_vol_v < 2.0:
+                log_lines.append(f"    ✗ SKIP [{_mode}]: vol={_agg_vol_v:.1f}x<2.0")
+                continue
+            _body_fade = "malejace_body_M15" in exhaustion_signals
+            _vol_fade  = "malejacy_wolumen_M15" in exhaustion_signals
+            if _body_fade and _vol_fade:
+                log_lines.append(f"    ✗ SKIP [{_mode}]: body+vol wyczerpanie (impuls wygasający)")
+                continue
+            w = round(current_price, 2)
+            _vatr, _tp2_mult = atr, 3.0
+            _sl  = round(current_price - _vatr * 1.2, 2)
+            _tp1 = round(current_price + _vatr * 2.0, 2)
+            _tp2 = round(current_price + _vatr * _tp2_mult, 2)
+            _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
+            log_lines.append(f"    [{_mode}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+            if _rr_ok:
+                log_lines.append(f"    ✓ ACCEPTED [{_mode}] (force_shadow — tryb testowy)")
+                setups.append({
+                    "type": "impulse_aggressive_long", "direction": "long",
+                    "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                    "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
+                    "score": strength, "variant": _mode,
+                    "reasoning": f"{regime_name}({strength}); vol={_agg_vol_v:.1f}x aggressive [{_mode}]",
+                    "force_shadow": True,
+                })
             else:
-                _body_fade = "malejace_body_M15" in exhaustion_signals
-                _vol_fade  = "malejacy_wolumen_M15" in exhaustion_signals
-                if _body_fade and _vol_fade:
-                    log_lines.append(f"    ✗ SKIP: body+vol wyczerpanie (impuls wygasający)")
-                else:
-                    w = round(current_price, 2)
-                    for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
-                        _sl  = round(current_price - _vatr * 1.2, 2)
-                        _tp1 = round(current_price + _vatr * 2.0, 2)
-                        _tp2 = round(current_price + _vatr * _tp2_mult, 2)
-                        _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
-                        log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
-                        if _rr_ok:
-                            log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
-                            setups.append({
-                                "type": "impulse_aggressive_long", "direction": "long",
-                                "entries": [w], "sl": _sl, "sl_after_tp1": w,
-                                "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
-                                "score": strength, "variant": _vname,
-                                "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
-                                "force_shadow": True,
-                            })
-                        else:
-                            log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
+                log_lines.append(f"    ✗ REJECTED [{_mode}]: RR<1.5")
 
     # ── RANGE ─────────────────────────────────────────────────────────────
     elif regime_name == "RANGE":
