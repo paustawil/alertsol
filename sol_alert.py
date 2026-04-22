@@ -693,36 +693,64 @@ def find_structural_swing(
     candles_h1: list[dict],
     direction: str,
     current_price: float,
-    lookback: int = 12,
-    pre_peak_window: int = 4,
+    lookback: int = 24,
+    min_range_atr: float = 2.0,
+    noise_candles: int = 2,
 ) -> tuple[float, float]:
-    """Swing strukturalny — zakotwiczony na aktualnym ruchu, nie zwykłe min/max.
+    """Swing strukturalny — start impulsu wykrywany przez cofanie się od szczytu/dołka.
 
     Dla direction='up':
-      swing_high = max(high, current_price) w `lookback` ostatnich H1 świec
-      swing_low  = min(low) w oknie `pre_peak_window` świec kończącym się na swing_high_idx
-    Dla direction='down': mirror (swing_low od lookback, swing_high z okna przed swing_low).
+      swing_high = max(high, current_price) w `lookback` ostatnich H1 świecach
+      swing_low  = najnowsze lokalne minimum idąc wstecz od swing_high, które tworzy
+                   zakres >= min_range_atr * ATR (filtruje lokalne wahania w trendzie)
+    Dla direction='down': mirror.
 
-    Intuicja: jeżeli peak w trendzie up powstał 2h temu, to swing_low szukamy tylko
-    w 4h przed tym peakiem (strefa z której zaczął się ruch), nie w pełnym 12h oknie
-    które może zawierać lowy z zupełnie innej fazy rynku.
+    W przeciwieństwie do podejścia okienkowego (pre_peak_window), to podejście
+    nie zakłada z góry ile godzin temu zaczął się impuls — adaptuje się do długości trendu.
     """
     recent = candles_h1[-lookback:]
     if not recent:
         return current_price, current_price
+
+    atr = calc_atr(candles_h1[-20:]) if len(candles_h1) >= 20 else calc_atr(candles_h1)
+    min_range = atr * min_range_atr if atr > 0 else 0.0
+
     if direction == "up":
         highs = [c["high"] for c in recent]
-        idx = max(range(len(highs)), key=lambda i: highs[i])
-        swing_high = max(highs[idx], current_price)
-        start = max(0, idx - pre_peak_window + 1)
-        swing_low = min(c["low"] for c in recent[start:idx + 1])
+        peak_idx = max(range(len(highs)), key=lambda i: highs[i])
+        swing_high = max(highs[peak_idx], current_price)
+
+        # Idź wstecz od peak — szukaj pierwszego lokalnego minimum z sensownym zakresem
+        for i in range(peak_idx - 1, -1, -1):
+            candidate = recent[i]["low"]
+            if swing_high - candidate < min_range:
+                continue
+            left = [recent[j]["low"] for j in range(max(0, i - noise_candles), i)]
+            right = [recent[j]["low"] for j in range(i + 1, min(peak_idx + 1, i + noise_candles + 1))]
+            is_local_min = (not left or candidate <= min(left)) and (not right or candidate <= min(right))
+            if is_local_min:
+                return swing_high, candidate
+
+        # Fallback: minimum absolutne w oknie przed szczytem
+        swing_low = min(c["low"] for c in recent[:peak_idx + 1])
         return swing_high, swing_low
+
     # down
     lows = [c["low"] for c in recent]
-    idx = min(range(len(lows)), key=lambda i: lows[i])
-    swing_low = min(lows[idx], current_price)
-    start = max(0, idx - pre_peak_window + 1)
-    swing_high = max(c["high"] for c in recent[start:idx + 1])
+    trough_idx = min(range(len(lows)), key=lambda i: lows[i])
+    swing_low = min(lows[trough_idx], current_price)
+
+    for i in range(trough_idx - 1, -1, -1):
+        candidate = recent[i]["high"]
+        if candidate - swing_low < min_range:
+            continue
+        left = [recent[j]["high"] for j in range(max(0, i - noise_candles), i)]
+        right = [recent[j]["high"] for j in range(i + 1, min(trough_idx + 1, i + noise_candles + 1))]
+        is_local_max = (not left or candidate >= max(left)) and (not right or candidate >= max(right))
+        if is_local_max:
+            return candidate, swing_low
+
+    swing_high = max(c["high"] for c in recent[:trough_idx + 1])
     return swing_high, swing_low
 
 
@@ -845,11 +873,11 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     # ── TREND_DOWN / IMPULSE_DOWN ─────────────────────────────────────────
     if direction == "down":
         # Swing strukturalny: zakotwiczony w świecy z najniższym low; swing_high
-        # liczony z 4h okna kończącego się w tej świecy (strefa startu ruchu w dół).
+        # start impulsu: cofamy się od dołka, szukamy lokalnego max z zakresem >= 2*ATR
         swing_high, swing_low = find_structural_swing(
-            candles_h1, "down", current_price, lookback=12, pre_peak_window=4
+            candles_h1, "down", current_price
         )
-        log_lines.append(f"  Swing (strukturalny, pre_peak=4h): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
+        log_lines.append(f"  Swing (strukturalny): high=${swing_high:.2f} low=${swing_low:.2f} range=${swing_high-swing_low:.2f}")
 
         # trend_pullback_short — warianty parametrów (baseline + eksperymenty)
         if _macro_up:
@@ -988,11 +1016,11 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
         # Swing strukturalny: zakotwiczony w świecy z najwyższym high; swing_low
-        # liczony z 4h okna kończącego się w tej świecy (strefa startu rally).
+        # start impulsu: cofamy się od szczytu, szukamy lokalnego min z zakresem >= 2*ATR
         swing_high, swing_low = find_structural_swing(
-            candles_h1, "up", current_price, lookback=12, pre_peak_window=4
+            candles_h1, "up", current_price
         )
-        log_lines.append(f"  Swing (strukturalny, pre_peak=4h): high=${swing_high:.2f} low=${swing_low:.2f}")
+        log_lines.append(f"  Swing (strukturalny): high=${swing_high:.2f} low=${swing_low:.2f}")
 
         # trend_pullback_long — warianty parametrów (baseline + eksperymenty)
         if _macro_down:

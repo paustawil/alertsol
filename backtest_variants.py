@@ -262,7 +262,7 @@ def gen_pullback_setups_for_snapshot(
 
     if direction == "down":
         swing_high, swing_low = find_structural_swing(
-            candles_h1, "down", current_price, lookback=12, pre_peak_window=4
+            candles_h1, "down", current_price
         )
         tp_direction = "short"
         tp1_base = swing_low
@@ -273,7 +273,7 @@ def gen_pullback_setups_for_snapshot(
         def _ok(w): return w > current_price * 1.003 and (w - current_price) <= max_entry_dist
     else:
         swing_high, swing_low = find_structural_swing(
-            candles_h1, "up", current_price, lookback=12, pre_peak_window=4
+            candles_h1, "up", current_price
         )
         tp_direction = "long"
         tp1_base = swing_high
