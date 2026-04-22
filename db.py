@@ -1290,7 +1290,28 @@ def get_algo2_daily_stats(
                     "variants": variants or [],
                 },
             )
-            return [dict(r) for r in cur.fetchall()]
+            def _sf(v):
+                if v is None:
+                    return None
+                try:
+                    f = float(v)
+                    return None if f != f else round(f, 2)
+                except Exception:
+                    return None
+
+            rows = []
+            for r in cur.fetchall():
+                rows.append({
+                    "day":               str(r["day"]) if r["day"] else None,
+                    "total":             int(r["total"]),
+                    "entered":           int(r["entered"]),
+                    "wins":              int(r["wins"]),
+                    "losses":            int(r["losses"]),
+                    "win_rate":          _sf(r["win_rate"]),
+                    "total_pnl_usd":     _sf(r["total_pnl_usd"]),
+                    "total_tp1only_usd": _sf(r["total_tp1only_usd"]),
+                })
+            return rows
 
 
 def get_algo2_time_heatmap(period_days: int | None = None) -> list[dict]:
