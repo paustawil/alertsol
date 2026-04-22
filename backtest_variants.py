@@ -289,7 +289,7 @@ def gen_pullback_setups_for_snapshot(
     swing_range = swing_high - swing_low
     setups = []
 
-    for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, _, _v_tp1_only) in _PULLBACK_VARIANTS.items():
+    for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, _) in _PULLBACK_VARIANTS.items():
         # Uwaga: w live systemie str4 odpala tylko przy strength==4 (baseline pokrywa >=5),
         # ale w backteście każdy wariant jest niezależny — str4 odpala przy strength>=4.
         if strength < str_min:
