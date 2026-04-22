@@ -243,6 +243,7 @@ def insert_setup(row: dict) -> int | None:
                     WHERE resolved = FALSE
                       AND direction = %(direction)s
                       AND model = %(model)s
+                      AND COALESCE(variant, 'baseline') = %(variant)s
                       AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
                 ) OR (%(shadow)s = TRUE AND %(model)s != 'Algo2')
                 RETURNING setup_id
@@ -251,7 +252,7 @@ def insert_setup(row: dict) -> int | None:
             )
             result = cur.fetchone()
             if result is None:
-                log.info(f"[db] Duplikat na poziomie DB — pominięto ({row.get('model')} {row.get('direction')})")
+                log.info(f"[db] Duplikat na poziomie DB — pominięto ({row.get('model')} {row.get('direction')} variant={row.get('variant', 'baseline')})")
                 return None
             setup_id = result[0]
     log.info(f"[db] Nowy setup #{setup_id} ({row.get('model')} {row.get('direction')})")
