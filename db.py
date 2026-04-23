@@ -42,10 +42,6 @@ _EXCHANGE_FIELDS = [
     "exchange_done",
 ]
 
-# Bezpieczny cast qty: pomija wartości nienumeryczne (np. 'PENDING', puste, przecinek zamiast kropki).
-# Używane we wszystkich zapytaniach read-only, żeby pojedynczy zepsuty rekord nie wywracał całego endpointu 500.
-_SAFE_QTY_SQL = "CASE WHEN exchange_qty_full ~ '^[0-9]+(\\.[0-9]+)?$' THEN exchange_qty_full::numeric ELSE NULL END"
-
 
 def get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
@@ -247,16 +243,15 @@ def insert_setup(row: dict) -> int | None:
                     WHERE resolved = FALSE
                       AND direction = %(direction)s
                       AND model = %(model)s
-                      AND COALESCE(variant, 'baseline') = %(variant)s
                       AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
-                ) OR (%(shadow)s = TRUE AND %(model)s != 'Algo2')
+                ) OR %(shadow)s = TRUE
                 RETURNING setup_id
                 """,
                 params,
             )
             result = cur.fetchone()
             if result is None:
-                log.info(f"[db] Duplikat na poziomie DB — pominięto ({row.get('model')} {row.get('direction')} variant={row.get('variant', 'baseline')})")
+                log.info(f"[db] Duplikat na poziomie DB — pominięto ({row.get('model')} {row.get('direction')})")
                 return None
             setup_id = result[0]
     log.info(f"[db] Nowy setup #{setup_id} ({row.get('model')} {row.get('direction')})")
@@ -588,7 +583,7 @@ def get_summary_stats() -> dict:
                     THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
                     ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                 END *
-                COALESCE({_SAFE_QTY_SQL},
+                COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                      FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
             END
         )"""
@@ -631,10 +626,10 @@ def get_summary_stats() -> dict:
                          AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
                     THEN CASE direction WHEN 'long'
                          THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                              COALESCE({_SAFE_QTY_SQL},
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                              COALESCE({_SAFE_QTY_SQL},
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          END
                 END"""
@@ -716,7 +711,7 @@ def get_period_stats(period: str) -> dict:
                             THEN (avg_exit - COALESCE(avg_entry, (entries->>0)::numeric))
                             ELSE (COALESCE(avg_entry, (entries->>0)::numeric) - avg_exit)
                         END *
-                        COALESCE({_SAFE_QTY_SQL},
+                        COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                              FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                     END
                 )"""
@@ -729,10 +724,10 @@ def get_period_stats(period: str) -> dict:
                          AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
                     THEN CASE direction WHEN 'long'
                          THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                              COALESCE({_SAFE_QTY_SQL},
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                              COALESCE({_SAFE_QTY_SQL},
+                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                                    FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                          END
                 END"""
@@ -925,7 +920,7 @@ def get_resolved_filtered(
                  THEN (avg_exit - COALESCE(avg_entry,(entries->>0)::numeric))
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - avg_exit)
                  END *
-                 COALESCE({_SAFE_QTY_SQL},
+                 COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                       FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
             END
         )"""
@@ -938,10 +933,10 @@ def get_resolved_filtered(
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE({_SAFE_QTY_SQL},
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE({_SAFE_QTY_SQL},
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
@@ -989,20 +984,11 @@ def get_resolved_filtered(
                 params,
             )
             totals_row = dict(cur.fetchone())
-            def _safe_float(v) -> float:
-                # Decimal('NaN') raises InvalidOperation in bool context — guard it.
-                if v is None:
-                    return 0.0
-                try:
-                    f = float(v)
-                    return f if f == f else 0.0  # f != f iff NaN
-                except Exception:
-                    return 0.0
             totals = {
-                "sum_pnl_usd":      _safe_float(totals_row["sum_pnl_usd"]),
-                "sum_pnl_pct":      _safe_float(totals_row["sum_pnl_pct"]),
-                "sum_tp1_only_usd": _safe_float(totals_row["sum_tp1_only_usd"]),
-                "sum_tp1_only_pct": _safe_float(totals_row["sum_tp1_only_pct"]),
+                "sum_pnl_usd":      float(totals_row["sum_pnl_usd"] or 0),
+                "sum_pnl_pct":      float(totals_row["sum_pnl_pct"] or 0),
+                "sum_tp1_only_usd": float(totals_row["sum_tp1_only_usd"] or 0),
+                "sum_tp1_only_pct": float(totals_row["sum_tp1_only_pct"] or 0),
                 "trade_usdt":       trade_usdt,
             }
 
@@ -1178,10 +1164,10 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE({_SAFE_QTY_SQL},
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE({_SAFE_QTY_SQL},
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
@@ -1190,8 +1176,7 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
             cur.execute(
                 f"""
                 SELECT
-                    COALESCE(NULLIF(type,''), '(brak)')
-                        || '·' || COALESCE(variant, 'baseline')                            AS variant,
+                    COALESCE(variant, 'baseline')                                          AS variant,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
                     ROUND(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric
@@ -1215,32 +1200,22 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
-                GROUP BY type, COALESCE(variant, 'baseline')
-                ORDER BY type, COALESCE(variant, 'baseline')
+                GROUP BY variant
+                ORDER BY variant
                 """,
                 time_params,
             )
             return [dict(r) for r in cur.fetchall()]
 
 
-def get_algo2_daily_stats(
-    period_days: int | None = None,
-    variants: list[str] | None = None,
-) -> list[dict]:
-    """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw).
-
-    variants — opcjonalna lista nazw wariantów do uwzględnienia (np. ['baseline','shallow']).
-    Pusta/None = wszystkie warianty.
-    """
+def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
+    """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw)."""
     time_sql, time_params = _algo2_time_filter(period_days)
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
     _tu        = f"COALESCE(trade_usdt, {trade_usdt})"
     wins_filter    = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
     trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
-    variant_sql = ""
-    if variants:
-        variant_sql = "AND COALESCE(variant, 'baseline') = ANY(%(variants)s)"
     tp1_only = f"""
         CASE
             WHEN result = 'SL'
@@ -1250,10 +1225,10 @@ def get_algo2_daily_stats(
                  AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
             THEN CASE direction WHEN 'long'
                  THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE({_SAFE_QTY_SQL},
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE({_SAFE_QTY_SQL},
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
@@ -1262,10 +1237,7 @@ def get_algo2_daily_stats(
             cur.execute(
                 f"""
                 SELECT
-                    COALESCE(
-                        (exit_time AT TIME ZONE 'Europe/Warsaw')::date,
-                        (alert_time AT TIME ZONE 'Europe/Warsaw')::date
-                    )                                                                      AS day,
+                    (alert_time AT TIME ZONE 'Europe/Warsaw')::date                        AS day,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
                     COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
@@ -1277,18 +1249,11 @@ def get_algo2_daily_stats(
                     ROUND(SUM({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS total_tp1only_usd
                 FROM setups
                 WHERE model = 'Algo2'
-                  AND (
-                      alert_time >= NOW() - COALESCE(%(interval)s, '100 years')::interval
-                      OR exit_time >= NOW() - COALESCE(%(interval)s, '100 years')::interval
-                  )
-                  {variant_sql}
+                  {time_sql}
                 GROUP BY day
                 ORDER BY day DESC
                 """,
-                {
-                    "interval": time_params.get("interval"),
-                    "variants": variants or [],
-                },
+                time_params,
             )
             return [dict(r) for r in cur.fetchall()]
 
@@ -1318,8 +1283,8 @@ def get_algo2_time_heatmap(period_days: int | None = None) -> list[dict]:
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
-                GROUP BY 1
-                ORDER BY 1
+                GROUP BY hour
+                ORDER BY hour
                 """,
                 time_params,
             )

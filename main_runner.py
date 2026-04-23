@@ -589,22 +589,6 @@ def dashboard():
 
   <!-- Per dzień -->
   <h4 style="color:#80deea;margin:20px 0 6px">Per dzień</h4>
-  <div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-    <label style="color:#aaa;font-size:0.85em">Scenariusz:</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="baseline" checked> tp·baseline</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="shallow" checked> tp·shallow</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="anchored_baseline" checked> tp·anch·base</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="anchored_shallow" checked> tp·anch·shal</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="impulse_continuation_short" checked> imp_cont·S</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="impulse_continuation_long" checked> imp_cont·L</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="h1_atr" checked> imp_agg·h1</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="m15_atr" checked> imp_agg·m15</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="closed_h1" checked> imp_agg·closed</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="forming_h1" checked> imp_agg·forming</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="range_resistance_short" checked> range·S</label>
-    <label style="font-size:0.85em"><input type="checkbox" class="daily-variant-filter" value="range_support_long" checked> range·L</label>
-    <button class="btn-action" onclick="loadA2Daily()">Filtruj</button>
-  </div>
   <div style="overflow-x:auto">
     <table id="a2-daily-table" style="min-width:520px">
       <tr>
@@ -660,14 +644,10 @@ def dashboard():
   <label style="color:#aaa;font-size:0.85em">Scenariusz:</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="baseline" checked> tp·baseline</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="shallow" checked> tp·shallow</label>
-  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="anchored_baseline" checked> tp·anch·base</label>
-  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="anchored_shallow" checked> tp·anch·shal</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="impulse_continuation_short" checked> imp_cont·S</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="impulse_continuation_long" checked> imp_cont·L</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="h1_atr" checked> imp_agg·h1</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="m15_atr" checked> imp_agg·m15</label>
-  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="closed_h1" checked> imp_agg·closed</label>
-  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="forming_h1" checked> imp_agg·forming</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_resistance_short" checked> range·S</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_support_long" checked> range·L</label>
   <span style="width:1px;height:16px;background:#444;display:inline-block;margin:0 4px"></span>
@@ -1272,32 +1252,6 @@ function heatColor(v, max) {{
   return 'rgba(64,' + g + ',64,0.35)';
 }}
 
-function buildA2DailyUrl() {{
-  var params = new URLSearchParams();
-  if (currentA2Period) params.set('period', currentA2Period);
-  var variants = [];
-  document.querySelectorAll('.daily-variant-filter:checked').forEach(function(cb) {{
-    variants.push(cb.value);
-  }});
-  if (variants.length) params.set('variants', variants.join(','));
-  var qs = params.toString();
-  return '/api/algo2/daily-stats' + (qs ? '?' + qs : '');
-}}
-
-async function loadA2Daily() {{
-  try {{
-    var resp = await fetch(buildA2DailyUrl());
-    var data = await resp.json();
-    renderA2Daily(data);
-  }} catch(e) {{
-    var tbl = document.getElementById('a2-daily-table');
-    while (tbl.rows.length > 1) tbl.deleteRow(1);
-    var tr = tbl.insertRow();
-    tr.insertCell().colSpan = 8; tr.cells[0].colSpan = 8;
-    tr.cells[0].textContent = '⚠️ ' + e.message; tr.cells[0].style.color = '#f88';
-  }}
-}}
-
 async function loadAlgo2Analytics() {{
   var loading = document.getElementById('a2-loading');
   loading.textContent = 'ładowanie...';
@@ -1308,7 +1262,7 @@ async function loadAlgo2Analytics() {{
       fetch('/api/algo2/type-stats' + periodParam),
       fetch('/api/algo2/time-heatmap' + periodParam),
       fetch('/api/algo2/rr-analysis' + periodParam),
-      fetch(buildA2DailyUrl()),
+      fetch('/api/algo2/daily-stats' + periodParam),
     ]);
     var variantData = await vsResp.json();
     var typeData    = await tsResp.json();
@@ -2284,12 +2238,8 @@ def api_resolved(
     result_list  = [r.strip() for r in results.split(",")  if r.strip()] if results  else None
     model_list   = [m.strip() for m in models.split(",")   if m.strip()] if models   else None
     variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
-    try:
-        return db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset, model_list, variant_list)
-    except Exception:
-        log.exception("api_resolved failed (results=%s, models=%s, variants=%s, date_from=%s, date_to=%s)",
-                      results, models, variants, date_from, date_to)
-        raise
+    data = db.get_resolved_filtered(result_list, date_from, date_to, min(limit, 200), offset, model_list, variant_list)
+    return data
 
 
 @app.get("/api/resolved/csv")
@@ -2784,67 +2734,37 @@ def api_period_stats(period: str = "24h"):
 @app.get("/api/algo2/type-stats")
 def api_algo2_type_stats(period: int | None = None):
     """Statystyki per typ setupu dla Algo2. period = liczba dni (np. 7, 30) lub brak = all-time."""
-    try:
-        return db.get_algo2_type_stats(period)
-    except Exception:
-        log.exception("api_algo2_type_stats failed (period=%s)", period)
-        raise
+    return db.get_algo2_type_stats(period)
 
 
 @app.get("/api/algo2/time-heatmap")
 def api_algo2_time_heatmap(period: int | None = None):
     """Heatmapa godzinowa alertów Algo2 (czas Warsaw). period = liczba dni lub brak = all-time."""
-    try:
-        return db.get_algo2_time_heatmap(period)
-    except Exception:
-        log.exception("api_algo2_time_heatmap failed (period=%s)", period)
-        raise
+    return db.get_algo2_time_heatmap(period)
 
 
 @app.get("/api/algo2/rr-analysis")
 def api_algo2_rr_analysis(period: int | None = None):
     """Analiza RR dla Algo2: deklarowany RR vs TP1/TP2 hit rate. period = liczba dni lub brak = all-time."""
-    try:
-        return db.get_algo2_rr_analysis(period)
-    except Exception:
-        log.exception("api_algo2_rr_analysis failed (period=%s)", period)
-        raise
+    return db.get_algo2_rr_analysis(period)
 
 
 @app.get("/api/algo2/variant-stats")
 def api_algo2_variant_stats(period: int | None = None, _: None = Security(_require_api_key)):
     """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
-    try:
-        return db.get_algo2_variant_stats(period)
-    except Exception:
-        log.exception("api_algo2_variant_stats failed (period=%s)", period)
-        raise
+    return db.get_algo2_variant_stats(period)
 
 
 @app.get("/api/algo2/variant-summary")
 def api_algo2_variant_summary(period: int | None = None):
     """Zestawienie wyników per wariant (wszystkie typy łącznie). period = dni lub brak = all-time."""
-    try:
-        return db.get_algo2_variant_summary(period)
-    except Exception:
-        log.exception("api_algo2_variant_summary failed (period=%s)", period)
-        raise
+    return db.get_algo2_variant_summary(period)
 
 
 @app.get("/api/algo2/daily-stats")
-def api_algo2_daily_stats(period: int | None = None, variants: str | None = None):
-    """Zestawienie wyników per dzień kalendarzowy.
-
-    period   — liczba dni (brak = all-time)
-    variants — opcjonalna lista wariantów po przecinku (np. 'baseline,shallow').
-               Brak = wszystkie warianty.
-    """
-    variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
-    try:
-        return db.get_algo2_daily_stats(period, variant_list)
-    except Exception:
-        log.exception("api_algo2_daily_stats failed (period=%s, variants=%s)", period, variants)
-        raise
+def api_algo2_daily_stats(period: int | None = None):
+    """Zestawienie wyników per dzień kalendarzowy. period = dni lub brak = all-time."""
+    return db.get_algo2_daily_stats(period)
 
 
 @app.get("/api/analytics/export")

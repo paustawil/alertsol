@@ -43,7 +43,8 @@ Możliwe zaostrzenie do ≥2 sygnałów lub rozluźnienie do konkretnych sygnał
 Rekomendowana kolejność (od najbardziej dojrzałych danych):
 
 1. `trend_pullback_long/short` variant `baseline` — najbardziej sprawdzony
-2. `trend_pullback_long/short` variant `shallow` — płytki pullback, wymaga więcej danych
+2. `trend_pullback_long/short` variant `str4` — ostrożnie, niższy próg strength
+3. `trend_pullback_long/short` variant `shallow` — płytki pullback, wymaga więcej danych
 4. `range_support_long` / `range_resistance_short` — po przebudowie detekcji RANGE
 5. `impulse_continuation_long/short` — dopiero po osobnej analizie
 6. `impulse_aggressive_*` — zostawić w shadow najdłużej
