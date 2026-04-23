@@ -6,41 +6,6 @@ Zmiany infrastrukturalne (dashboard, baza, Telegram) są tu pominięte.
 
 ---
 
-## 2026-04-18
-
-### `impulse_continuation_*` — liberalniejsze wejście (15% haircut pullbacka)
-
-Entry `W` był ustawiany dokładnie na `pullback_high` (short) / `pullback_low` (long)
-— 100% ekstremum ostatnich 2 świec M15. Jeśli cena cofała się o kilka centów
-krócej niż do ekstremum, zlecenie nie wchodziło, a impuls leciał dalej bez nas.
-
-Zmiana: `W = ekstremum ± 15% · głębokości_pullbacka_od_current_price`.
-Haircut skaluje się z pullbackiem — duży pullback daje większy ustępek, mały
-ledwo zauważalny (kilka centów). SL zostaje odniesiony do pullback ekstremum
-(strukturalny stop), więc dystans SL lekko się rozszerza, RR spada o ~10–15%
-ale pozostaje ≥ 2.0 w typowych scenariuszach (weryfikacja: 0.3–2.0 ATR pullback
-→ RR spada z 2.25→2.08 / 4.38→2.91, wszędzie ≥ 1.5 progu).
-
-Motywacja: „wolimy trochę mniej zarobić ale wejść" — preferujemy fill reliability
-niż idealną cenę wejścia w setupach kontynuacji.
-
-### `impulse_strength()` — fresh-impulse path (szybsza detekcja IMPULSE)
-
-Średnia ciał z 6 świec M15 (`[-6:]`) rozcieńczała świeży impuls — próg `ratio ≥ 0.9`
-(imp_str=2) wymagał zwykle **3 mocnych świec w oknie**, przez co IMPULSE był łapany
-dopiero po 3. silnej świecy zamiast po 2.
-
-Dodano drugą ścieżkę: jeśli **2 ostatnie zamknięte świece M15 mają body ≥ 0.9·ATR
-w tym samym kierunku** → `imp_str = 2`. Stara ścieżka (średnia) pozostaje dla
-trwających impulsów. Nie ruszano `vol_ratio` — `max(ratio_old, ratio_recent)`
-progu ≥ 2.0x jest spełniany po 2. świecy samoistnie.
-
-Efekt: IMPULSE_DOWN/UP łapany 15 min wcześniej w scenariuszu „dwie świeżo zamknięte
-mocne świece w jednym kierunku". Zachowana ochrona przed false-positive: wymaga
-**tego samego kierunku** na 2 świecach (1 mocna świeca nie wystarczy).
-
----
-
 ## 2026-04-14
 
 ### Nowy entry trigger dla range setupów (potwierdzenie M15)
