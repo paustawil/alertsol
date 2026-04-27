@@ -3,7 +3,8 @@
 Exchange Trader — Bitget USDT-M Futures (SOLUSDT Perpetual)
 
 Flow dla każdego setupu:
-  1. Nowy setup → 2 plan ordery przy W1, każdy half_qty z preset TP i SL:
+  1a. Aggressive setup → natychmiastowy market order (full_qty), potem TPSL ręcznie
+  1b. Pozostałe → 2 plan ordery przy W1, każdy half_qty z preset TP i SL:
        Plan 1: half_qty, trigger=W1, preset TP=TP1, preset SL=SL
        Plan 2: half_qty, trigger=W1, preset TP=TP2, preset SL=SL
   2. Oba plan ordery wykonane → Bitget tworzy 4 TPSL ordery:
@@ -273,6 +274,57 @@ def _place_entry_plan_orders(
         return None, None
 
     return plan1_oid, plan2_oid
+
+
+def _place_market_entry(client: "BitgetClient", s: dict) -> bool:
+    """Market order open + natychmiastowe TPSL dla aggressive setups.
+    Zwraca True przy sukcesie i ustawia pola exchange_* na s."""
+    direction = s["direction"]
+    entries   = s.get("entries", [])
+    w1        = entries[0] if entries else 0
+    side      = "buy" if direction == "long" else "sell"
+    sid       = s.get("setup_id", "?")
+
+    full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+    half_qty = _round_qty(full_qty / 2)
+
+    try:
+        resp = client.post("/api/v2/mix/order/place-order", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "marginCoin":  MARGIN_COIN,
+            "side":        side,
+            "tradeSide":   "open",
+            "posSide":     direction,
+            "orderType":   "market",
+            "size":        _fmt_qty(full_qty),
+        })
+    except Exception as e:
+        log.error(f"[exchange] #{sid} market entry: {e}")
+        return False
+
+    if resp.get("code") != "00000":
+        log.error(f"[exchange] #{sid} market entry: code={resp.get('code')} msg={resp.get('msg')}")
+        return False
+
+    print(f"[exchange] #{sid} market entry: {_fmt_qty(full_qty)} SOL {side.upper()} (aggressive)")
+
+    actual_qty = _get_open_position_size(client, direction)
+    if actual_qty <= 0:
+        log.error(f"[exchange] #{sid} market entry: pozycja=0 po market order")
+        return False
+
+    tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, half_qty)
+
+    s["exchange_position_opened"] = True
+    s["exchange_plan_oid"]        = None
+    s["exchange_qty_full"]        = _fmt_qty(full_qty)
+    s["exchange_qty_half"]        = _fmt_qty(half_qty)
+    s["exchange_tp1_oid"]         = tp1_id
+    s["exchange_tp2_oid"]         = tp2_id
+    s["exchange_sl_oid"]          = sl1_id
+    s["exchange_sl2_oid"]         = sl2_id
+    return True
 
 
 def _place_tpsl_orders_split(
@@ -801,7 +853,7 @@ def _sync_inner():
             modified = True
             continue
 
-        # ── NOWY setup — złóż 2 plan ordery przy W1 (half qty każdy) ────────
+        # ── NOWY setup ────────────────────────────────────────────────────────
         if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
             dir_active = active_longs if direction == "long" else active_shorts
             if dir_active >= MAX_POSITIONS:
@@ -811,20 +863,34 @@ def _sync_inner():
             if not db.claim_plan_order(s["setup_id"]):
                 print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
                 continue
-            w1       = entries[0]
-            full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-            half_qty = _round_qty(full_qty / 2)
-            plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, half_qty)
-            if plan1_oid and plan2_oid:
-                s["exchange_plan_oid"]        = plan1_oid
-                s["exchange_plan2_oid"]       = plan2_oid
-                s["exchange_qty_full"]        = _fmt_qty(full_qty)
-                s["exchange_qty_half"]        = _fmt_qty(half_qty)
-                s["exchange_position_opened"] = False
-                modified = True
-                print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
+
+            if "aggressive" in s.get("type", ""):
+                # Aggressive: market order natychmiast, bez czekania na trigger W1
+                ok = _place_market_entry(client, s)
+                if ok:
+                    now_ts = int(time.time())
+                    s["entry_hit_at"] = now_ts
+                    db.update_setup(s["setup_id"], entry_hit_at=now_ts)
+                    modified = True
+                    print(f"[exchange] {label}: market entry sukces → pozycja otwarta")
+                else:
+                    db.release_plan_order_claim(s["setup_id"])
             else:
-                db.release_plan_order_claim(s["setup_id"])
+                # Pozostałe: 2 plan ordery przy W1 (half qty każdy)
+                w1       = entries[0]
+                full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+                half_qty = _round_qty(full_qty / 2)
+                plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, half_qty)
+                if plan1_oid and plan2_oid:
+                    s["exchange_plan_oid"]        = plan1_oid
+                    s["exchange_plan2_oid"]       = plan2_oid
+                    s["exchange_qty_full"]        = _fmt_qty(full_qty)
+                    s["exchange_qty_half"]        = _fmt_qty(half_qty)
+                    s["exchange_position_opened"] = False
+                    modified = True
+                    print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
+                else:
+                    db.release_plan_order_claim(s["setup_id"])
             continue
 
         # ── Plan ordery złożone, pozycja jeszcze nie otwarta ─────────────────

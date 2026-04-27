@@ -1709,6 +1709,10 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     else:
         entry_trigger = "falling"
 
+    # Natychmiastowe wejście gdy W1 == aktualna cena (np. impulse_aggressive) — tylko shadow.
+    # Dla nie-shadow setups entry potwierdza exchange_trader przez plan order na Bitget.
+    _immediate_entry = shadow and abs(w1_lvl - round(current_price, 2)) < 0.005
+
     row = {
         "alert_time":      datetime.now(timezone.utc).isoformat(),
         "alert_timestamp": int(datetime.now(timezone.utc).timestamp()),
@@ -1727,7 +1731,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         "sl_after_tp1":    setup.get("sl_after_tp1"),
         "tps":             tps,
         "rr":              setup.get("rr", 0),
-        "entry_hit_at":    None,
+        "entry_hit_at":    int(datetime.now(timezone.utc).timestamp()) if _immediate_entry else None,
         "tp1_hit_at":      None,
         "sl_adjusted":     False,
         "entries_hit":     1,
@@ -2429,13 +2433,25 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         key=lambda s: s["rr"], reverse=True,
     )
 
-    # ── Force-shadow setups — zapis bez GPT3 i bez Telegrama ─────────────
+    # ── Force-shadow setups — zapis bez GPT3 ─────────────────────────────────
     for s in force_shadow_setups:
         s["reasoning"] = algo2_log
         if not validate_setup(s, "Algo2"):
             save_pending(s, "Algo2", "", current, shadow=True)
             if s.get("setup_id"):
                 print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
+                try:
+                    tps = s.get("tps", [])
+                    send_telegram(
+                        f"👁 <b>[Shadow] #{s['setup_id']}</b> {s['type']} {s['direction'].upper()}\n"
+                        f"W1: ${s['entries'][0]:.2f} | SL: ${s['sl']:.2f}"
+                        + (f" | TP1: ${tps[0]:.2f}" if len(tps) > 0 else "")
+                        + (f" | TP2: ${tps[1]:.2f}" if len(tps) > 1 else "")
+                        + f" | RR: {s['rr']}"
+                        + (f"\n<i>{s.get('variant', '')}</i>" if s.get('variant') else "")
+                    )
+                except Exception:
+                    pass
 
     if not regular_setups:
         return "saved" if any(s.get("setup_id") for s in force_shadow_setups) else "no_setups"
