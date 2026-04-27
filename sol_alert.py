@@ -1709,8 +1709,9 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     else:
         entry_trigger = "falling"
 
-    # Natychmiastowe wejście gdy W1 == aktualna cena (np. impulse_aggressive)
-    _immediate_entry = abs(w1_lvl - round(current_price, 2)) < 0.005
+    # Natychmiastowe wejście gdy W1 == aktualna cena (np. impulse_aggressive) — tylko shadow.
+    # Dla nie-shadow setups entry potwierdza exchange_trader przez plan order na Bitget.
+    _immediate_entry = shadow and abs(w1_lvl - round(current_price, 2)) < 0.005
 
     row = {
         "alert_time":      datetime.now(timezone.utc).isoformat(),
