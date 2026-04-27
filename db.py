@@ -1030,6 +1030,64 @@ def save_hypo_result(setup_id: int, hypo_result: str, hypo_pnl_usd: float | None
             )
 
 
+# ── Dashboard v2 statystyki ──────────────────────────────────────────────────
+
+def get_dashboard_stats() -> dict:
+    """Statystyki podsumowujące dla nowego dashboardu:
+    3m P&L, 5d P&L, win rate, active/closed counts, balance proxy."""
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage   = 20
+    _tu        = f"COALESCE(trade_usdt, {trade_usdt})"
+    pnl_expr   = f"""
+        COALESCE(pnl_usd,
+            CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                      AND avg_exit IS NOT NULL
+                      AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN (avg_exit - COALESCE(avg_entry,(entries->>0)::numeric))
+                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - avg_exit)
+                 END *
+                 COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+            END
+        )"""
+    trading   = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
+    wins_cond = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE resolved = FALSE)                  AS active_count,
+                    COUNT(*) FILTER (WHERE resolved = TRUE)                   AS closed_count,
+                    COUNT(*) FILTER (WHERE resolved = TRUE AND {wins_cond})   AS wins,
+                    COUNT(*) FILTER (WHERE resolved = TRUE AND result = 'SL') AS losses,
+                    ROUND(SUM({pnl_expr}) FILTER (
+                        WHERE resolved = TRUE AND {trading}
+                          AND resolved_at >= NOW() - INTERVAL '90 days'
+                    )::numeric, 2)                                            AS pnl_3m,
+                    ROUND(SUM({pnl_expr}) FILTER (
+                        WHERE resolved = TRUE AND {trading}
+                          AND resolved_at >= NOW() - INTERVAL '5 days'
+                    )::numeric, 2)                                            AS pnl_5d
+                FROM setups
+                """
+            )
+            row = dict(cur.fetchone())
+    wins   = int(row.get("wins")   or 0)
+    losses = int(row.get("losses") or 0)
+    total  = wins + losses
+    return {
+        "balance":      trade_usdt,   # przybliżenie — docelowo saldo z Bitget API
+        "pnl_3m":       float(row["pnl_3m"]) if row.get("pnl_3m")  is not None else None,
+        "pnl_5d":       float(row["pnl_5d"]) if row.get("pnl_5d")  is not None else None,
+        "win_rate":     round(wins / total * 100, 1) if total > 0 else None,
+        "active_count": int(row.get("active_count") or 0),
+        "closed_count": int(row.get("closed_count") or 0),
+        "trade_usdt":   trade_usdt,
+    }
+
+
 # ── Analityka Algo2 ───────────────────────────────────────────────────────────
 
 def _algo2_time_filter(period_days: int | None) -> tuple[str, dict]:

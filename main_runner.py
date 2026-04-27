@@ -3042,6 +3042,226 @@ def admin_run_gpt_relaxed_backtest():
     return {"ok": True, "message": "Backtest GPT-Relaxed uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT-Relaxed test' (~60-90 min)."}
 
 
+# ── Dashboard v2 API ──────────────────────────────────────────────────────────
+
+def _fmt_pnl(val) -> str:
+    """Formatuje wartość PnL jako string +$X.X / -$X.X lub —."""
+    if val is None:
+        return "—"
+    v = float(val)
+    return f"+${v:.1f}" if v >= 0 else f"-${abs(v):.1f}"
+
+
+_DASHBOARD_PERIOD_DAYS: dict[str, int | None] = {"1m": 30, "3m": 90, "6m+": None}
+
+_STATUS_PL = {
+    "pending":   "czeka",
+    "open":      "pozycja",
+    "after_tp1": "po_tp1",
+    "closed":    "closed",
+}
+
+_WIN_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2"}
+
+
+@app.get("/api/dashboard/price")
+def api_dashboard_price():
+    """Aktualny kurs SOL i reżim rynkowy — polling co 5 s przez nowy dashboard."""
+    import sol_alert as sa
+    price: float | None = None
+    reg: dict = {}
+    try:
+        price = sa.fetch_current_price(sa.SYMBOL)
+    except Exception as e:
+        log.warning(f"[dashboard/price] fetch_current_price: {e}")
+    try:
+        m15 = sa.fetch_klines(sa.SYMBOL, "15m", 100)
+        h1  = sa.fetch_klines(sa.SYMBOL, "1h",  50)
+        reg = sa.detect_market_regime(m15, h1, price or 0) or {}
+    except Exception as e:
+        log.warning(f"[dashboard/price] detect_market_regime: {e}")
+    return {
+        "price":            price,
+        "change_pct":       reg.get("change_24h"),
+        "pair":             "SOL/USDT",
+        "regime":           reg.get("regime"),
+        "regime_direction": reg.get("direction"),
+    }
+
+
+@app.get("/api/dashboard/stats")
+def api_dashboard_stats():
+    """Statystyki podsumowujące — polling co 30 s przez nowy dashboard."""
+    return db.get_dashboard_stats()
+
+
+@app.get("/api/dashboard/setups")
+def api_dashboard_setups():
+    """Aktywne setupy sformatowane dla tabeli dashboardu — polling co 30 s."""
+    raw = db.get_active_setups()
+    result = []
+    for s in raw:
+        entries = s.get("entries") or []
+        tps     = s.get("tps") or []
+        result.append({
+            "id":                      s["setup_id"],
+            "model":                   s.get("model", ""),
+            "kier":                    (s.get("direction") or "").upper(),
+            "typ":                     s.get("type", ""),
+            "variant":                 s.get("variant", "baseline"),
+            "status":                  _STATUS_PL.get(s.get("status", "pending"), s.get("status", "czeka")),
+            "w":                       s.get("entries_hit", 1),
+            "tps_cnt":                 len(tps),
+            "ms":                      len(entries),
+            "sl":                      float(s["sl"])          if s.get("sl")          is not None else None,
+            "sl_after_tp1":            float(s["sl_after_tp1"]) if s.get("sl_after_tp1") is not None else None,
+            "entries":                 entries,
+            "tps":                     tps,
+            "kurs":                    float(s["kurs"])   if s.get("kurs")   is not None else None,
+            "score":                   float(s["score"])  if s.get("score")  is not None else None,
+            "rr":                      float(s["rr"])     if s.get("rr")     is not None else None,
+            "alert_time":              str(s.get("alert_time", ""))[:19],
+            "exchange_position_opened": s.get("exchange_position_opened", False),
+            "exchange_tp1_done":        s.get("exchange_tp1_done", False),
+        })
+    return result
+
+
+@app.get("/api/dashboard/trades")
+def api_dashboard_trades(
+    filter: str = "wszystkie",
+    limit:  int = 50,
+    offset: int = 0,
+):
+    """Zamknięte setupy dla zakładki Historia.
+    filter: wszystkie | long | short | tps | sl
+    """
+    result_list: list[str] | None = None
+    direction_filter: str | None = None
+
+    if filter == "long":
+        direction_filter = "long"
+    elif filter == "short":
+        direction_filter = "short"
+    elif filter == "tps":
+        result_list = list(_WIN_RESULTS)
+    elif filter == "sl":
+        result_list = ["SL"]
+
+    data = db.get_resolved_filtered(results=result_list, limit=min(limit, 200), offset=offset)
+    rows = data["rows"]
+
+    if direction_filter:
+        rows = [r for r in rows if (r.get("direction") or "").lower() == direction_filter]
+
+    trades = []
+    for t in rows:
+        res = t.get("result") or ""
+        ms  = "TPS" if res in _WIN_RESULTS else ("SL" if res == "SL" else "—")
+        tps = t.get("tps") or []
+        trades.append({
+            "id":    t["setup_id"],
+            "kier":  (t.get("direction") or "").upper(),
+            "model": t.get("model", ""),
+            "typ":   t.get("type", ""),
+            "we":    float(t["avg_entry"]) if t.get("avg_entry") is not None else None,
+            "tp":    float(t["avg_exit"])  if t.get("avg_exit")  is not None else (float(tps[0]) if tps else None),
+            "pnl":   float(t["pnl_usd"])   if t.get("pnl_usd")  is not None else None,
+            "ms":    ms,
+            "date":  str(t.get("alert_time", ""))[:10],
+        })
+    return {"total": data["total"], "rows": trades, "totals": data["totals"]}
+
+
+@app.get("/api/dashboard/algo")
+def api_dashboard_algo(
+    period: str = "1m",
+    view:   str = "wariant",
+):
+    """Dane analityczne dla zakładki Analityka Algo.
+    period: 1m | 3m | 6m+
+    view:   wariant | per data | per model
+    """
+    if period not in _DASHBOARD_PERIOD_DAYS:
+        raise HTTPException(status_code=400, detail="Dozwolone okresy: 1m, 3m, 6m+")
+    days = _DASHBOARD_PERIOD_DAYS[period]
+
+    if view == "wariant":
+        rows = db.get_algo2_variant_summary(days)
+        return [
+            {
+                "name":  r.get("variant", ""),
+                "s":     r.get("entered") or 0,
+                "wr":    f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
+                "tpr":   str(r["avg_rr"])    if r.get("avg_rr")   is not None else "—",
+                "pnl":   r.get("total_pnl_usd"),
+                "slR":   f"{r['sl_rate']}%"  if r.get("sl_rate")  is not None else "—",
+                "total": r.get("total") or 0,
+            }
+            for r in rows
+        ]
+
+    if view == "per data":
+        rows = db.get_algo2_daily_stats(days)
+        return [
+            {
+                "date":    str(r.get("day", "")),
+                "n":       r.get("total") or 0,
+                "w":       r.get("wins")   or 0,
+                "l":       r.get("losses") or 0,
+                "wr":      f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
+                "pnl":     _fmt_pnl(r.get("total_pnl_usd")),
+                "tpsOnly": _fmt_pnl(r.get("total_tp1only_usd")),
+            }
+            for r in rows
+        ]
+
+    if view == "per model":
+        stats = db.get_summary_stats()
+        return [
+            {
+                "name":    m.get("model", ""),
+                "s":       m.get("entered") or 0,
+                "wr":      (
+                    f"{round(int(m['wins']) / int(m['entered']) * 100, 1)}%"
+                    if (m.get("entered") or 0) > 0 else "—"
+                ),
+                "pnl":     f"{float(m['pnl_usd']):+.2f}"         if m.get("pnl_usd")         is not None else "—",
+                "tpsOnly": f"{float(m['tp1_only_pnl_usd']):+.2f}" if m.get("tp1_only_pnl_usd") is not None else "—",
+            }
+            for m in (stats.get("by_model") or [])
+        ]
+
+    raise HTTPException(status_code=400, detail="Dozwolone widoki: wariant, per data, per model")
+
+
+@app.get("/api/dashboard/alert")
+def api_dashboard_alert():
+    """Ostatni aktywny alert do wyświetlenia w banerze dashboardu."""
+    active = db.get_active_setups()
+    if not active:
+        return {"message": None, "ts": None, "count": 0}
+    s       = active[-1]
+    entries = s.get("entries") or []
+    tps     = s.get("tps") or []
+    parts   = [s.get("type") or s.get("model") or "setup"]
+    if entries:
+        parts.append(f"W {float(entries[0]):.2f}")
+    if tps:
+        parts.append(f"TP1 {float(tps[0]):.2f}")
+    sl = s.get("sl")
+    if sl is not None:
+        parts.append(f"SL {float(sl):.2f}")
+    sl2 = s.get("sl_after_tp1")
+    if sl2 is not None:
+        parts.append(f"SL2 {float(sl2):.2f}")
+    return {
+        "message": " · ".join(parts),
+        "ts":      str(s.get("alert_time", ""))[:19],
+        "count":   len(active),
+    }
+
+
 # ── Uruchomienie ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
