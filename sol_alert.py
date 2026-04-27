@@ -1709,6 +1709,9 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
     else:
         entry_trigger = "falling"
 
+    # Natychmiastowe wejście gdy W1 == aktualna cena (np. impulse_aggressive)
+    _immediate_entry = abs(w1_lvl - round(current_price, 2)) < 0.005
+
     row = {
         "alert_time":      datetime.now(timezone.utc).isoformat(),
         "alert_timestamp": int(datetime.now(timezone.utc).timestamp()),
@@ -1727,7 +1730,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         "sl_after_tp1":    setup.get("sl_after_tp1"),
         "tps":             tps,
         "rr":              setup.get("rr", 0),
-        "entry_hit_at":    None,
+        "entry_hit_at":    int(datetime.now(timezone.utc).timestamp()) if _immediate_entry else None,
         "tp1_hit_at":      None,
         "sl_adjusted":     False,
         "entries_hit":     1,
