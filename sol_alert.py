@@ -2070,8 +2070,8 @@ def check_pending(candles_m15: list[dict]):
                     )
                 except Exception:
                     pass
-        elif not s.get("shadow") and age_h > TRADE_TIMEOUT_H:
-            db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
+        # elif not s.get("shadow") and age_h > TRADE_TIMEOUT_H:
+        #     db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
             still_pending.append(s)
             db.update_setup(s["setup_id"],
