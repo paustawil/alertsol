@@ -1419,15 +1419,34 @@ def get_algo2_rr_analysis(period_days: int | None = None) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-def get_resolved_types() -> dict:
-    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii."""
+def get_resolved_types(date_from: str | None = None, date_to: str | None = None) -> dict:
+    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii.
+    Wyklucza typy ze spacjami (wolny tekst / opisy) i filtruje po zakresie dat.
+    """
+    where = [
+        "resolved = TRUE",
+        "type IS NOT NULL",
+        "type NOT LIKE '% %'",     # wyklucz wolny tekst z opisami
+        "length(type) <= 60",      # dodatkowe zabezpieczenie przed długimi opisami
+    ]
+    params: dict = {}
+    if date_from:
+        where.append("alert_time >= %(date_from)s::date")
+        params["date_from"] = date_from
+    if date_to:
+        where.append("alert_time < (%(date_to)s::date + INTERVAL '1 day')")
+        params["date_to"] = date_to
+    sql = (
+        "SELECT DISTINCT type, variant FROM setups "
+        f"WHERE {' AND '.join(where)} ORDER BY type, variant"
+    )
     with _conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT DISTINCT type, variant FROM setups "
-                "WHERE resolved = TRUE AND type IS NOT NULL ORDER BY type, variant"
-            )
+            cur.execute(sql, params)
             rows = cur.fetchall()
     types    = sorted({r[0] for r in rows if r[0]})
-    variants = sorted({r[1] for r in rows if r[1]})
+    variants = sorted({
+        r[1] for r in rows
+        if r[1] and ' ' not in r[1] and len(r[1]) <= 60 and r[1] not in types
+    })
     return {"types": types, "variants": variants}
