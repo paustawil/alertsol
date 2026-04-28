@@ -179,29 +179,7 @@ const SETUPS = [
   {id:'atm',model:'Algo2',kier:'LONG',typ:'range_support_long',w:2,tps:3,ms:2,sl:'83.20',algoP:'84.18',wr:'1.06',wrMs:'3.27',status:'czeka'},
   {id:'695c',model:'Algo3',kier:'SHORT',typ:'shallow_tail',w:1,tps:2,ms:1,sl:'85.45',algoP:'85.43',wr:'3.27',wrMs:'3.27',status:'short'},
 ];
-const VARIANTS = [
-  {name:'baseline',s:5,wr:'100%',tpr:'1.78',pnl:46,slR:'0%'},
-  {name:'baseline_tgt',s:5,wr:'0.4%',tpr:'1.78',pnl:-91,slR:'0.4%'},
-  {name:'closed_hl',s:1,wr:'100%',tpr:'1.78',pnl:0,slR:'0%'},
-  {name:'formal_h1',s:0,wr:'—',tpr:'—',pnl:null,slR:'—'},
-  {name:'range_resilience_short',s:2,wr:'50%',tpr:'1.68',pnl:-412,slR:'0%'},
-  {name:'range_support_long',s:13,wr:'0%',tpr:'1.68',pnl:-11,slR:'0%'},
-  {name:'shallow_tail',s:1,wr:'0%',tpr:'1.68',pnl:0,slR:'0%'},
-];
-const PER_DATA = [
-  {date:'2026-04-27',n:7,w:3,l:2,wr:'100%',pnl:'+$9.0',tpsOnly:'-$0.60'},
-  {date:'2026-04-26',n:15,w:2,l:5,wr:'0.4%',pnl:'-$48.0',tpsOnly:'-$30.55'},
-  {date:'2026-04-25',n:10,w:0,l:5,wr:'0%',pnl:'-$4.0',tpsOnly:'-$30.55'},
-  {date:'2026-04-23',n:11,w:0,l:2,wr:'0%',pnl:'-$38.0',tpsOnly:'-$30.55'},
-  {date:'2026-04-22',n:2,w:0,l:0,wr:'—',pnl:'-$27.0',tpsOnly:'-$27.13'},
-];
-const PER_MODEL = [
-  {name:'Algo1',s:208,wr:'55%',pnl:'-138.72',tpsOnly:'-50.36'},
-  {name:'GPT3',s:57,wr:'—',pnl:'—',tpsOnly:'—'},
-  {name:'GPT-8',s:578,wr:'8%',pnl:'-13.08',tpsOnly:'-131.76'},
-  {name:'GPT-B',s:248,wr:'14%',pnl:'+3.60',tpsOnly:'+1.70'},
-  {name:'Oraki',s:408,wr:'28%',pnl:'+3.78',tpsOnly:'+0.41'},
-];
+
 const TRADES = [
   {id:'4390',kier:'SHORT',model:'Algo1',typ:'impulse_aggressive_long',we:86.00,tp:84.16,pnl:48.4,ms:'TPS',date:'2026-04-27'},
   {id:'4374',kier:'SHORT',model:'Algo1',typ:'impulse_aggressive_short',we:86.05,tp:84.29,pnl:49.3,ms:'TPS',date:'2026-04-27'},
@@ -211,6 +189,27 @@ const TRADES = [
   {id:'4350',kier:'LONG',model:'GPT-8',typ:'impulse_aggressive_long',we:82.00,tp:83.50,pnl:-18.4,ms:'SL',date:'2026-04-25'},
   {id:'4344',kier:'SHORT',model:'GPT-B',typ:'range_resilience_short',we:84.10,tp:83.50,pnl:22.0,ms:'TPS',date:'2026-04-25'},
 ];
+/* ── Helpers ── */
+const fmtPrice = (p) => p == null ? '—' : `$${Number(p).toFixed(2)}`;
+const fmtPnl = (p) => p == null ? '—' : (p >= 0 ? `+$${p.toFixed(2)}` : `-$${Math.abs(p).toFixed(2)}`);
+const fmtWr = (w) => w == null ? '—' : `${w}%`;
+const fmtSl = (sl) => sl == null ? '—' : Number(sl).toFixed(2);
+const regDir = (rd) => rd === 'up' ? 'up' : 'down';
+const regLabel = (r, rd) => r ? (r.toUpperCase() + (rd === 'up' ? '↑' : '↓')) : 'N/A';
+const nowPl = () => {
+  const d = new Date();
+  const m = ['sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru'];
+  return `${d.getDate()} ${m[d.getMonth()]} ${d.getFullYear()} · ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+};
+const normalizeSetup = (s) => ({
+  id: s.id, model: s.model, kier: s.kier, typ: s.typ, status: s.status,
+  w: s.w, tps: s.tps_cnt ?? s.tps, ms: s.ms,
+  sl: fmtSl(s.sl), algoP: s.kurs != null ? Number(s.kurs).toFixed(2) : '—',
+  wr: '—', wrMs: '—',
+});
+/* ── Context ── */
+const DashCtx = React.createContext({price:null, stats:null, setups:SETUPS, alert:null});
+const useDash = () => React.useContext(DashCtx);
 /* ── Chart (desktop) ── */
 function Chart({ height = 200 }) {
   const data = [
@@ -300,6 +299,8 @@ const NAV_ICONS = {
 };
 /* ── Desktop: ViewDashboard ── */
 function ViewDashboard() {
+  const {stats, setups} = useDash();
+  const s = stats || {};
   return (
     <>
       <div className="row-top">
@@ -315,30 +316,23 @@ function ViewDashboard() {
           <div className="panel-body chart-wrap-d"><Chart height={190}/></div>
         </div>
         <div className="panel">
-          <div className="panel-head">
-            <span className="panel-title">MyAll · Podsumowanie</span>
-            <div className="seg-tabs">
-              {['3m','5d','3d'].map((t,i)=>(
-                <div key={i} className={`seg-tab ${i===0?'active':''}`}>{t}</div>
-              ))}
-            </div>
-          </div>
+          <div className="panel-head"><span className="panel-title">MyAll · Podsumowanie</span></div>
           <div className="quick-stat-grid">
-            <div className="qs-cell"><div className="qs-val dim">$248</div><div className="qs-lbl">Balans</div></div>
-            <div className="qs-cell"><div className="qs-val green">+$46.41</div><div className="qs-lbl">P&L</div></div>
-            <div className="qs-cell"><div className="qs-val red">−$48.48</div><div className="qs-lbl">5d P&L</div></div>
-            <div className="qs-cell"><div className="qs-val dim">30.4%</div><div className="qs-lbl">Win Rate</div></div>
-            <div className="qs-cell"><div className="qs-val amber">4</div><div className="qs-lbl">Aktywne setups</div></div>
-            <div className="qs-cell"><div className="qs-val dim">100</div><div className="qs-lbl">Zamknięte</div></div>
+            <div className="qs-cell"><div className="qs-val dim">{fmtPrice(s.balance)}</div><div className="qs-lbl">Balans</div></div>
+            <div className="qs-cell"><div className={`qs-val ${s.pnl_3m>=0?'green':'red'}`}>{fmtPnl(s.pnl_3m)}</div><div className="qs-lbl">3m P&L</div></div>
+            <div className="qs-cell"><div className={`qs-val ${s.pnl_5d>=0?'green':'red'}`}>{fmtPnl(s.pnl_5d)}</div><div className="qs-lbl">5d P&L</div></div>
+            <div className="qs-cell"><div className="qs-val dim">{fmtWr(s.win_rate)}</div><div className="qs-lbl">Win Rate</div></div>
+            <div className="qs-cell"><div className="qs-val amber">{s.active_count ?? '—'}</div><div className="qs-lbl">Aktywne setups</div></div>
+            <div className="qs-cell"><div className="qs-val dim">{s.closed_count ?? '—'}</div><div className="qs-lbl">Zamknięte</div></div>
           </div>
         </div>
       </div>
       <div className="panel">
-        <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">4</span></div>
+        <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{setups.length}</span></div>
         <div className="panel-body">
           <table className="tbl">
-            <thead><tr><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Algo%</th><th>WR-TPS</th><th>WR-MS</th><th>Akcja</th></tr></thead>
-            <tbody>{SETUPS.map((s,i)=>(
+            <thead><tr><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Akcja</th></tr></thead>
+            <tbody>{setups.map((s,i)=>(
               <tr key={i}>
                 <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
                 <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
@@ -346,8 +340,7 @@ function ViewDashboard() {
                 <td style={{color:'var(--text2)',fontSize:11,maxWidth:180}}>{s.typ}</td>
                 <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
                 <td className="mono dim">{s.w}</td><td className="mono dim">{s.tps}</td><td className="mono dim">{s.ms}</td>
-                <td className="mono red">{s.sl}</td><td className="mono dim">{s.algoP}</td>
-                <td className="mono dim">{s.wr}%</td><td className="mono dim">{s.wrMs}%</td>
+                <td className="mono red">{s.sl}</td>
                 <td><div style={{display:'flex',gap:4}}>
                   <button className="action-btn gray">setup</button>
                   <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>{s.kier==='LONG'?'▲':'▼'} wejście</button>
@@ -362,13 +355,14 @@ function ViewDashboard() {
 }
 /* ── Desktop: ViewSetups ── */
 function ViewSetups() {
+  const {setups} = useDash();
   return (
     <div className="panel" style={{flex:1}}>
-      <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{SETUPS.length}</span></div>
+      <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{setups.length}</span></div>
       <div className="panel-body scroll-y">
         <table className="tbl">
-          <thead><tr><th>#</th><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Algo%</th><th>WR-TPS</th><th>WR-MS</th><th>Akcja</th></tr></thead>
-          <tbody>{SETUPS.map((s,i)=>(
+          <thead><tr><th>#</th><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Akcja</th></tr></thead>
+          <tbody>{setups.map((s,i)=>(
             <tr key={i}>
               <td className="mono" style={{color:'var(--text3)'}}>{i+1}</td>
               <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
@@ -377,8 +371,7 @@ function ViewSetups() {
               <td style={{color:'var(--text2)',fontSize:11}}>{s.typ}</td>
               <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
               <td className="mono dim">{s.w}</td><td className="mono dim">{s.tps}</td><td className="mono dim">{s.ms}</td>
-              <td className="mono red">{s.sl}</td><td className="mono dim">{s.algoP}</td>
-              <td className="mono dim">{s.wr}%</td><td className="mono dim">{s.wrMs}%</td>
+              <td className="mono red">{s.sl}</td>
               <td><div style={{display:'flex',gap:4}}>
                 <button className="action-btn gray">setup</button>
                 <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>{s.kier==='LONG'?'▲':'▼'} wejście</button>
@@ -394,6 +387,14 @@ function ViewSetups() {
 function ViewAlgo() {
   const [period,setPeriod]=useState('1m');
   const [subTab,setSubTab]=useState('wariant');
+  const [rows,setRows]=useState(null);
+  useEffect(()=>{
+    setRows(null);
+    fetch(`/api/dashboard/algo?period=${period}&view=${encodeURIComponent(subTab)}`)
+      .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
+  },[period,subTab]);
+  const pnlColor=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
+  const wrColor=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   return (
     <>
       <div style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 16px',marginBottom:4,display:'flex',gap:12,alignItems:'center'}}>
@@ -401,61 +402,54 @@ function ViewAlgo() {
         <div className="seg-tabs">{['1m','3m','6m+'].map(p=><div key={p} className={`seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
         <div className="filter-chips" style={{marginLeft:12}}>{['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}</div>
       </div>
-      {subTab==='wariant' && <div className="panel" style={{flex:1}}>
-        <div className="panel-head"><span className="panel-title">Per wariant</span></div>
-        <div className="panel-body scroll-y">
-          <table className="tbl">
-            <thead><tr><th>Wariant</th><th>S entry</th><th>WR</th><th>Avg TPR</th><th>SL rate</th><th>P&L $</th></tr></thead>
-            <tbody>{VARIANTS.map((r,i)=>(
-              <tr key={i}>
-                <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
-                <td className="mono dim">{r.s}</td>
-                <td className="mono" style={{color:r.wr==='100%'?'var(--green)':r.wr==='0%'||r.wr==='0.4%'?'var(--red)':'var(--text3)'}}>{r.wr}</td>
-                <td className="mono dim">{r.tpr}</td>
-                <td className="mono dim">{r.slR}</td>
-                <td className="mono" style={{fontWeight:600,color:r.pnl>0?'var(--green)':r.pnl<0?'var(--red)':'var(--text3)'}}>
-                  {r.pnl===null?'—':r.pnl>0?`+${r.pnl}$`:r.pnl===0?'0':`${r.pnl}$`}
-                </td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
+      {rows===null && <div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
+      {rows!==null && subTab==='wariant' && <div className="panel" style={{flex:1}}>
+        <div className="panel-head"><span className="panel-title">Per wariant</span><span className="panel-badge">{rows.length}</span></div>
+        <div className="panel-body scroll-y"><table className="tbl">
+          <thead><tr><th>Wariant</th><th>S</th><th>WR</th><th>Avg TPR</th><th>SL rate</th><th>P&L $</th></tr></thead>
+          <tbody>{rows.map((r,i)=>(
+            <tr key={i}>
+              <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
+              <td className="mono dim">{r.s}</td>
+              <td className="mono" style={{color:wrColor(r.wr)}}>{r.wr}</td>
+              <td className="mono dim">{r.tpr}</td>
+              <td className="mono dim">{r.slR}</td>
+              <td className="mono" style={{fontWeight:600,color:r.pnl==null?'var(--text3)':r.pnl>0?'var(--green)':r.pnl<0?'var(--red)':'var(--text3)'}}>
+                {r.pnl==null?'—':r.pnl>0?`+${r.pnl}$`:r.pnl===0?'0':`${r.pnl}$`}
+              </td>
+            </tr>
+          ))}</tbody>
+        </table></div>
       </div>}
-      {subTab==='per data' && <div className="panel" style={{flex:1}}>
-        <div className="panel-head"><span className="panel-title">Per data</span></div>
-        <div className="panel-body scroll-y">
-          <table className="tbl">
-            <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>Win Rate</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
-            <tbody>{PER_DATA.map((r,i)=>(
-              <tr key={i}>
-                <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
-                <td className="mono dim">{r.n}</td>
-                <td className="mono green">{r.w}</td>
-                <td className="mono red">{r.l}</td>
-                <td className="mono" style={{color:r.wr==='100%'?'var(--green)':r.wr==='0%'?'var(--red)':'var(--text3)'}}>{r.wr}</td>
-                <td className="mono" style={{fontWeight:600,color:r.pnl.startsWith('+')?'var(--green)':'var(--red)'}}>{r.pnl}</td>
-                <td className="mono" style={{color:r.tpsOnly.startsWith('+')?'var(--green)':'var(--red)'}}>{r.tpsOnly}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
+      {rows!==null && subTab==='per data' && <div className="panel" style={{flex:1}}>
+        <div className="panel-head"><span className="panel-title">Per data</span><span className="panel-badge">{rows.length}</span></div>
+        <div className="panel-body scroll-y"><table className="tbl">
+          <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
+          <tbody>{rows.map((r,i)=>(
+            <tr key={i}>
+              <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
+              <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
+              <td className="mono" style={{color:wrColor(r.wr)}}>{r.wr}</td>
+              <td className="mono" style={{fontWeight:600,color:pnlColor(r.pnl)}}>{r.pnl}</td>
+              <td className="mono" style={{color:pnlColor(r.tpsOnly)}}>{r.tpsOnly}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
       </div>}
-      {subTab==='per model' && <div className="panel" style={{flex:1}}>
-        <div className="panel-head"><span className="panel-title">Per model</span></div>
-        <div className="panel-body scroll-y">
-          <table className="tbl">
-            <thead><tr><th>Model</th><th>S entry</th><th>WR</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
-            <tbody>{PER_MODEL.map((r,i)=>(
-              <tr key={i}>
-                <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
-                <td className="mono dim">{r.s}</td>
-                <td className="mono dim">{r.wr}</td>
-                <td className="mono" style={{fontWeight:600,color:r.pnl.startsWith('+')?'var(--green)':r.pnl.startsWith('-')?'var(--red)':'var(--text3)'}}>{r.pnl}</td>
-                <td className="mono" style={{color:r.tpsOnly.startsWith('+')?'var(--green)':r.tpsOnly.startsWith('-')?'var(--red)':'var(--text3)'}}>{r.tpsOnly}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
+      {rows!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
+        <div className="panel-head"><span className="panel-title">Per model</span><span className="panel-badge">{rows.length}</span></div>
+        <div className="panel-body scroll-y"><table className="tbl">
+          <thead><tr><th>Model</th><th>S</th><th>WR</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
+          <tbody>{rows.map((r,i)=>(
+            <tr key={i}>
+              <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
+              <td className="mono dim">{r.s}</td>
+              <td className="mono dim">{r.wr}</td>
+              <td className="mono" style={{fontWeight:600,color:pnlColor(r.pnl)}}>{r.pnl}</td>
+              <td className="mono" style={{color:pnlColor(r.tpsOnly)}}>{r.tpsOnly}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
       </div>}
     </>
   );
@@ -463,47 +457,58 @@ function ViewAlgo() {
 /* ── Desktop: ViewHistoria ── */
 function ViewHistoria() {
   const [filter,setFilter]=useState('wszystkie');
-  const filtered=filter==='wszystkie'?TRADES:filter==='long'?TRADES.filter(t=>t.kier==='LONG'):filter==='short'?TRADES.filter(t=>t.kier==='SHORT'):TRADES.filter(t=>t.ms===filter.toUpperCase());
+  const [trades,setTrades]=useState(null);
+  useEffect(()=>{
+    setTrades(null);
+    fetch(`/api/dashboard/trades?filter=${filter}`)
+      .then(r=>r.ok?r.json():{rows:[]}).then(d=>setTrades(d.rows||[])).catch(()=>setTrades([]));
+  },[filter]);
   return (
     <div className="panel" style={{flex:1}}>
       <div className="panel-head">
         <span className="panel-title">Zamknięte setups</span>
         <div className="panel-right">
           <div className="filter-chips">{['wszystkie','long','short','tps','sl'].map(f=><div key={f} className={`filter-chip ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>{f}</div>)}</div>
-          <span className="panel-badge">{filtered.length}</span>
+          <span className="panel-badge">{trades?trades.length:'…'}</span>
         </div>
       </div>
       <div className="panel-body scroll-y">
-        <table className="tbl">
+        {trades===null && <div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
+        {trades!==null && <table className="tbl">
           <thead><tr><th>#ID</th><th>Kierunek</th><th>Model</th><th>Typ</th><th>Wejście</th><th>TP</th><th>Wynik</th><th>P&L $</th><th>Data</th></tr></thead>
-          <tbody>{filtered.map((t,i)=>(
+          <tbody>{trades.map((t,i)=>(
             <tr key={i}>
               <td className="mono" style={{color:'var(--text3)'}}>{t.id}</td>
               <td><span className={`kier-badge ${t.kier.toLowerCase()}`}>{t.kier}</span></td>
               <td style={{fontSize:11,color:'var(--text3)'}}>{t.model}</td>
               <td style={{fontSize:11,color:'var(--text2)',maxWidth:200}}>{t.typ}</td>
-              <td className="mono dim">{t.we}</td>
-              <td className="mono dim">{t.tp}</td>
+              <td className="mono dim">{t.we!=null?t.we.toFixed(2):'—'}</td>
+              <td className="mono dim">{t.tp!=null?Number(t.tp).toFixed(2):'—'}</td>
               <td><span style={{fontFamily:'var(--mono)',fontSize:11,color:t.ms==='TPS'?'var(--green)':'var(--red)',background:t.ms==='TPS'?'var(--green-dim)':'var(--red-dim)',border:`1px solid ${t.ms==='TPS'?'#00d68f33':'#ff4d6a33'}`,padding:'2px 8px',borderRadius:3}}>{t.ms}</span></td>
-              <td className="mono" style={{fontWeight:600,color:t.pnl>0?'var(--green)':'var(--red)'}}>{t.pnl>0?'+':''}{t.pnl.toFixed(1)}$</td>
+              <td className="mono" style={{fontWeight:600,color:t.pnl>0?'var(--green)':'var(--red)'}}>{t.pnl!=null?(t.pnl>0?'+':'')+t.pnl.toFixed(1)+'$':'—'}</td>
               <td className="mono" style={{color:'var(--text3)',fontSize:11}}>{t.date}</td>
             </tr>
           ))}</tbody>
-        </table>
+        </table>}
       </div>
     </div>
   );
 }
 /* ── Sidebar ── */
 function Sidebar({ tab, setTab }) {
-  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Aktywne setups',badge:'4'},{id:'algo',label:'Analityka Algo'},{id:'hist',label:'Historia'}];
+  const {price, setups} = useDash();
+  const p = price || {};
+  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Aktywne setups',badge:setups.length||null},{id:'algo',label:'Analityka Algo'},{id:'hist',label:'Historia'}];
   return (
     <div className="sidebar">
       <div className="sidebar-logo"><div className="sidebar-brand">AlertSol</div><div className="sidebar-sub">Dashboard v2</div></div>
       <div className="sidebar-price-block">
-        <div><span className="sidebar-price">$84.98</span><span className="sidebar-change">−3.2%</span></div>
-        <div className="sidebar-pair">SOL/USDT SPOT</div>
-        <div className="regime-badge down">TREND↓</div>
+        <div>
+          <span className="sidebar-price">{fmtPrice(p.price)}</span>
+          {p.change_pct!=null && <span className="sidebar-change" style={{color:p.change_pct>=0?'var(--green)':'var(--red)'}}>{p.change_pct>=0?'+':''}{Number(p.change_pct).toFixed(2)}%</span>}
+        </div>
+        <div className="sidebar-pair">{p.pair||'SOL/USDT SPOT'}</div>
+        {p.regime && <div className={`regime-badge ${regDir(p.regime_direction)}`}>{regLabel(p.regime,p.regime_direction)}</div>}
       </div>
       <nav className="sidebar-nav">
         <div className="nav-group-label">Widoki</div>
@@ -515,24 +520,26 @@ function Sidebar({ tab, setTab }) {
           </div>
         ))}
       </nav>
-      <div className="sidebar-bottom"><div className="sidebar-date">27 kwi 2026 · 17:07</div></div>
+      <div className="sidebar-bottom"><div className="sidebar-date">{nowPl()}</div></div>
     </div>
   );
 }
 /* ── DesktopApp ── */
 function DesktopApp() {
   const [tab,setTab]=useState('dash');
+  const {stats, alert} = useDash();
+  const s = stats || {};
   return (
     <div className="d-root">
       <Sidebar tab={tab} setTab={setTab}/>
       <div className="d-main">
         <div className="d-topbar">
-          <div className="stat-cell"><div className="stat-val dim">$248.00</div><div className="stat-lbl">Balans</div></div>
-          <div className="stat-cell"><div className="stat-val green">+$46.41</div><div className="stat-lbl">3m P&L</div></div>
-          <div className="stat-cell"><div className="stat-val red">−$48.48</div><div className="stat-lbl">5d P&L</div></div>
-          <div className="stat-cell"><div className="stat-val dim">30.4%</div><div className="stat-lbl">Win Rate</div></div>
-          <div className="stat-cell"><div className="stat-val amber">4</div><div className="stat-lbl">Aktywne</div></div>
-          <div className="topbar-alert">⚠ impulse_aggressive_short · SL/IN 86.83 · SL 84.48 · MS 85.66</div>
+          <div className="stat-cell"><div className="stat-val dim">{fmtPrice(s.balance)}</div><div className="stat-lbl">Balans</div></div>
+          <div className="stat-cell"><div className={`stat-val ${s.pnl_3m>=0?'green':'red'}`}>{fmtPnl(s.pnl_3m)}</div><div className="stat-lbl">3m P&L</div></div>
+          <div className="stat-cell"><div className={`stat-val ${s.pnl_5d>=0?'green':'red'}`}>{fmtPnl(s.pnl_5d)}</div><div className="stat-lbl">5d P&L</div></div>
+          <div className="stat-cell"><div className="stat-val dim">{fmtWr(s.win_rate)}</div><div className="stat-lbl">Win Rate</div></div>
+          <div className="stat-cell"><div className="stat-val amber">{s.active_count??'—'}</div><div className="stat-lbl">Aktywne</div></div>
+          {alert&&alert.message && <div className="topbar-alert">⚠ {alert.message}</div>}
         </div>
         <div className="d-content">
           {tab==='dash' && <ViewDashboard/>}
@@ -546,12 +553,13 @@ function DesktopApp() {
 }
 /* ── Mobile: TabDashboard ── */
 function TabDashboard() {
+  const {alert, setups} = useDash();
   return (
     <div>
-      <div className="alert-banner">⚠ impulse_aggressive_short · SL/IN 86.83 · SL 84.48 · MS 85.66</div>
+      {alert&&alert.message && <div className="alert-banner">⚠ {alert.message}</div>}
       <MiniChart/>
-      <div className="sec-header"><span className="sec-title">Aktywne setups</span><span className="sec-badge">4</span></div>
-      {SETUPS.slice(0,3).map((s,i)=>(
+      <div className="sec-header"><span className="sec-title">Aktywne setups</span><span className="sec-badge">{setups.length}</span></div>
+      {setups.slice(0,3).map((s,i)=>(
         <div key={i} className="setup-card">
           <div className="setup-card-top">
             <div className="setup-card-row1">
@@ -577,17 +585,18 @@ function TabDashboard() {
         </div>
       ))}
       <div style={{padding:'0 16px 8px',textAlign:'right'}}>
-        <span style={{fontSize:11,color:'var(--blue)',cursor:'pointer',fontFamily:'var(--mono)'}}>→ pokaż wszystkie 4</span>
+        <span style={{fontSize:11,color:'var(--blue)',cursor:'pointer',fontFamily:'var(--mono)'}}>→ pokaż wszystkie {setups.length}</span>
       </div>
     </div>
   );
 }
 /* ── Mobile: TabSetups ── */
 function TabSetups() {
+  const {setups} = useDash();
   return (
     <div>
-      <div className="sec-header"><span className="sec-title">Aktywne setups</span><span className="sec-badge">{SETUPS.length}</span></div>
-      {SETUPS.map((s,i)=>(
+      <div className="sec-header"><span className="sec-title">Aktywne setups</span><span className="sec-badge">{setups.length}</span></div>
+      {setups.map((s,i)=>(
         <div key={i} className="setup-card">
           <div className="setup-card-top">
             <div className="setup-card-row1">
@@ -622,60 +631,71 @@ function TabSetups() {
 function TabAlgo() {
   const [period,setPeriod]=useState('1m');
   const [subTab,setSubTab]=useState('wariant');
+  const [rows,setRows]=useState(null);
+  useEffect(()=>{
+    setRows(null);
+    fetch(`/api/dashboard/algo?period=${period}&view=${encodeURIComponent(subTab)}`)
+      .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
+  },[period,subTab]);
+  const pC=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
+  const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   return (
     <div>
       <div className="sec-header" style={{paddingBottom:10}}><span className="sec-title">Analityka Algo</span></div>
       <div className="m-seg-tabs">{['1m','3m','6m+'].map(p=><div key={p} className={`m-seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
       <div className="filter-scroll">{['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}</div>
-      {subTab==='wariant' && <div className="section-wrap">
+      {rows===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
+      {rows!==null && subTab==='wariant' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
           <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Wariant</div>
           <div style={{width:28,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>S</div>
           <div style={{width:46,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
           <div style={{width:60,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L $</div>
         </div>
-        {VARIANTS.map((r,i)=>(
+        {rows.map((r,i)=>(
           <div key={i} className="algo-row">
             <div style={{flex:1}}><div className="algo-name">{r.name}</div><div className="algo-sub">TPR: {r.tpr} · SL: {r.slR}</div></div>
             <div style={{width:28,textAlign:'center',fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>{r.s}</div>
-            <div style={{width:46,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:r.wr==='100%'?'var(--green)':r.wr==='0%'||r.wr==='0.4%'?'var(--red)':'var(--text3)'}}>{r.wr}</div>
-            <div className="algo-pnl" style={{width:60,color:r.pnl>0?'var(--green)':r.pnl<0?'var(--red)':'var(--text3)'}}>{r.pnl>0?'+':''}{r.pnl===0?'—':r.pnl+'$'}</div>
+            <div style={{width:46,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:wC(r.wr)}}>{r.wr}</div>
+            <div className="algo-pnl" style={{width:60,color:r.pnl==null?'var(--text3)':r.pnl>0?'var(--green)':r.pnl<0?'var(--red)':'var(--text3)'}}>
+              {r.pnl==null?'—':r.pnl>0?`+${r.pnl}$`:r.pnl===0?'0':`${r.pnl}$`}
+            </div>
           </div>
         ))}
       </div>}
-      {subTab==='per data' && <div className="section-wrap">
+      {rows!==null && subTab==='per data' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
-          <div style={{width:86,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Data</div>
+          <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Data</div>
           <div style={{width:22,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>N</div>
           <div style={{width:22,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>W</div>
           <div style={{width:22,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>L</div>
           <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
           <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L</div>
         </div>
-        {PER_DATA.map((r,i)=>(
+        {rows.map((r,i)=>(
           <div key={i} className="data-row">
-            <div className="data-date">{r.date.slice(5)}</div>
+            <div className="data-date" style={{minWidth:56}}>{String(r.date).slice(5)}</div>
             <div style={{width:22,textAlign:'center',color:'var(--text2)'}}>{r.n}</div>
             <div style={{width:22,textAlign:'center',color:'var(--green)'}}>{r.w}</div>
             <div style={{width:22,textAlign:'center',color:'var(--red)'}}>{r.l}</div>
-            <div style={{flex:1,textAlign:'center',color:'var(--text2)',fontSize:11}}>{r.wr}</div>
-            <div className="data-pnl" style={{color:r.pnl.startsWith('+')?'var(--green)':'var(--red)'}}>{r.pnl}</div>
+            <div style={{flex:1,textAlign:'center',color:wC(r.wr),fontSize:11}}>{r.wr}</div>
+            <div className="data-pnl" style={{color:pC(r.pnl)}}>{r.pnl}</div>
           </div>
         ))}
       </div>}
-      {subTab==='per model' && <div className="section-wrap">
+      {rows!==null && subTab==='per model' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
           <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Model</div>
           <div style={{width:36,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>S</div>
           <div style={{width:36,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
           <div style={{width:62,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L $</div>
         </div>
-        {PER_MODEL.map((r,i)=>(
+        {rows.map((r,i)=>(
           <div key={i} className="algo-row">
             <div style={{flex:1}}><div className="algo-name">{r.name}</div><div className="algo-sub">TPS-only: {r.tpsOnly}</div></div>
             <div style={{width:36,textAlign:'center',fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>{r.s}</div>
             <div style={{width:36,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{r.wr}</div>
-            <div className="algo-pnl" style={{width:62,fontSize:13,color:r.pnl.startsWith('+')?'var(--green)':r.pnl.startsWith('-')?'var(--red)':'var(--text3)'}}>{r.pnl}</div>
+            <div className="algo-pnl" style={{width:62,fontSize:13,color:pC(r.pnl)}}>{r.pnl}</div>
           </div>
         ))}
       </div>}
@@ -685,12 +705,18 @@ function TabAlgo() {
 /* ── Mobile: TabHistoria ── */
 function TabHistoria() {
   const [filter,setFilter]=useState('wszystkie');
-  const filtered=filter==='wszystkie'?TRADES:filter==='long'?TRADES.filter(t=>t.kier==='LONG'):filter==='short'?TRADES.filter(t=>t.kier==='SHORT'):TRADES.filter(t=>t.ms===filter.toUpperCase());
+  const [trades,setTrades]=useState(null);
+  useEffect(()=>{
+    setTrades(null);
+    fetch(`/api/dashboard/trades?filter=${filter}`)
+      .then(r=>r.ok?r.json():{rows:[]}).then(d=>setTrades(d.rows||[])).catch(()=>setTrades([]));
+  },[filter]);
   return (
     <div>
-      <div className="sec-header"><span className="sec-title">Zamknięte setups</span><span className="sec-badge">{filtered.length}</span></div>
+      <div className="sec-header"><span className="sec-title">Zamknięte setups</span><span className="sec-badge">{trades?trades.length:'…'}</span></div>
       <div className="filter-scroll">{['wszystkie','long','short','tps','sl'].map(f=><div key={f} className={`filter-chip ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>{f}</div>)}</div>
-      {filtered.map((t,i)=>(
+      {trades===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
+      {trades!==null && trades.map((t,i)=>(
         <div key={i} className="hist-card">
           <div className="hist-card-row1">
             <div style={{display:'flex',alignItems:'center',gap:8}}>
@@ -698,12 +724,12 @@ function TabHistoria() {
               <span style={{fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>#{t.id}</span>
               <span style={{fontSize:10,color:'var(--text3)'}}>{t.date}</span>
             </div>
-            <div className="hist-pnl" style={{color:t.pnl>0?'var(--green)':'var(--red)'}}>{t.pnl>0?'+':''}{t.pnl.toFixed(1)}$</div>
+            <div className="hist-pnl" style={{color:t.pnl>0?'var(--green)':'var(--red)'}}>{t.pnl!=null?(t.pnl>0?'+':'')+t.pnl.toFixed(1)+'$':'—'}</div>
           </div>
           <div className="hist-typ" style={{marginBottom:6}}>{t.typ}</div>
           <div className="hist-meta">
-            <span className="hist-item">WE: <span>{t.we}</span></span>
-            <span className="hist-item">TP: <span>{t.tp}</span></span>
+            <span className="hist-item">WE: <span>{t.we!=null?t.we.toFixed(2):'—'}</span></span>
+            <span className="hist-item">TP: <span>{t.tp!=null?Number(t.tp).toFixed(2):'—'}</span></span>
             <span className="hist-item">Wynik: <span style={{color:t.ms==='TPS'?'var(--green)':'var(--red)'}}>{t.ms}</span></span>
             <span className="hist-item" style={{marginLeft:'auto'}}>{t.model}</span>
           </div>
@@ -715,6 +741,8 @@ function TabHistoria() {
 /* ── MobileApp ── */
 function MobileApp() {
   const [tab,setTab]=useState(0);
+  const {price, stats, setups} = useDash();
+  const p = price || {}, s = stats || {};
   const tabs=['dash','setups','algo','hist'];
   const labels=['Dashboard','Setups','Algo','Historia'];
   return (
@@ -723,25 +751,25 @@ function MobileApp() {
         <div className="m-topbar">
           <div className="topbar-row1">
             <span className="topbar-brand">AlertSol</span>
-            <span className="topbar-date">27 kwi 2026 · 17:07</span>
+            <span className="topbar-date">{nowPl()}</span>
           </div>
           <div className="topbar-row2">
             <div style={{display:'flex',alignItems:'flex-end',gap:0}}>
-              <span className="topbar-price">$84.98</span>
-              <span className="topbar-change">−3.2%</span>
+              <span className="topbar-price">{fmtPrice(p.price)}</span>
+              {p.change_pct!=null && <span className="topbar-change" style={{color:p.change_pct>=0?'var(--green)':'var(--red)'}}>{p.change_pct>=0?'+':''}{Number(p.change_pct).toFixed(2)}%</span>}
             </div>
             <div className="topbar-meta">
-              <span className="m-regime down">TREND↓</span>
-              <span className="topbar-pair">SOL/USDT SPOT</span>
+              {p.regime && <span className={`m-regime ${regDir(p.regime_direction)}`}>{regLabel(p.regime,p.regime_direction)}</span>}
+              <span className="topbar-pair">{p.pair||'SOL/USDT SPOT'}</span>
             </div>
           </div>
         </div>
         <div className="stats-strip">
-          <div className="m-stat-cell"><div className="m-stat-val dim">$248</div><div className="m-stat-lbl">Balans</div></div>
-          <div className="m-stat-cell"><div className="m-stat-val green">+$46</div><div className="m-stat-lbl">3m P&L</div></div>
-          <div className="m-stat-cell"><div className="m-stat-val red">−$48</div><div className="m-stat-lbl">5d P&L</div></div>
-          <div className="m-stat-cell"><div className="m-stat-val dim">30.4%</div><div className="m-stat-lbl">Win rate</div></div>
-          <div className="m-stat-cell"><div className="m-stat-val amber">4</div><div className="m-stat-lbl">Aktywne</div></div>
+          <div className="m-stat-cell"><div className="m-stat-val dim">{fmtPrice(s.balance)}</div><div className="m-stat-lbl">Balans</div></div>
+          <div className="m-stat-cell"><div className={`m-stat-val ${s.pnl_3m>=0?'green':'red'}`}>{fmtPnl(s.pnl_3m)}</div><div className="m-stat-lbl">3m P&L</div></div>
+          <div className="m-stat-cell"><div className={`m-stat-val ${s.pnl_5d>=0?'green':'red'}`}>{fmtPnl(s.pnl_5d)}</div><div className="m-stat-lbl">5d P&L</div></div>
+          <div className="m-stat-cell"><div className="m-stat-val dim">{fmtWr(s.win_rate)}</div><div className="m-stat-lbl">Win rate</div></div>
+          <div className="m-stat-cell"><div className="m-stat-val amber">{s.active_count??'—'}</div><div className="m-stat-lbl">Aktywne</div></div>
         </div>
         <div className="scroll-area">
           {tab===0 && <TabDashboard/>}
@@ -767,12 +795,42 @@ function MobileApp() {
 /* ── Root App ── */
 function App() {
   const [isMobile,setIsMobile]=useState(window.innerWidth < 768);
+  const [price,setPrice]=useState(null);
+  const [stats,setStats]=useState(null);
+  const [setups,setSetups]=useState(SETUPS.map(normalizeSetup));
+  const [alert,setAlert]=useState(null);
+
   useEffect(()=>{
-    const onResize=()=>setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize',onResize);
-    return ()=>window.removeEventListener('resize',onResize);
+    const onR=()=>setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize',onR);
+    return ()=>window.removeEventListener('resize',onR);
   },[]);
-  return isMobile ? <MobileApp/> : <DesktopApp/>;
+
+  useEffect(()=>{
+    const f=()=>fetch('/api/dashboard/price').then(r=>r.ok?r.json():null).then(d=>{if(d)setPrice(d);}).catch(()=>{});
+    f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
+  },[]);
+
+  useEffect(()=>{
+    const f=()=>fetch('/api/dashboard/stats').then(r=>r.ok?r.json():null).then(d=>{if(d)setStats(d);}).catch(()=>{});
+    f(); const id=setInterval(f,60000); return ()=>clearInterval(id);
+  },[]);
+
+  useEffect(()=>{
+    const f=()=>fetch('/api/dashboard/setups').then(r=>r.ok?r.json():[]).then(d=>setSetups(d.map(normalizeSetup))).catch(()=>{});
+    f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
+  },[]);
+
+  useEffect(()=>{
+    const f=()=>fetch('/api/dashboard/alert').then(r=>r.ok?r.json():null).then(d=>{if(d)setAlert(d);}).catch(()=>{});
+    f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
+  },[]);
+
+  return (
+    <DashCtx.Provider value={{price,stats,setups,alert}}>
+      {isMobile ? <MobileApp/> : <DesktopApp/>}
+    </DashCtx.Provider>
+  );
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
