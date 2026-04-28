@@ -210,7 +210,7 @@ const normalizeSetup = (s) => {
   if (s.tp1_hit_at)   status = 'po_tp1';
   else if (s.entry_hit_at) status = 'pozycja';
   return {
-    id: s.id, model: s.model, kier: s.kier, typ: s.typ, status,
+    id: s.id, model: s.model, kier: s.kier, typ: s.typ, variant: s.variant||'', status,
     w:   entries.length > 0 ? entries.map(e=>Number(e).toFixed(2)).join(' / ') : (s.w ?? '—'),
     tp1: tps[0] != null ? Number(tps[0]).toFixed(2) : '—',
     tp2: tps[1] != null ? Number(tps[1]).toFixed(2) : '—',
@@ -382,7 +382,7 @@ function ViewDashboard() {
                 <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
                 <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
                 <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
-                <td style={{color:'var(--text2)',fontSize:11,maxWidth:180}}>{s.typ}</td>
+                <td style={{color:'var(--text2)',fontSize:11,maxWidth:180}}>{s.typ}{s.variant&&<div style={{color:'var(--text3)',fontSize:10}}>{s.variant}</div>}</td>
                 <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
                 <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
                 <td className="mono red">{s.sl}</td>
@@ -410,7 +410,7 @@ function ViewSetups() {
               <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
               <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
               <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
-              <td style={{color:'var(--text2)',fontSize:11}}>{s.typ}</td>
+              <td style={{color:'var(--text2)',fontSize:11}}>{s.typ}{s.variant&&<div style={{color:'var(--text3)',fontSize:10}}>{s.variant}</div>}</td>
               <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
               <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
               <td className="mono red">{s.sl}</td>
@@ -709,7 +709,7 @@ function TabDashboard() {
                 {s.status}
               </span>
             </div>
-            <div className="setup-typ">{s.typ}</div>
+            <div className="setup-typ">{s.typ}{s.variant&&<span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span>}</div>
           </div>
           <div className="setup-card-bottom">
             <div className="setup-stat"><div className="setup-stat-val">{s.w}</div><div className="setup-stat-lbl">W</div></div>
@@ -746,7 +746,7 @@ function TabSetups() {
                 <span className="status-dot" style={{background:s.status==='short'?'var(--red)':'var(--amber)'}}></span>{s.status}
               </span>
             </div>
-            <div className="setup-typ">{s.typ}</div>
+            <div className="setup-typ">{s.typ}{s.variant&&<span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span>}</div>
           </div>
           <div className="setup-card-bottom">
             <div className="setup-stat"><div className="setup-stat-val">{s.w}</div><div className="setup-stat-lbl">W</div></div>
