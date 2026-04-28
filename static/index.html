@@ -511,26 +511,41 @@ function ViewAlgo() {
 }
 /* ── Desktop: ViewHistoria ── */
 function ViewHistoria() {
+  const d30=React.useMemo(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];},[]);
   const [resultCats,setResultCats]=useState(['win','loss']);
-  const [dateFrom,setDateFrom]=useState('');
+  const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
   const [dateTo,setDateTo]=useState('');
   const [typeFilters,setTypeFilters]=useState([]);
+  const [variantFilters,setVariantFilters]=useState([]);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
   const [availTypes,setAvailTypes]=useState([]);
+  const [availVariants,setAvailVariants]=useState([]);
   const [trades,setTrades]=useState(null);
   const [total,setTotal]=useState(0);
   const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
   const toggleType=(t)=>setTypeFilters(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t]);
+  const toggleVariant=(v)=>setVariantFilters(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
   useEffect(()=>{
-    fetch('/api/dashboard/types').then(r=>r.ok?r.json():{types:[]})
-      .then(d=>setAvailTypes(d.types||[])).catch(()=>{});
-  },[]);
+    if(!showTypeFilter) return;
+    const p=new URLSearchParams();
+    if(dateFrom) p.set('date_from',dateFrom);
+    if(dateTo) p.set('date_to',dateTo);
+    fetch(`/api/dashboard/types?${p}`).then(r=>r.ok?r.json():{types:[],variants:[]})
+      .then(d=>{
+        setAvailTypes(d.types||[]);
+        setAvailVariants(d.variants||[]);
+        setTypeFilters(prev=>prev.filter(t=>(d.types||[]).includes(t)));
+        setVariantFilters(prev=>prev.filter(v=>(d.variants||[]).includes(v)));
+      }).catch(()=>{});
+  },[showTypeFilter,dateFrom,dateTo]);
   useEffect(()=>{
     setTrades(null);
     const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',date_from:dateFrom,date_to:dateTo,limit:100});
     if(typeFilters.length>0) p.set('types',typeFilters.join(','));
+    if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
     fetch(`/api/dashboard/trades?${p}`)
       .then(r=>r.ok?r.json():{rows:[]}).then(d=>{setTrades(d.rows||[]);setTotal(d.total||0);}).catch(()=>setTrades([]));
-  },[resultCats,dateFrom,dateTo,typeFilters]);
+  },[resultCats,dateFrom,dateTo,typeFilters,variantFilters]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
   const resBg=(r)=>r==='SL'?'var(--red-dim)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--bg3)':'var(--green-dim)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
@@ -538,6 +553,7 @@ function ViewHistoria() {
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
   const CATS=[{v:'win',l:'Wygrane'},{v:'loss',l:'Straty'},{v:'no_entry',l:'Nie weszło'},{v:'cancelled',l:'Anulowane'}];
   const inpStyle={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10};
+  const activeTypeCount=typeFilters.length+variantFilters.length;
   return (
     <div className="panel" style={{flex:1}}>
       <div className="panel-head" style={{flexDirection:'column',alignItems:'stretch',gap:8}}>
@@ -545,12 +561,23 @@ function ViewHistoria() {
           <span className="panel-title">Zamknięte setups</span>
           <span className="panel-badge">{trades?`${trades.length}/${total}`:'…'}</span>
         </div>
-        <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
-          {typeFilters.length>0 && <span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 6px',alignSelf:'center'}} onClick={()=>setTypeFilters([])}>✕ czyść</span>}
+          <div className={`filter-chip ${showTypeFilter?'active':''}`} onClick={()=>setShowTypeFilter(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>
+            Typ/Wariant{activeTypeCount>0?` (${activeTypeCount})':''} {showTypeFilter?'▴':'▾'}
+          </div>
+          {activeTypeCount>0 && <span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>{setTypeFilters([]);setVariantFilters([]);}}>✕</span>}
         </div>
-        {availTypes.length>0 && <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-          {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
+        {showTypeFilter && <div style={{display:'flex',flexDirection:'column',gap:6,padding:'4px 0',borderTop:'1px solid var(--border)'}}>
+          {availTypes.length===0 && <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Ładowanie…</span>}
+          {availTypes.length>0 && <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Scenariusz:</span>
+            {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
+          </div>}
+          {availVariants.length>0 && <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Wariant:</span>
+            {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilters.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v}</div>)}
+          </div>}
         </div>}
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
           <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={inpStyle}/>
@@ -818,21 +845,29 @@ function TabAlgo() {
 function TabHistoria() {
   const [resultCats,setResultCats]=useState(['win','loss']);
   const [typeFilters,setTypeFilters]=useState([]);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
   const [availTypes,setAvailTypes]=useState([]);
+  const [availVariants,setAvailVariants]=useState([]);
   const [trades,setTrades]=useState(null);
+  const dateFrom=React.useMemo(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];},[]);
   const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
   const toggleType=(t)=>setTypeFilters(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t]);
   useEffect(()=>{
-    fetch('/api/dashboard/types').then(r=>r.ok?r.json():{types:[]})
-      .then(d=>setAvailTypes(d.types||[])).catch(()=>{});
-  },[]);
+    if(!showTypeFilter) return;
+    fetch(`/api/dashboard/types?date_from=${dateFrom}`).then(r=>r.ok?r.json():{types:[],variants:[]})
+      .then(d=>{
+        setAvailTypes(d.types||[]);
+        setAvailVariants(d.variants||[]);
+        setTypeFilters(prev=>prev.filter(t=>(d.types||[]).includes(t)));
+      }).catch(()=>{});
+  },[showTypeFilter,dateFrom]);
   useEffect(()=>{
     setTrades(null);
-    const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',limit:50});
+    const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',date_from:dateFrom,limit:50});
     if(typeFilters.length>0) p.set('types',typeFilters.join(','));
     fetch(`/api/dashboard/trades?${p}`)
       .then(r=>r.ok?r.json():{rows:[]}).then(d=>setTrades(d.rows||[])).catch(()=>setTrades([]));
-  },[resultCats,typeFilters]);
+  },[resultCats,typeFilters,dateFrom]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
@@ -842,10 +877,14 @@ function TabHistoria() {
       <div className="sec-header"><span className="sec-title">Zamknięte setups</span><span className="sec-badge">{trades?trades.length:'…'}</span></div>
       <div className="filter-scroll">
         {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
-      </div>
-      {availTypes.length>0 && <div className="filter-scroll" style={{paddingTop:0}}>
-        {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
+        <div className={`filter-chip ${showTypeFilter?'active':''}`} onClick={()=>setShowTypeFilter(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>
+          Typ{typeFilters.length>0?` (${typeFilters.length})`:''} {showTypeFilter?'▴':'▾'}
+        </div>
         {typeFilters.length>0 && <span style={{fontSize:10,color:'var(--blue)',cursor:'pointer',alignSelf:'center'}} onClick={()=>setTypeFilters([])}>✕</span>}
+      </div>
+      {showTypeFilter && <div className="filter-scroll" style={{paddingTop:0,flexWrap:'wrap'}}>
+        {availTypes.length===0 && <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Ładowanie…</span>}
+        {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
       </div>}
       {trades===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
       {trades!==null && trades.map((t,i)=>(

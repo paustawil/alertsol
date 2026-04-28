@@ -3148,9 +3148,11 @@ def api_dashboard_setups():
 
 
 @app.get("/api/dashboard/types")
-def api_dashboard_types():
-    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii."""
-    return db.get_resolved_types()
+def api_dashboard_types(date_from: str = "", date_to: str = ""):
+    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii.
+    Filtruje po zakresie dat żeby pokazywać tylko aktualne scenariusze.
+    """
+    return db.get_resolved_types(date_from=date_from or None, date_to=date_to or None)
 
 
 def _map_result_display(t: dict) -> str:
