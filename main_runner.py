@@ -3106,9 +3106,11 @@ def api_dashboard_price():
 
 
 @app.get("/api/dashboard/stats")
-def api_dashboard_stats():
-    """Statystyki podsumowujące — polling co 30 s przez nowy dashboard."""
-    return db.get_dashboard_stats()
+def api_dashboard_stats(period: str = "30d"):
+    """Statystyki podsumowujące. period: today|24h|7d|30d"""
+    if period not in ("today", "24h", "7d", "30d"):
+        period = "30d"
+    return db.get_dashboard_stats(period)
 
 
 @app.get("/api/dashboard/setups")
