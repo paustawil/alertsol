@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AlertSol Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+:root {
+  --bg0: #080d14;
+  --bg1: #0d1520;
+  --bg2: #121c2e;
+  --bg3: #182336;
+  --bg4: #1e2a3e;
+  --border: #1a2840;
+  --border2: #223050;
+  --text1: #e8edf5;
+  --text2: #8a9bbf;
+  --text3: #6b7fa3;
+  --green: #00d68f;
+  --green-dim: #00d68f18;
+  --red: #ff4d6a;
+  --red-dim: #ff4d6a18;
+  --amber: #f5a623;
+  --amber-dim: #f5a62318;
+  --blue: #4a9eff;
+  --blue-dim: #4a9eff18;
+  --mono: 'IBM Plex Mono', monospace;
+  --sans: 'IBM Plex Sans', sans-serif;
+  --sidebar-w: 220px;
+  --topbar-h: 58px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg0); font-family: var(--sans); color: var(--text1); height: 100dvh; overflow: hidden; display: flex; }
+
+/* ─── Sidebar ─────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  height: 100dvh;
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.sidebar-logo {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-brand {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text1);
+}
+.sidebar-sub {
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 2px;
+  font-family: var(--mono);
+}
+
+/* Price block in sidebar */
+.sidebar-price-block {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-price {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--text1);
+  line-height: 1;
+}
+.sidebar-change {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--red);
+  margin-left: 6px;
+}
+.sidebar-pair {
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 4px;
+  font-family: var(--mono);
+}
+.regime-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 9px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  margin-top: 8px;
+}
+.regime-badge.down { background: var(--red-dim); color: var(--red); border: 1px solid #ff4d6a33; }
+.regime-badge.up { background: var(--green-dim); color: var(--green); border: 1px solid #00d68f33; }
+
+/* Nav */
+.sidebar-nav { padding: 12px 0; flex: 1; }
+.nav-group-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text3);
+  padding: 8px 20px 4px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  border-left: 2px solid transparent;
+}
+.nav-item:hover { background: var(--bg2); color: var(--text1); }
+.nav-item.active {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-left-color: var(--blue);
+}
+.nav-icon { width: 16px; height: 16px; flex-shrink: 0; }
+.nav-badge {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  background: var(--amber-dim);
+  color: var(--amber);
+  border: 1px solid #f5a62333;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+/* Sidebar bottom */
+.sidebar-bottom {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+.sidebar-date {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text3);
+}
+
+/* ─── Main area ───────────────────────────── */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Top stats bar */
+.topbar {
+  height: var(--topbar-h);
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 0;
+  flex-shrink: 0;
+}
+.stat-cell {
+  padding: 0 24px 0 0;
+  margin-right: 24px;
+  border-right: 1px solid var(--border);
+}
+.stat-cell:last-child { border-right: none; }
+.stat-val {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+.stat-lbl {
+  font-size: 10px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.green { color: var(--green); }
+.red { color: var(--red); }
+.amber { color: var(--amber); }
+.dim { color: var(--text2); }
+
+/* Alert in topbar */
+.topbar-alert {
+  margin-left: auto;
+  background: var(--amber-dim);
+  border: 1px solid #f5a62333;
+  border-radius: 5px;
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--amber);
+  font-family: var(--mono);
+  max-width: 420px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Content grid */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.content::-webkit-scrollbar { width: 4px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* Top row: chart + quick stats */
+.row-top { display: grid; grid-template-columns: 1fr 340px; gap: 16px; }
+/* Mid row: setups + algo */
+.row-mid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+/* Bottom row: historia full width */
+.row-bot { display: grid; grid-template-columns: 1fr; gap: 16px; }
+
+/* ─── Card / Panel ────────────────────────── */
+.panel {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text2);
+}
+.panel-right { display: flex; align-items: center; gap: 8px; }
+.panel-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  background: var(--bg3);
+  color: var(--text2);
+  padding: 2px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border2);
+}
+.panel-body { flex: 1; overflow: hidden; }
+
+/* ─── Chart ───────────────────────────────── */
+.chart-wrap {
+  padding: 12px;
+  height: 100%;
+  min-height: 200px;
+}
+.chart-inner {
+  width: 100%; height: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.chart-label {
+  position: absolute; top: 8px; left: 10px;
+  font-size: 10px; color: var(--text3); font-family: var(--mono); z-index: 2;
+}
+
+/* ─── Quick stats panel (right of chart) ─── */
+.quick-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+.qs-cell {
+  padding: 16px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.qs-cell:nth-child(2n) { border-right: none; }
+.qs-cell:nth-last-child(-n+2) { border-bottom: none; }
+.qs-val {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.qs-lbl {
+  font-size: 10px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.qs-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 2px;
+}
+
+/* ─── Segment tabs ────────────────────────── */
+.seg-tabs {
+  display: flex;
+  background: var(--bg3);
+  border-radius: 5px;
+  padding: 2px;
+  border: 1px solid var(--border2);
+}
+.seg-tab {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text3);
+  cursor: pointer;
+  border-radius: 3px;
+  font-family: var(--mono);
+  transition: all 0.15s;
+}
+.seg-tab.active { background: var(--bg1); color: var(--text1); border: 1px solid var(--border2); }
+
+/* ─── Table ───────────────────────────────── */
+.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tbl th {
+  background: var(--bg2);
+  color: var(--text3);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.tbl td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tr:hover td { background: var(--bg2); }
+.mono { font-family: var(--mono); }
+
+/* ─── Badges ──────────────────────────────── */
+.kier-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.kier-badge.long { background: var(--green-dim); color: var(--green); border: 1px solid #00d68f33; }
+.kier-badge.short { background: var(--red-dim); color: var(--red); border: 1px solid #ff4d6a33; }
+
+.status-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-family: var(--mono);
+  padding: 2px 8px; border-radius: 10px;
+}
+.status-pill.czeka { background: var(--amber-dim); color: var(--amber); border: 1px solid #f5a62333; }
+.status-pill.short { background: var(--red-dim); color: var(--red); border: 1px solid #ff4d6a33; }
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+.action-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 600; padding: 3px 10px;
+  border-radius: 3px; border: none; cursor: pointer;
+  font-family: var(--mono); letter-spacing: 0.04em;
+  transition: opacity 0.15s;
+}
+.action-btn:hover { opacity: 0.8; }
+.action-btn.red { background: var(--red-dim); color: var(--red); border: 1px solid #ff4d6a33; }
+.action-btn.green { background: var(--green-dim); color: var(--green); border: 1px solid #00d68f33; }
+.action-btn.gray { background: var(--bg3); color: var(--text2); border: 1px solid var(--border2); }
+
+/* ─── Filter chips ────────────────────────── */
+.filter-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.filter-chip {
+  padding: 3px 10px; border-radius: 10px; font-size: 10px;
+  font-weight: 500; border: 1px solid var(--border2); color: var(--text2);
+  background: var(--bg2); cursor: pointer; transition: all 0.15s;
+  font-family: var(--mono);
+}
+.filter-chip.active { background: var(--bg3); color: var(--text1); border-color: var(--blue); }
+.filter-chip:hover { border-color: var(--text3); }
+
+/* Scroll in panel body */
+.scroll-y { overflow-y: auto; }
+.scroll-y::-webkit-scrollbar { width: 3px; }
+.scroll-y::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="root" style="display:flex;width:100%;height:100dvh;"></div>
+<script type="text/babel">
+
+const { useState } = React;
+
+// ─── Data ────────────────────────────────────────────────
+const SETUPS = [
+  {id:'SOL/BTC',model:'Algo1',kier:'SHORT',typ:'impulse_aggressive_short',w:1,tps:2,ms:1,sl:'84.48',algoP:'86.27',wr:'5.56',wrMs:'6.6',status:'czeka'},
+  {id:'Algo1',model:'Algo1',kier:'SHORT',typ:'impulse_aggressive_short',w:1,tps:1,ms:0,sl:'84.50',algoP:'86.27',wr:'5.56',wrMs:'6.6',status:'short'},
+  {id:'atm',model:'Algo2',kier:'LONG',typ:'range_support_long',w:2,tps:3,ms:2,sl:'83.20',algoP:'84.18',wr:'1.06',wrMs:'3.27',status:'czeka'},
+  {id:'695c',model:'Algo3',kier:'SHORT',typ:'shallow_tail',w:1,tps:2,ms:1,sl:'85.45',algoP:'85.43',wr:'3.27',wrMs:'3.27',status:'short'},
+];
+
+const VARIANTS = [
+  {name:'baseline',s:5,wr:'100%',tpr:'1.78',pnl:46,slR:'0%'},
+  {name:'baseline_tgt',s:5,wr:'0.4%',tpr:'1.78',pnl:-91,slR:'0.4%'},
+  {name:'closed_hl',s:1,wr:'100%',tpr:'1.78',pnl:0,slR:'0%'},
+  {name:'formal_h1',s:0,wr:'—',tpr:'—',pnl:null,slR:'—'},
+  {name:'range_resilience_short',s:2,wr:'50%',tpr:'1.68',pnl:-412,slR:'0%'},
+  {name:'range_support_long',s:13,wr:'0%',tpr:'1.68',pnl:-11,slR:'0%'},
+  {name:'shallow_tail',s:1,wr:'0%',tpr:'1.68',pnl:0,slR:'0%'},
+];
+
+const PER_DATA = [
+  {date:'2026-04-27',n:7,w:3,l:2,wr:'100%',pnl:'+$9.0',tpsOnly:'-$0.60'},
+  {date:'2026-04-26',n:15,w:2,l:5,wr:'0.4%',pnl:'-$48.0',tpsOnly:'-$30.55'},
+  {date:'2026-04-25',n:10,w:0,l:5,wr:'0%',pnl:'-$4.0',tpsOnly:'-$30.55'},
+  {date:'2026-04-23',n:11,w:0,l:2,wr:'0%',pnl:'-$38.0',tpsOnly:'-$30.55'},
+  {date:'2026-04-22',n:2,w:0,l:0,wr:'—',pnl:'-$27.0',tpsOnly:'-$27.13'},
+];
+
+const PER_MODEL = [
+  {name:'Algo1',s:208,wr:'55%',pnl:'-138.72',tpsOnly:'-50.36'},
+  {name:'GPT3',s:57,wr:'—',pnl:'—',tpsOnly:'—'},
+  {name:'GPT-8',s:578,wr:'8%',pnl:'-13.08',tpsOnly:'-131.76'},
+  {name:'GPT-B',s:248,wr:'14%',pnl:'+3.60',tpsOnly:'+1.70'},
+  {name:'Oraki',s:408,wr:'28%',pnl:'+3.78',tpsOnly:'+0.41'},
+];
+
+const TRADES = [
+  {id:'4390',kier:'SHORT',model:'Algo1',typ:'impulse_aggressive_long',we:86.00,tp:84.16,pnl:48.4,ms:'TPS',date:'2026-04-27'},
+  {id:'4374',kier:'SHORT',model:'Algo1',typ:'impulse_aggressive_short',we:86.05,tp:84.29,pnl:49.3,ms:'TPS',date:'2026-04-27'},
+  {id:'4372',kier:'SHORT',model:'Algo1',typ:'range_resilience_short',we:85.00,tp:84.46,pnl:48.3,ms:'TPS',date:'2026-04-27'},
+  {id:'4361',kier:'LONG',model:'Algo2',typ:'range_support_long',we:83.50,tp:86.00,pnl:-32.1,ms:'SL',date:'2026-04-26'},
+  {id:'4358',kier:'SHORT',model:'Algo1',typ:'shallow_tail',we:84.80,tp:84.20,pnl:11.2,ms:'TPS',date:'2026-04-26'},
+  {id:'4350',kier:'LONG',model:'GPT-8',typ:'impulse_aggressive_long',we:82.00,tp:83.50,pnl:-18.4,ms:'SL',date:'2026-04-25'},
+  {id:'4344',kier:'SHORT',model:'GPT-B',typ:'range_resilience_short',we:84.10,tp:83.50,pnl:22.0,ms:'TPS',date:'2026-04-25'},
+];
+
+// ─── SVG Chart ───────────────────────────────────────────
+function Chart({ height = 200 }) {
+  const data = [
+    {o:87,c:85.5,h:88,l:85},{o:85.5,c:86.2,h:86.8,l:85},{o:86.2,c:85,h:86.5,l:84.5},
+    {o:85,c:83.8,h:85.2,l:83.5},{o:83.8,c:84.5,h:84.8,l:83.2},{o:84.5,c:83,h:84.8,l:82.8},
+    {o:83,c:84.8,h:85,l:82.8},{o:84.8,c:84,h:85.2,l:83.5},{o:84,c:82,h:84.2,l:81.5},
+    {o:82,c:83,h:83.5,l:81.5},{o:83,c:81.5,h:83.2,l:81},{o:81.5,c:82.3,h:82.5,l:81},
+    {o:82.3,c:81,h:82.5,l:80.5},{o:81,c:82,h:82.3,l:80.8},{o:82,c:83.5,h:84,l:81.5},
+    {o:83.5,c:84.98,h:85.2,l:83},{o:84.98,c:84.3,h:85.3,l:84},{o:84.3,c:84.98,h:85.2,l:84},
+  ];
+  const W = 900, H = height;
+  const pad = 8;
+  const minP = Math.min(...data.map(d=>d.l)) - 0.3;
+  const maxP = Math.max(...data.map(d=>d.h)) + 0.3;
+  const py = v => H - pad - ((v - minP) / (maxP - minP)) * (H - pad*2);
+  const bw = (W / data.length) - 3;
+
+  return (
+    <div className="chart-inner" style={{height}}>
+      <div className="chart-label">SOL/USDT SPOT · 1h · 27 kwi 2026</div>
+      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        {[0.2,0.4,0.6,0.8].map((f,i) => (
+          <line key={i} x1="0" y1={pad + f*(H-pad*2)} x2={W} y2={pad + f*(H-pad*2)}
+            stroke="#1a2840" strokeWidth="1" strokeDasharray="4,4" />
+        ))}
+        {data.map((d,i) => {
+          const x = i * (W/data.length) + 1;
+          const isGreen = d.c >= d.o;
+          const color = isGreen ? '#00d68f' : '#ff4d6a';
+          const top = py(Math.max(d.o,d.c));
+          const bot = py(Math.min(d.o,d.c));
+          return (
+            <g key={i}>
+              <line x1={x+bw/2} y1={py(d.h)} x2={x+bw/2} y2={py(d.l)} stroke={color} strokeWidth="1" opacity="0.5"/>
+              <rect x={x} y={top} width={bw} height={Math.max(bot-top,1)} fill={color} rx="0.5"/>
+            </g>
+          );
+        })}
+        <line x1="0" y1={py(84.98)} x2={W} y2={py(84.98)} stroke="#4a9eff" strokeWidth="1" strokeDasharray="5,4" opacity="0.6"/>
+      </svg>
+      <div style={{position:'absolute',right:8,top:`calc(${(1-(84.98-minP)/(maxP-minP))*100}% - 10px)`,
+        background:'#4a9eff',color:'#fff',fontSize:9,padding:'1px 5px',borderRadius:2,fontFamily:'var(--mono)'}}>
+        84.98
+      </div>
+    </div>
+  );
+}
+
+// ─── Nav icons ──────────────────────────────────────────
+function Icon({ name, active }) {
+  const c = active ? 'var(--blue)' : 'var(--text3)';
+  if (name === 'dash') return (
+    <svg className="nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4">
+      <rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1"/>
+      <rect x="1.5" y="9" width="5.5" height="5.5" rx="1"/><rect x="9" y="9" width="5.5" height="5.5" rx="1"/>
+    </svg>
+  );
+  if (name === 'setups') return (
+    <svg className="nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4">
+      <polyline points="1.5,12 5,8 8,10 12,5 14.5,7"/>
+      <circle cx="14.5" cy="7" r="1.5" fill={c} stroke="none"/>
+    </svg>
+  );
+  if (name === 'algo') return (
+    <svg className="nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4">
+      <circle cx="8" cy="8" r="2.5"/><circle cx="8" cy="8" r="5.5" strokeDasharray="2,2"/>
+      <line x1="8" y1="2.5" x2="8" y2="1"/><line x1="8" y1="13.5" x2="8" y2="15"/>
+      <line x1="2.5" y1="8" x2="1" y2="8"/><line x1="13.5" y1="8" x2="15" y2="8"/>
+    </svg>
+  );
+  if (name === 'hist') return (
+    <svg className="nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4">
+      <rect x="2.5" y="1.5" width="11" height="13" rx="1.5"/>
+      <line x1="5" y1="5.5" x2="11" y2="5.5"/><line x1="5" y1="8.5" x2="11" y2="8.5"/>
+      <line x1="5" y1="11.5" x2="8" y2="11.5"/>
+    </svg>
+  );
+  return null;
+}
+
+// ─── Sidebar ────────────────────────────────────────────
+function Sidebar({ tab, setTab }) {
+  const navItems = [
+    { id: 'dash', label: 'Dashboard' },
+    { id: 'setups', label: 'Aktywne setups', badge: '4' },
+    { id: 'algo', label: 'Analityka Algo' },
+    { id: 'hist', label: 'Historia' },
+  ];
+  return (
+    <div className="sidebar">
+      <div className="sidebar-logo">
+        <div className="sidebar-brand">AlertSol</div>
+        <div className="sidebar-sub">Dashboard v2</div>
+      </div>
+      <div className="sidebar-price-block">
+        <div>
+          <span className="sidebar-price">$84.98</span>
+          <span className="sidebar-change">−3.2%</span>
+        </div>
+        <div className="sidebar-pair">SOL/USDT SPOT</div>
+        <div className="regime-badge down">TREND↓</div>
+      </div>
+      <nav className="sidebar-nav">
+        <div className="nav-group-label">Widoki</div>
+        {navItems.map(item => (
+          <div key={item.id} className={`nav-item ${tab===item.id?'active':''}`} onClick={()=>setTab(item.id)}>
+            <Icon name={item.id} active={tab===item.id} />
+            {item.label}
+            {item.badge && <span className="nav-badge">{item.badge}</span>}
+          </div>
+        ))}
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="sidebar-date">27 kwi 2026 · 17:07</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard view ──────────────────────────────────────
+function ViewDashboard() {
+  return (
+    <>
+      <div className="row-top">
+        {/* Chart */}
+        <div className="panel" style={{minHeight:260}}>
+          <div className="panel-head">
+            <span className="panel-title">Wykres</span>
+            <div className="panel-right">
+              {['5m','15m','1h','4h'].map((t,i) => (
+                <span key={i} style={{fontSize:11,fontFamily:'var(--mono)',color:i===2?'var(--blue)':'var(--text3)',cursor:'pointer',padding:'2px 6px',
+                  background:i===2?'var(--blue-dim)':'transparent',borderRadius:3}}>{t}</span>
+              ))}
+            </div>
+          </div>
+          <div className="panel-body chart-wrap" style={{padding:12}}>
+            <Chart height={190} />
+          </div>
+        </div>
+        {/* Quick stats */}
+        <div className="panel">
+          <div className="panel-head">
+            <span className="panel-title">MyAll · Podsumowanie</span>
+            <div className="seg-tabs">
+              {['3m','5d','3d'].map((t,i) => (
+                <div key={i} className={`seg-tab ${i===0?'active':''}`}>{t}</div>
+              ))}
+            </div>
+          </div>
+          <div className="quick-stat-grid">
+            <div className="qs-cell">
+              <div className="qs-val dim">$248</div>
+              <div className="qs-lbl">Balans</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val green">+$46.41</div>
+              <div className="qs-lbl">P&L</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val red">−$48.48</div>
+              <div className="qs-lbl">5d P&L</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val dim">30.4%</div>
+              <div className="qs-lbl">Win Rate</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val amber">4</div>
+              <div className="qs-lbl">Aktywne setups</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val dim">100</div>
+              <div className="qs-lbl">Zamknięte</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Setups preview */}
+      <div className="panel">
+        <div className="panel-head">
+          <span className="panel-title">Aktywne setups</span>
+          <span className="panel-badge">4</span>
+        </div>
+        <div className="panel-body">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th>
+                <th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Algo%</th><th>WR-TPS</th><th>WR-MS</th><th>Akcja</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SETUPS.map((s,i) => (
+                <tr key={i}>
+                  <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
+                  <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
+                  <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
+                  <td style={{color:'var(--text2)',fontSize:11,maxWidth:180}}>{s.typ}</td>
+                  <td>
+                    <span className={`status-pill ${s.status}`}>
+                      <span className="status-dot"></span>{s.status}
+                    </span>
+                  </td>
+                  <td className="mono dim">{s.w}</td>
+                  <td className="mono dim">{s.tps}</td>
+                  <td className="mono dim">{s.ms}</td>
+                  <td className="mono red">{s.sl}</td>
+                  <td className="mono dim">{s.algoP}</td>
+                  <td className="mono dim">{s.wr}%</td>
+                  <td className="mono dim">{s.wrMs}%</td>
+                  <td>
+                    <div style={{display:'flex',gap:4}}>
+                      <button className="action-btn gray">setup</button>
+                      <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>
+                        {s.kier==='LONG'?'▲':'▼'} wejście
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Setups view ─────────────────────────────────────────
+function ViewSetups() {
+  return (
+    <div className="panel" style={{flex:1}}>
+      <div className="panel-head">
+        <span className="panel-title">Aktywne setups</span>
+        <span className="panel-badge">{SETUPS.length}</span>
+      </div>
+      <div className="panel-body scroll-y">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>#</th><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th>
+              <th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Algo%</th><th>WR-TPS</th><th>WR-MS</th><th>Akcja</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SETUPS.map((s,i) => (
+              <tr key={i}>
+                <td className="mono" style={{color:'var(--text3)'}}>{i+1}</td>
+                <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
+                <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
+                <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
+                <td style={{color:'var(--text2)',fontSize:11}}>{s.typ}</td>
+                <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
+                <td className="mono dim">{s.w}</td>
+                <td className="mono dim">{s.tps}</td>
+                <td className="mono dim">{s.ms}</td>
+                <td className="mono red">{s.sl}</td>
+                <td className="mono dim">{s.algoP}</td>
+                <td className="mono dim">{s.wr}%</td>
+                <td className="mono dim">{s.wrMs}%</td>
+                <td>
+                  <div style={{display:'flex',gap:4}}>
+                    <button className="action-btn gray">setup</button>
+                    <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>
+                      {s.kier==='LONG'?'▲':'▼'} wejście
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Algo view ───────────────────────────────────────────
+function ViewAlgo() {
+  const [period, setPeriod] = useState('1m');
+  const [subTab, setSubTab] = useState('wariant');
+
+  return (
+    <>
+      <div className="panel-head" style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 16px',marginBottom:4,display:'flex',gap:12,alignItems:'center'}}>
+        <span className="panel-title" style={{marginRight:8}}>Analityka Algo</span>
+        <div className="seg-tabs">
+          {['1m','3m','6m+'].map(p => (
+            <div key={p} className={`seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>
+          ))}
+        </div>
+        <div className="filter-chips" style={{marginLeft:12}}>
+          {['wariant','per data','per model'].map(t => (
+            <div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>
+          ))}
+        </div>
+      </div>
+
+      {subTab === 'wariant' && (
+        <div className="panel" style={{flex:1}}>
+          <div className="panel-head"><span className="panel-title">Per wariant</span></div>
+          <div className="panel-body scroll-y">
+            <table className="tbl">
+              <thead><tr><th>Wariant</th><th>S entry</th><th>WR</th><th>Avg TPR</th><th>SL rate</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
+              <tbody>
+                {VARIANTS.map((r,i) => (
+                  <tr key={i}>
+                    <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
+                    <td className="mono dim">{r.s}</td>
+                    <td className="mono" style={{color:r.wr==='100%'?'var(--green)':r.wr==='0%'||r.wr==='0.4%'?'var(--red)':'var(--text3)'}}>{r.wr}</td>
+                    <td className="mono dim">{r.tpr}</td>
+                    <td className="mono dim">{r.slR}</td>
+                    <td className="mono" style={{fontWeight:600,color:r.pnl>0?'var(--green)':r.pnl<0?'var(--red)':'var(--text3)'}}>
+                      {r.pnl===null?'—':r.pnl>0?`+${r.pnl}$`:r.pnl===0?'0':`${r.pnl}$`}
+                    </td>
+                    <td className="mono dim">—</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {subTab === 'per data' && (
+        <div className="panel" style={{flex:1}}>
+          <div className="panel-head"><span className="panel-title">Per data</span></div>
+          <div className="panel-body scroll-y">
+            <table className="tbl">
+              <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>Win Rate</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
+              <tbody>
+                {PER_DATA.map((r,i) => (
+                  <tr key={i}>
+                    <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
+                    <td className="mono dim">{r.n}</td>
+                    <td className="mono green">{r.w}</td>
+                    <td className="mono red">{r.l}</td>
+                    <td className="mono" style={{color:r.wr==='100%'?'var(--green)':r.wr==='0%'||r.wr==='0.4%'?'var(--red)':'var(--text3)'}}>{r.wr}</td>
+                    <td className="mono" style={{fontWeight:600,color:r.pnl.startsWith('+')?'var(--green)':'var(--red)'}}>{r.pnl}</td>
+                    <td className="mono" style={{color:r.tpsOnly.startsWith('+')?'var(--green)':'var(--red)'}}>{r.tpsOnly}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {subTab === 'per model' && (
+        <div className="panel" style={{flex:1}}>
+          <div className="panel-head"><span className="panel-title">Per model</span></div>
+          <div className="panel-body scroll-y">
+            <table className="tbl">
+              <thead><tr><th>Model</th><th>S entry</th><th>WR</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
+              <tbody>
+                {PER_MODEL.map((r,i) => (
+                  <tr key={i}>
+                    <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
+                    <td className="mono dim">{r.s}</td>
+                    <td className="mono dim">{r.wr}</td>
+                    <td className="mono" style={{fontWeight:600,color:r.pnl.startsWith('+')?'var(--green)':r.pnl.startsWith('-')?'var(--red)':'var(--text3)'}}>{r.pnl}</td>
+                    <td className="mono" style={{color:r.tpsOnly.startsWith('+')?'var(--green)':r.tpsOnly.startsWith('-')?'var(--red)':'var(--text3)'}}>{r.tpsOnly}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Historia view ───────────────────────────────────────
+function ViewHistoria() {
+  const [filter, setFilter] = useState('wszystkie');
+  const filtered = filter === 'wszystkie' ? TRADES
+    : filter === 'long' ? TRADES.filter(t=>t.kier==='LONG')
+    : filter === 'short' ? TRADES.filter(t=>t.kier==='SHORT')
+    : TRADES.filter(t=>t.ms===filter.toUpperCase());
+
+  return (
+    <div className="panel" style={{flex:1}}>
+      <div className="panel-head">
+        <span className="panel-title">Zamknięte setups</span>
+        <div className="panel-right">
+          <div className="filter-chips">
+            {['wszystkie','long','short','tps','sl'].map(f => (
+              <div key={f} className={`filter-chip ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>{f}</div>
+            ))}
+          </div>
+          <span className="panel-badge">{filtered.length}</span>
+        </div>
+      </div>
+      <div className="panel-body scroll-y">
+        <table className="tbl">
+          <thead>
+            <tr><th>#ID</th><th>Kierunek</th><th>Model</th><th>Typ</th><th>Wejście</th><th>TP</th><th>Wynik</th><th>P&L $</th><th>Data</th></tr>
+          </thead>
+          <tbody>
+            {filtered.map((t,i) => (
+              <tr key={i}>
+                <td className="mono" style={{color:'var(--text3)'}}>{t.id}</td>
+                <td><span className={`kier-badge ${t.kier.toLowerCase()}`}>{t.kier}</span></td>
+                <td style={{fontSize:11,color:'var(--text3)'}}>{t.model}</td>
+                <td style={{fontSize:11,color:'var(--text2)',maxWidth:200}}>{t.typ}</td>
+                <td className="mono dim">{t.we}</td>
+                <td className="mono dim">{t.tp}</td>
+                <td>
+                  <span style={{fontFamily:'var(--mono)',fontSize:11,
+                    color:t.ms==='TPS'?'var(--green)':'var(--red)',
+                    background:t.ms==='TPS'?'var(--green-dim)':'var(--red-dim)',
+                    border:`1px solid ${t.ms==='TPS'?'#00d68f33':'#ff4d6a33'}`,
+                    padding:'2px 8px',borderRadius:3}}>
+                    {t.ms}
+                  </span>
+                </td>
+                <td className="mono" style={{fontWeight:600,color:t.pnl>0?'var(--green)':'var(--red)'}}>
+                  {t.pnl>0?'+':''}{t.pnl.toFixed(1)}$
+                </td>
+                <td className="mono" style={{color:'var(--text3)',fontSize:11}}>{t.date}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ─────────────────────────────────────────────────
+function App() {
+  const [tab, setTab] = useState('dash');
+  return (
+    <>
+      <Sidebar tab={tab} setTab={setTab} />
+      <div className="main">
+        {/* Topbar */}
+        <div className="topbar">
+          <div className="stat-cell">
+            <div className="stat-val dim">$248.00</div>
+            <div className="stat-lbl">Balans</div>
+          </div>
+          <div className="stat-cell">
+            <div className="stat-val green">+$46.41</div>
+            <div className="stat-lbl">3m P&L</div>
+          </div>
+          <div className="stat-cell">
+            <div className="stat-val red">−$48.48</div>
+            <div className="stat-lbl">5d P&L</div>
+          </div>
+          <div className="stat-cell">
+            <div className="stat-val dim">30.4%</div>
+            <div className="stat-lbl">Win Rate</div>
+          </div>
+          <div className="stat-cell">
+            <div className="stat-val amber">4</div>
+            <div className="stat-lbl">Aktywne</div>
+          </div>
+          <div className="topbar-alert">
+            ⚠ impulse_aggressive_short · SL/IN 86.83 · SL 84.48 · MS 85.66
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="content">
+          {tab === 'dash' && <ViewDashboard />}
+          {tab === 'setups' && <ViewSetups />}
+          {tab === 'algo' && <ViewAlgo />}
+          {tab === 'hist' && <ViewHistoria />}
+        </div>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
