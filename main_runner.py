@@ -3141,8 +3141,16 @@ def api_dashboard_setups():
             "alert_time":              str(s.get("alert_time", ""))[:19],
             "exchange_position_opened": s.get("exchange_position_opened", False),
             "exchange_tp1_done":        s.get("exchange_tp1_done", False),
+            "entry_hit_at":             s.get("entry_hit_at") is not None,
+            "tp1_hit_at":               s.get("tp1_hit_at")   is not None,
         })
     return result
+
+
+@app.get("/api/dashboard/types")
+def api_dashboard_types():
+    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii."""
+    return db.get_resolved_types()
 
 
 def _map_result_display(t: dict) -> str:
