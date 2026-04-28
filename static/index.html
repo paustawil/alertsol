@@ -29,6 +29,8 @@ body{background:var(--bg0);font-family:var(--sans);color:var(--text1);height:100
 .status-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-family:var(--mono);padding:2px 8px;border-radius:10px}
 .status-pill.czeka{background:var(--amber-dim);color:var(--amber);border:1px solid #f5a62333}
 .status-pill.short,.status-pill.short{background:var(--red-dim);color:var(--red);border:1px solid #ff4d6a33}
+.status-pill.pozycja{background:var(--blue-dim);color:var(--blue);border:1px solid #4a9eff33}
+.status-pill.po_tp1{background:var(--green-dim);color:var(--green);border:1px solid #00d68f33}
 .status-dot{width:5px;height:5px;border-radius:50%;background:currentColor;display:inline-block}
 .action-btn{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:3px 10px;border-radius:3px;border:none;cursor:pointer;font-family:var(--mono);letter-spacing:.04em;transition:opacity .15s}
 .action-btn:hover{opacity:.8}
@@ -204,8 +206,11 @@ const nowPl = () => {
 const normalizeSetup = (s) => {
   const entries = s.entries || [];
   const tps     = s.tps     || [];
+  let status = s.status;
+  if (s.tp1_hit_at)   status = 'po_tp1';
+  else if (s.entry_hit_at) status = 'pozycja';
   return {
-    id: s.id, model: s.model, kier: s.kier, typ: s.typ, status: s.status,
+    id: s.id, model: s.model, kier: s.kier, typ: s.typ, status,
     w:   entries.length > 0 ? entries.map(e=>Number(e).toFixed(2)).join(' / ') : (s.w ?? '—'),
     tp1: tps[0] != null ? Number(tps[0]).toFixed(2) : '—',
     tp2: tps[1] != null ? Number(tps[1]).toFixed(2) : '—',
@@ -343,10 +348,11 @@ const NAV_ICONS = {
 };
 /* ── Desktop: ViewDashboard ── */
 function ViewDashboard() {
-  const {setups} = useDash();
+  const {setups, market} = useDash();
+  const algo2 = (market && market.last_scans && market.last_scans['Algo2']) || null;
   return (
     <>
-      <div className="panel" style={{minHeight:260}}>
+      <div className="panel" style={{minHeight:310}}>
         <div className="panel-head">
           <span className="panel-title">Wykres</span>
           <div className="panel-right">
@@ -355,8 +361,17 @@ function ViewDashboard() {
             ))}
           </div>
         </div>
-        <div className="panel-body chart-wrap-d"><Chart height={240}/></div>
+        <div className="panel-body chart-wrap-d"><Chart height={340}/></div>
       </div>
+      {algo2 && algo2.text && (
+        <div className="panel" style={{flexShrink:0}}>
+          <div className="panel-head" style={{padding:'5px 14px'}}>
+            <span className="panel-title">Bieżąca analiza Algo2</span>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{String(algo2.time||'').replace('T',' ').slice(0,16)}</span>
+          </div>
+          <div style={{padding:'8px 14px',fontFamily:'var(--mono)',fontSize:10,color:'var(--text2)',lineHeight:1.6,whiteSpace:'pre-wrap',maxHeight:90,overflow:'auto'}}>{algo2.text}</div>
+        </div>
+      )}
       <div className="panel">
         <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{setups.length}</span></div>
         <div className="panel-body">
@@ -499,15 +514,25 @@ function ViewHistoria() {
   const [resultCats,setResultCats]=useState(['win','loss']);
   const [dateFrom,setDateFrom]=useState('');
   const [dateTo,setDateTo]=useState('');
+  const [typeFilter,setTypeFilter]=useState('');
+  const [variantFilter,setVariantFilter]=useState('');
+  const [availTypes,setAvailTypes]=useState([]);
+  const [availVariants,setAvailVariants]=useState([]);
   const [trades,setTrades]=useState(null);
   const [total,setTotal]=useState(0);
   const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
   useEffect(()=>{
+    fetch('/api/dashboard/types').then(r=>r.ok?r.json():{types:[],variants:[]})
+      .then(d=>{setAvailTypes(d.types||[]);setAvailVariants(d.variants||[]);}).catch(()=>{});
+  },[]);
+  useEffect(()=>{
     setTrades(null);
     const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',date_from:dateFrom,date_to:dateTo,limit:100});
+    if(typeFilter) p.set('types',typeFilter);
+    if(variantFilter) p.set('variants',variantFilter);
     fetch(`/api/dashboard/trades?${p}`)
       .then(r=>r.ok?r.json():{rows:[]}).then(d=>{setTrades(d.rows||[]);setTotal(d.total||0);}).catch(()=>setTrades([]));
-  },[resultCats,dateFrom,dateTo]);
+  },[resultCats,dateFrom,dateTo,typeFilter,variantFilter]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
   const resBg=(r)=>r==='SL'?'var(--red-dim)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--bg3)':'var(--green-dim)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
@@ -515,6 +540,7 @@ function ViewHistoria() {
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
   const CATS=[{v:'win',l:'Wygrane'},{v:'loss',l:'Straty'},{v:'no_entry',l:'Nie weszło'},{v:'cancelled',l:'Anulowane'}];
   const inpStyle={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10};
+  const selStyle={...inpStyle,cursor:'pointer',maxWidth:180};
   return (
     <div className="panel" style={{flex:1}}>
       <div className="panel-head" style={{flexWrap:'wrap',gap:8}}>
@@ -522,6 +548,17 @@ function ViewHistoria() {
         <div className="panel-right" style={{flexWrap:'wrap',gap:8,flex:1}}>
           <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
             {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
+          </div>
+          <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+            <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)} style={selStyle}>
+              <option value="">Wszystkie scenariusze</option>
+              {availTypes.map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+            <select value={variantFilter} onChange={e=>setVariantFilter(e.target.value)} style={selStyle}>
+              <option value="">Wszystkie warianty</option>
+              {availVariants.map(v=><option key={v} value={v}>{v}</option>)}
+            </select>
+            {(typeFilter||variantFilter)&&<span style={{color:'var(--blue)',fontSize:11,cursor:'pointer'}} onClick={()=>{setTypeFilter('');setVariantFilter('');}}>✕</span>}
           </div>
           <div style={{display:'flex',gap:6,alignItems:'center'}}>
             <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={inpStyle}/>
@@ -628,11 +665,21 @@ function DesktopApp() {
 }
 /* ── Mobile: TabDashboard ── */
 function TabDashboard() {
-  const {alert, setups} = useDash();
+  const {alert, setups, market} = useDash();
+  const algo2 = (market && market.last_scans && market.last_scans['Algo2']) || null;
   return (
     <div>
       {alert&&alert.message && <div className="alert-banner">⚠ {alert.message}</div>}
       <MiniChart/>
+      {algo2 && algo2.text && (
+        <div style={{margin:'6px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+            <span style={{fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)'}}>Analiza Algo2</span>
+            <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)'}}>{String(algo2.time||'').replace('T',' ').slice(0,16)}</span>
+          </div>
+          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text2)',lineHeight:1.5,whiteSpace:'pre-wrap',maxHeight:64,overflow:'hidden',textOverflow:'ellipsis'}}>{algo2.text}</div>
+        </div>
+      )}
       <div className="sec-header"><span className="sec-title">Aktywne setups</span><span className="sec-badge">{setups.length}</span></div>
       {setups.slice(0,3).map((s,i)=>(
         <div key={i} className="setup-card">
@@ -782,14 +829,21 @@ function TabAlgo() {
 /* ── Mobile: TabHistoria ── */
 function TabHistoria() {
   const [resultCats,setResultCats]=useState(['win','loss']);
+  const [typeFilter,setTypeFilter]=useState('');
+  const [availTypes,setAvailTypes]=useState([]);
   const [trades,setTrades]=useState(null);
   const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
   useEffect(()=>{
+    fetch('/api/dashboard/types').then(r=>r.ok?r.json():{types:[]})
+      .then(d=>setAvailTypes(d.types||[])).catch(()=>{});
+  },[]);
+  useEffect(()=>{
     setTrades(null);
     const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',limit:50});
+    if(typeFilter) p.set('types',typeFilter);
     fetch(`/api/dashboard/trades?${p}`)
       .then(r=>r.ok?r.json():{rows:[]}).then(d=>setTrades(d.rows||[])).catch(()=>setTrades([]));
-  },[resultCats]);
+  },[resultCats,typeFilter]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
@@ -799,6 +853,10 @@ function TabHistoria() {
       <div className="sec-header"><span className="sec-title">Zamknięte setups</span><span className="sec-badge">{trades?trades.length:'…'}</span></div>
       <div className="filter-scroll">
         {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
+        {availTypes.length>0 && <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)} style={{padding:'3px 6px',fontSize:10,fontFamily:'var(--mono)',background:'var(--bg3)',border:`1px solid ${typeFilter?'var(--blue)':'var(--border2)'}`,borderRadius:10,color:typeFilter?'var(--text1)':'var(--text2)',cursor:'pointer'}}>
+          <option value="">Wszystkie</option>
+          {availTypes.map(t=><option key={t} value={t}>{t}</option>)}
+        </select>}
       </div>
       {trades===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
       {trades!==null && trades.map((t,i)=>(

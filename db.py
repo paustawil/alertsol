@@ -1417,3 +1417,17 @@ def get_algo2_rr_analysis(period_days: int | None = None) -> list[dict]:
                 time_params,
             )
             return [dict(r) for r in cur.fetchall()]
+
+
+def get_resolved_types() -> dict:
+    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT type, variant FROM setups "
+                "WHERE resolved = TRUE AND type IS NOT NULL ORDER BY type, variant"
+            )
+            rows = cur.fetchall()
+    types    = sorted({r[0] for r in rows if r[0]})
+    variants = sorted({r[1] for r in rows if r[1]})
+    return {"types": types, "variants": variants}
