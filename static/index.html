@@ -564,7 +564,7 @@ function ViewHistoria() {
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
           <div className={`filter-chip ${showTypeFilter?'active':''}`} onClick={()=>setShowTypeFilter(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>
-            Typ/Wariant{activeTypeCount>0?` (${activeTypeCount})':''} {showTypeFilter?'▴':'▾'}
+            Typ/Wariant{activeTypeCount>0?` (${activeTypeCount})`:''} {showTypeFilter?'▴':'▾'}
           </div>
           {activeTypeCount>0 && <span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>{setTypeFilters([]);setVariantFilters([]);}}>✕</span>}
         </div>
