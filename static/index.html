@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AlertSol Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:       #080d14;
+  --bg1:       #0d1520;
+  --bg2:       #121c2e;
+  --bg3:       #182336;
+  --border:    #1a2840;
+  --border2:   #223050;
+  --text1:     #e8edf5;
+  --text2:     #8a9bbf;
+  --text3:     #6b7fa3;
+  --green:     #00d68f;
+  --red:       #ff4d6a;
+  --amber:     #f5a623;
+  --blue:      #4a9eff;
+  --green-dim: #00d68f18;
+  --red-dim:   #ff4d6a18;
+  --amber-dim: #f5a62318;
+  --blue-dim:  #4a9eff18;
+  --mono:      'IBM Plex Mono', monospace;
+  --sans:      'IBM Plex Sans', sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg0);
+  font-family: var(--sans);
+  color: var(--text1);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+}
+.logo {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text1);
+}
+.logo span {
+  color: var(--blue);
+}
+.card {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 32px 40px;
+  text-align: center;
+  max-width: 480px;
+  width: 90%;
+}
+.card-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text2);
+  margin-bottom: 16px;
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--amber-dim);
+  border: 1px solid #f5a62333;
+  border-radius: 10px;
+  padding: 4px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--amber);
+  margin-bottom: 20px;
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+.phases {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 20px;
+  text-align: left;
+}
+.phase-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text3);
+}
+.phase-row.done  { color: var(--green); }
+.phase-row.active { color: var(--amber); }
+.phase-icon { width: 14px; flex-shrink: 0; text-align: center; }
+.api-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 24px;
+}
+.api-cell {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: left;
+}
+.api-cell .route { color: var(--blue); font-weight: 600; }
+.api-cell .desc  { color: var(--text3); margin-top: 2px; }
+.bottom {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  text-align: center;
+}
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div class="logo">Alert<span>Sol</span> · Dashboard v2</div>
+
+<div class="card">
+  <div class="card-title">Status wdrożenia</div>
+  <div class="status-badge">
+    <span class="dot"></span>
+    Frontend w budowie
+  </div>
+
+  <div class="phases">
+    <div class="phase-row done">
+      <span class="phase-icon">✓</span>
+      Faza 1 — endpointy /api/dashboard/*
+    </div>
+    <div class="phase-row done">
+      <span class="phase-icon">✓</span>
+      Faza 2 — static/ + FastAPI routing
+    </div>
+    <div class="phase-row active">
+      <span class="phase-icon">›</span>
+      Faza 3–4 — layout React + komponenty
+    </div>
+    <div class="phase-row">
+      <span class="phase-icon">·</span>
+      Faza 5 — podpięcie danych z API
+    </div>
+    <div class="phase-row">
+      <span class="phase-icon">·</span>
+      Faza 7 — usunięcie starego dashboardu
+    </div>
+  </div>
+
+  <div class="api-grid">
+    <div class="api-cell">
+      <div class="route">/api/dashboard/price</div>
+      <div class="desc">kurs + reżim</div>
+    </div>
+    <div class="api-cell">
+      <div class="route">/api/dashboard/stats</div>
+      <div class="desc">P&amp;L · win rate</div>
+    </div>
+    <div class="api-cell">
+      <div class="route">/api/dashboard/setups</div>
+      <div class="desc">aktywne setupy</div>
+    </div>
+    <div class="api-cell">
+      <div class="route">/api/dashboard/trades</div>
+      <div class="desc">historia</div>
+    </div>
+    <div class="api-cell">
+      <div class="route">/api/dashboard/algo</div>
+      <div class="desc">analityka Algo</div>
+    </div>
+    <div class="api-cell">
+      <div class="route">/api/dashboard/alert</div>
+      <div class="desc">baner alertów</div>
+    </div>
+  </div>
+</div>
+
+<div class="bottom">
+  Stary dashboard dostępny pod <a href="/legacy">/legacy</a>
+</div>
+
+</body>
+</html>

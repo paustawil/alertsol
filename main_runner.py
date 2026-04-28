@@ -23,6 +23,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import db
@@ -199,6 +200,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AlertSol Dashboard", lifespan=lifespan)
 
+# Pliki statyczne nowego dashboardu (React SPA bez build stepu)
+import pathlib as _pathlib
+_static_dir = _pathlib.Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
 # ── Prosta autoryzacja kluczem dla endpointów analitycznych ──────────────────
 # Klucz przekazywany jako query param ?api_key=... (WebFetch nie obsługuje nagłówków)
 from fastapi import Query
@@ -213,7 +220,16 @@ def _require_api_key(api_key: str | None = Query(default=None, alias="api_key"))
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
-    """Prosta strona HTML z aktywnymi setupami i statystykami."""
+    """Nowy dashboard — serwuje static/index.html (React SPA)."""
+    index = _static_dir / "index.html"
+    if index.is_file():
+        return HTMLResponse(index.read_text(encoding="utf-8"))
+    return HTMLResponse("<pre>static/index.html nie znaleziony</pre>", status_code=500)
+
+
+@app.get("/legacy", response_class=HTMLResponse)
+def legacy_dashboard():
+    """Stary dashboard HTML (zachowany jako fallback)."""
     try:
         active = db.get_active_setups()
         stats  = db.get_summary_stats()
