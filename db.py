@@ -1032,9 +1032,8 @@ def save_hypo_result(setup_id: int, hypo_result: str, hypo_pnl_usd: float | None
 
 # ── Dashboard v2 statystyki ──────────────────────────────────────────────────
 
-def get_dashboard_stats() -> dict:
-    """Statystyki podsumowujące dla nowego dashboardu:
-    3m P&L, 5d P&L, win rate, active/closed counts, balance proxy."""
+def get_dashboard_stats(period: str = "30d") -> dict:
+    """Statystyki dla nowego dashboardu z obsługą okresu: today|24h|7d|30d."""
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
     _tu        = f"COALESCE(trade_usdt, {trade_usdt})"
@@ -1053,37 +1052,49 @@ def get_dashboard_stats() -> dict:
         )"""
     trading   = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
     wins_cond = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
+
+    _period_intervals = {
+        "today": ("DATE(COALESCE(resolved_at, alert_time)) = CURRENT_DATE",
+                  "DATE(alert_time) = CURRENT_DATE"),
+        "24h":   ("COALESCE(resolved_at, alert_time) >= NOW() - INTERVAL '1 day'",
+                  "alert_time >= NOW() - INTERVAL '1 day'"),
+        "7d":    ("COALESCE(resolved_at, alert_time) >= NOW() - INTERVAL '7 days'",
+                  "alert_time >= NOW() - INTERVAL '7 days'"),
+        "30d":   ("COALESCE(resolved_at, alert_time) >= NOW() - INTERVAL '30 days'",
+                  "alert_time >= NOW() - INTERVAL '30 days'"),
+    }
+    tf_closed, tf_all = _period_intervals.get(period, _period_intervals["30d"])
+
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 f"""
                 SELECT
-                    COUNT(*) FILTER (WHERE resolved = FALSE)                  AS active_count,
-                    COUNT(*) FILTER (WHERE resolved = TRUE)                   AS closed_count,
-                    COUNT(*) FILTER (WHERE resolved = TRUE AND {wins_cond})   AS wins,
-                    COUNT(*) FILTER (WHERE resolved = TRUE AND result = 'SL') AS losses,
+                    COUNT(*) FILTER (WHERE resolved = FALSE)                              AS active_count,
+                    COUNT(*) FILTER (WHERE {tf_all})                                      AS total_period,
+                    COUNT(*) FILTER (WHERE {tf_all} AND exchange_position_opened = TRUE)  AS entered_period,
+                    COUNT(*) FILTER (WHERE resolved = TRUE AND {wins_cond} AND {tf_closed}) AS wins,
+                    COUNT(*) FILTER (WHERE resolved = TRUE AND result = 'SL' AND {tf_closed}) AS losses,
                     ROUND(SUM({pnl_expr}) FILTER (
-                        WHERE resolved = TRUE AND {trading}
-                          AND resolved_at >= NOW() - INTERVAL '90 days'
-                    )::numeric, 2)                                            AS pnl_3m,
-                    ROUND(SUM({pnl_expr}) FILTER (
-                        WHERE resolved = TRUE AND {trading}
-                          AND resolved_at >= NOW() - INTERVAL '5 days'
-                    )::numeric, 2)                                            AS pnl_5d
+                        WHERE resolved = TRUE AND {trading} AND {tf_closed}
+                    )::numeric, 2)                                                        AS pnl
                 FROM setups
                 """
             )
             row = dict(cur.fetchone())
-    wins   = int(row.get("wins")   or 0)
-    losses = int(row.get("losses") or 0)
-    total  = wins + losses
+    wins          = int(row.get("wins")          or 0)
+    losses        = int(row.get("losses")        or 0)
+    total         = wins + losses
+    total_period  = int(row.get("total_period")  or 0)
+    entered       = int(row.get("entered_period") or 0)
     return {
-        "balance":      trade_usdt,   # przybliżenie — docelowo saldo z Bitget API
-        "pnl_3m":       float(row["pnl_3m"]) if row.get("pnl_3m")  is not None else None,
-        "pnl_5d":       float(row["pnl_5d"]) if row.get("pnl_5d")  is not None else None,
-        "win_rate":     round(wins / total * 100, 1) if total > 0 else None,
+        "balance":      trade_usdt,
+        "pnl":          float(row["pnl"]) if row.get("pnl") is not None else None,
+        "win_rate":     round(wins / total * 100, 1)    if total > 0        else None,
+        "entry_rate":   round(entered / total_period * 100, 1) if total_period > 0 else None,
         "active_count": int(row.get("active_count") or 0),
-        "closed_count": int(row.get("closed_count") or 0),
+        "closed_count": total,
+        "period":       period,
         "trade_usdt":   trade_usdt,
     }
 
