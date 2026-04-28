@@ -201,86 +201,58 @@ const nowPl = () => {
   const m = ['sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru'];
   return `${d.getDate()} ${m[d.getMonth()]} ${d.getFullYear()} · ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 };
-const normalizeSetup = (s) => ({
-  id: s.id, model: s.model, kier: s.kier, typ: s.typ, status: s.status,
-  w: s.w, tps: s.tps_cnt ?? s.tps, ms: s.ms,
-  sl: fmtSl(s.sl), algoP: s.kurs != null ? Number(s.kurs).toFixed(2) : '—',
-  wr: '—', wrMs: '—',
-});
+const normalizeSetup = (s) => {
+  const entries = s.entries || [];
+  const tps     = s.tps     || [];
+  return {
+    id: s.id, model: s.model, kier: s.kier, typ: s.typ, status: s.status,
+    w:   entries.length > 0 ? entries.map(e=>Number(e).toFixed(2)).join(' / ') : (s.w ?? '—'),
+    tp1: tps[0] != null ? Number(tps[0]).toFixed(2) : '—',
+    tp2: tps[1] != null ? Number(tps[1]).toFixed(2) : '—',
+    sl:  fmtSl(s.sl),
+    ms:  s.ms,
+    _raw: s,
+  };
+};
 /* ── Context ── */
-const DashCtx = React.createContext({price:null, stats:null, setups:SETUPS, alert:null});
+const DashCtx = React.createContext({price:null, stats:null, market:null, setups:SETUPS, alert:null, statsPeriod:'30d', setStatsPeriod:()=>{}});
 const useDash = () => React.useContext(DashCtx);
-/* ── Chart (desktop) ── */
-function Chart({ height = 200 }) {
-  const data = [
-    {o:87,c:85.5,h:88,l:85},{o:85.5,c:86.2,h:86.8,l:85},{o:86.2,c:85,h:86.5,l:84.5},
-    {o:85,c:83.8,h:85.2,l:83.5},{o:83.8,c:84.5,h:84.8,l:83.2},{o:84.5,c:83,h:84.8,l:82.8},
-    {o:83,c:84.8,h:85,l:82.8},{o:84.8,c:84,h:85.2,l:83.5},{o:84,c:82,h:84.2,l:81.5},
-    {o:82,c:83,h:83.5,l:81.5},{o:83,c:81.5,h:83.2,l:81},{o:81.5,c:82.3,h:82.5,l:81},
-    {o:82.3,c:81,h:82.5,l:80.5},{o:81,c:82,h:82.3,l:80.8},{o:82,c:83.5,h:84,l:81.5},
-    {o:83.5,c:84.98,h:85.2,l:83},{o:84.98,c:84.3,h:85.3,l:84},{o:84.3,c:84.98,h:85.2,l:84},
-  ];
-  const W=900, H=height, pad=8;
-  const minP=Math.min(...data.map(d=>d.l))-0.3;
-  const maxP=Math.max(...data.map(d=>d.h))+0.3;
-  const py=v=>H-pad-((v-minP)/(maxP-minP))*(H-pad*2);
-  const bw=(W/data.length)-3;
-  return (
-    <div className="chart-inner" style={{height}}>
-      <div className="chart-label">SOL/USDT SPOT · 1h · 27 kwi 2026</div>
-      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-        {[0.2,0.4,0.6,0.8].map((f,i)=>(
-          <line key={i} x1="0" y1={pad+f*(H-pad*2)} x2={W} y2={pad+f*(H-pad*2)} stroke="#1a2840" strokeWidth="1" strokeDasharray="4,4"/>
-        ))}
-        {data.map((d,i)=>{
-          const x=i*(W/data.length)+1, isG=d.c>=d.o, col=isG?'#00d68f':'#ff4d6a';
-          const top=py(Math.max(d.o,d.c)), bot=py(Math.min(d.o,d.c));
-          return (<g key={i}>
-            <line x1={x+bw/2} y1={py(d.h)} x2={x+bw/2} y2={py(d.l)} stroke={col} strokeWidth="1" opacity="0.5"/>
-            <rect x={x} y={top} width={bw} height={Math.max(bot-top,1)} fill={col} rx="0.5"/>
-          </g>);
-        })}
-        <line x1="0" y1={py(84.98)} x2={W} y2={py(84.98)} stroke="#4a9eff" strokeWidth="1" strokeDasharray="5,4" opacity="0.6"/>
-      </svg>
-      <div style={{position:'absolute',right:8,top:`calc(${(1-(84.98-minP)/(maxP-minP))*100}% - 10px)`,background:'#4a9eff',color:'#fff',fontSize:9,padding:'1px 5px',borderRadius:2,fontFamily:'var(--mono)'}}>84.98</div>
-    </div>
-  );
+/* ── TradingView chart (desktop + mobile) ── */
+function TVChart({ height=240, mobile=false }) {
+  const ref = React.useRef(null);
+  const idRef = React.useRef('tv_' + Math.random().toString(36).slice(2));
+  useEffect(()=>{
+    if(!ref.current) return;
+    const container = document.createElement('div');
+    container.id = idRef.current;
+    container.style.height = height + 'px';
+    ref.current.innerHTML = '';
+    ref.current.appendChild(container);
+    const s = document.createElement('script');
+    s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+    s.async = true;
+    s.innerHTML = JSON.stringify({
+      autosize: true,
+      symbol: 'BINANCE:SOLUSDT',
+      interval: '60',
+      timezone: 'Europe/Warsaw',
+      theme: 'dark',
+      style: '1',
+      locale: 'pl',
+      backgroundColor: 'rgba(13,21,32,1)',
+      gridColor: 'rgba(26,40,64,1)',
+      hide_top_toolbar: mobile,
+      hide_legend: mobile,
+      allow_symbol_change: false,
+      save_image: false,
+      container_id: idRef.current,
+    });
+    ref.current.appendChild(s);
+  },[]);
+  return <div ref={ref} style={{height,overflow:'hidden',borderRadius:mobile?6:0}}/>;
 }
-/* ── MiniChart (mobile) ── */
-function MiniChart() {
-  const data = [
-    {o:87,c:85.5,h:88,l:85},{o:85.5,c:86.2,h:86.8,l:85},{o:86.2,c:85,h:86.5,l:84.5},
-    {o:85,c:83.8,h:85.2,l:83.5},{o:83.8,c:84.5,h:84.8,l:83.2},{o:84.5,c:83,h:84.8,l:82.8},
-    {o:83,c:84.8,h:85,l:82.8},{o:84.8,c:84,h:85.2,l:83.5},{o:84,c:82,h:84.2,l:81.5},
-    {o:82,c:83,h:83.5,l:81.5},{o:83,c:81.5,h:83.2,l:81},{o:81.5,c:82.3,h:82.5,l:81},
-    {o:82.3,c:81,h:82.5,l:80.5},{o:81,c:82,h:82.3,l:80.8},{o:82,c:84.98,h:85.2,l:81.8},
-  ];
-  const W=358,H=130;
-  const minP=Math.min(...data.map(d=>d.l))-0.5;
-  const maxP=Math.max(...data.map(d=>d.h))+0.5;
-  const py=v=>H-(v-minP)/(maxP-minP)*(H-16)-8;
-  const bw=W/data.length-2;
-  return (
-    <div className="chart-wrap-m">
-      <div className="chart-label-m">SOL/USDT · 1h</div>
-      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-        {[0.25,0.5,0.75].map((f,i)=>(
-          <line key={i} x1="0" y1={8+f*(H-16)} x2={W} y2={8+f*(H-16)} stroke="#1e2d45" strokeWidth="1" strokeDasharray="3,3"/>
-        ))}
-        {data.map((d,i)=>{
-          const x=i*(W/data.length)+1, isG=d.c>=d.o, col=isG?'#00d68f':'#ff4d6a';
-          const top=py(Math.max(d.o,d.c)), bot=py(Math.min(d.o,d.c));
-          return (<g key={i}>
-            <line x1={x+bw/2} y1={py(d.h)} x2={x+bw/2} y2={py(d.l)} stroke={col} strokeWidth="1" opacity="0.6"/>
-            <rect x={x} y={top} width={bw} height={Math.max(bot-top,1)} fill={col} rx="0.5"/>
-          </g>);
-        })}
-        <line x1="0" y1={py(84.98)} x2={W} y2={py(84.98)} stroke="#4a9eff" strokeWidth="1" strokeDasharray="4,4" opacity="0.5"/>
-      </svg>
-      <div style={{position:'absolute',right:6,top:py(84.98)/H*150-8,background:'#4a9eff',color:'#fff',fontSize:9,padding:'1px 5px',borderRadius:2,fontFamily:'var(--mono)',pointerEvents:'none'}}>84.98</div>
-    </div>
-  );
-}
+function Chart({ height=240 }) { return <TVChart height={height} mobile={false}/>; }
+function MiniChart() { return <div className="chart-wrap-m"><TVChart height={150} mobile={true}/></div>; }
 /* ── Desktop nav Icon ── */
 function Icon({ name, active }) {
   const c=active?'var(--blue)':'var(--text3)';
@@ -299,39 +271,25 @@ const NAV_ICONS = {
 };
 /* ── Desktop: ViewDashboard ── */
 function ViewDashboard() {
-  const {stats, setups} = useDash();
-  const s = stats || {};
+  const {setups} = useDash();
   return (
     <>
-      <div className="row-top">
-        <div className="panel" style={{minHeight:260}}>
-          <div className="panel-head">
-            <span className="panel-title">Wykres</span>
-            <div className="panel-right">
-              {['5m','15m','1h','4h'].map((t,i)=>(
-                <span key={i} style={{fontSize:11,fontFamily:'var(--mono)',color:i===2?'var(--blue)':'var(--text3)',cursor:'pointer',padding:'2px 6px',background:i===2?'var(--blue-dim)':'transparent',borderRadius:3}}>{t}</span>
-              ))}
-            </div>
-          </div>
-          <div className="panel-body chart-wrap-d"><Chart height={190}/></div>
-        </div>
-        <div className="panel">
-          <div className="panel-head"><span className="panel-title">MyAll · Podsumowanie</span></div>
-          <div className="quick-stat-grid">
-            <div className="qs-cell"><div className="qs-val dim">{fmtPrice(s.balance)}</div><div className="qs-lbl">Balans</div></div>
-            <div className="qs-cell"><div className={`qs-val ${s.pnl_3m>=0?'green':'red'}`}>{fmtPnl(s.pnl_3m)}</div><div className="qs-lbl">3m P&L</div></div>
-            <div className="qs-cell"><div className={`qs-val ${s.pnl_5d>=0?'green':'red'}`}>{fmtPnl(s.pnl_5d)}</div><div className="qs-lbl">5d P&L</div></div>
-            <div className="qs-cell"><div className="qs-val dim">{fmtWr(s.win_rate)}</div><div className="qs-lbl">Win Rate</div></div>
-            <div className="qs-cell"><div className="qs-val amber">{s.active_count ?? '—'}</div><div className="qs-lbl">Aktywne setups</div></div>
-            <div className="qs-cell"><div className="qs-val dim">{s.closed_count ?? '—'}</div><div className="qs-lbl">Zamknięte</div></div>
+      <div className="panel" style={{minHeight:260}}>
+        <div className="panel-head">
+          <span className="panel-title">Wykres</span>
+          <div className="panel-right">
+            {['5m','15m','1h','4h'].map((t,i)=>(
+              <span key={i} style={{fontSize:11,fontFamily:'var(--mono)',color:i===2?'var(--blue)':'var(--text3)',cursor:'pointer',padding:'2px 6px',background:i===2?'var(--blue-dim)':'transparent',borderRadius:3}}>{t}</span>
+            ))}
           </div>
         </div>
+        <div className="panel-body chart-wrap-d"><Chart height={240}/></div>
       </div>
       <div className="panel">
         <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{setups.length}</span></div>
         <div className="panel-body">
           <table className="tbl">
-            <thead><tr><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Akcja</th></tr></thead>
+            <thead><tr><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TP1</th><th>TP2</th><th>SL</th><th>Akcja</th></tr></thead>
             <tbody>{setups.map((s,i)=>(
               <tr key={i}>
                 <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
@@ -339,11 +297,11 @@ function ViewDashboard() {
                 <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
                 <td style={{color:'var(--text2)',fontSize:11,maxWidth:180}}>{s.typ}</td>
                 <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
-                <td className="mono dim">{s.w}</td><td className="mono dim">{s.tps}</td><td className="mono dim">{s.ms}</td>
+                <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
                 <td className="mono red">{s.sl}</td>
                 <td><div style={{display:'flex',gap:4}}>
-                  <button className="action-btn gray">setup</button>
-                  <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>{s.kier==='LONG'?'▲':'▼'} wejście</button>
+                  <button className="action-btn red">Anuluj</button>
+                  <button className="action-btn gray">Zmień TP</button>
                 </div></td>
               </tr>
             ))}</tbody>
@@ -361,7 +319,7 @@ function ViewSetups() {
       <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{setups.length}</span></div>
       <div className="panel-body scroll-y">
         <table className="tbl">
-          <thead><tr><th>#</th><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TPS</th><th>MS</th><th>SL</th><th>Akcja</th></tr></thead>
+          <thead><tr><th>#</th><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TP1</th><th>TP2</th><th>SL</th><th>Akcja</th></tr></thead>
           <tbody>{setups.map((s,i)=>(
             <tr key={i}>
               <td className="mono" style={{color:'var(--text3)'}}>{i+1}</td>
@@ -370,11 +328,11 @@ function ViewSetups() {
               <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
               <td style={{color:'var(--text2)',fontSize:11}}>{s.typ}</td>
               <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
-              <td className="mono dim">{s.w}</td><td className="mono dim">{s.tps}</td><td className="mono dim">{s.ms}</td>
+              <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
               <td className="mono red">{s.sl}</td>
               <td><div style={{display:'flex',gap:4}}>
-                <button className="action-btn gray">setup</button>
-                <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>{s.kier==='LONG'?'▲':'▼'} wejście</button>
+                <button className="action-btn red">Anuluj</button>
+                <button className="action-btn gray">Zmień TP</button>
               </div></td>
             </tr>
           ))}</tbody>
@@ -527,18 +485,31 @@ function Sidebar({ tab, setTab }) {
 /* ── DesktopApp ── */
 function DesktopApp() {
   const [tab,setTab]=useState('dash');
-  const {stats, alert} = useDash();
-  const s = stats || {};
+  const {stats, market, alert, statsPeriod, setStatsPeriod} = useDash();
+  const s = stats || {}, m = market || {};
+  const PERIODS=[{v:'today',l:'dziś'},{v:'24h',l:'24h'},{v:'7d',l:'7d'},{v:'30d',l:'30d'}];
   return (
     <div className="d-root">
       <Sidebar tab={tab} setTab={setTab}/>
       <div className="d-main">
+        {m.price!=null && <div style={{background:'var(--bg2)',borderBottom:'1px solid var(--border)',padding:'6px 24px',display:'flex',alignItems:'center',gap:16,fontSize:11,fontFamily:'var(--mono)',flexShrink:0,flexWrap:'wrap'}}>
+          <span style={{fontWeight:600,color:'var(--text1)'}}>${Number(m.price).toFixed(2)}</span>
+          {m.regime && <span className={`regime-badge ${m.regime_direction==='up'?'up':'down'}`} style={{margin:0}}>{regLabel(m.regime,m.regime_direction)}</span>}
+          {m.score!=null && <span style={{color:'var(--text2)'}}>Score: <span style={{color:'var(--text1)'}}>{Number(m.score).toFixed(1)}</span></span>}
+          {m.vol_ratio!=null && <span style={{color:'var(--text2)'}}>Vol: <span style={{color:'var(--text1)'}}>{Number(m.vol_ratio).toFixed(2)}x</span></span>}
+          {m.atr!=null && <span style={{color:'var(--text2)'}}>ATR: <span style={{color:'var(--text1)'}}>{Number(m.atr).toFixed(2)}</span></span>}
+          {m.last_scans&&m.last_scans.algo2 && <span style={{color:'var(--text3)'}}>Algo2 scan: <span style={{color:'var(--text2)'}}>{m.last_scans.algo2}</span></span>}
+        </div>}
         <div className="d-topbar">
-          <div className="stat-cell"><div className="stat-val dim">{fmtPrice(s.balance)}</div><div className="stat-lbl">Balans</div></div>
-          <div className="stat-cell"><div className={`stat-val ${s.pnl_3m>=0?'green':'red'}`}>{fmtPnl(s.pnl_3m)}</div><div className="stat-lbl">3m P&L</div></div>
-          <div className="stat-cell"><div className={`stat-val ${s.pnl_5d>=0?'green':'red'}`}>{fmtPnl(s.pnl_5d)}</div><div className="stat-lbl">5d P&L</div></div>
+          <div className="stat-cell"><div className={`stat-val ${(s.pnl||0)>=0?'green':'red'}`}>{fmtPnl(s.pnl)}</div><div className="stat-lbl">P&L</div></div>
+          <div className="stat-cell"><div className="stat-val dim">{s.entry_rate!=null?`${Number(s.entry_rate).toFixed(0)}%`:'—'}</div><div className="stat-lbl">Entry Rate</div></div>
           <div className="stat-cell"><div className="stat-val dim">{fmtWr(s.win_rate)}</div><div className="stat-lbl">Win Rate</div></div>
           <div className="stat-cell"><div className="stat-val amber">{s.active_count??'—'}</div><div className="stat-lbl">Aktywne</div></div>
+          <div style={{display:'flex',gap:4,marginLeft:8}}>
+            {PERIODS.map(({v,l})=>(
+              <button key={v} onClick={()=>setStatsPeriod(v)} style={{padding:'3px 9px',fontSize:10,fontFamily:'var(--mono)',fontWeight:600,borderRadius:3,border:`1px solid ${statsPeriod===v?'var(--blue)':'var(--border2)'}`,background:statsPeriod===v?'var(--blue-dim)':'transparent',color:statsPeriod===v?'var(--blue)':'var(--text3)',cursor:'pointer'}}>{l}</button>
+            ))}
+          </div>
           {alert&&alert.message && <div className="topbar-alert">⚠ {alert.message}</div>}
         </div>
         <div className="d-content">
@@ -576,10 +547,11 @@ function TabDashboard() {
           </div>
           <div className="setup-card-bottom">
             <div className="setup-stat"><div className="setup-stat-val">{s.w}</div><div className="setup-stat-lbl">W</div></div>
-            <div className="setup-stat"><div className="setup-stat-val">{s.tps}</div><div className="setup-stat-lbl">TPS</div></div>
+            <div className="setup-stat"><div className="setup-stat-val">{s.tp1}</div><div className="setup-stat-lbl">TP1</div></div>
             <div className="setup-stat"><div className="setup-stat-val red">{s.sl}</div><div className="setup-stat-lbl">SL</div></div>
-            <div className="setup-stat" style={{display:'flex',alignItems:'center',justifyContent:'flex-end'}}>
-              <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>{s.kier==='LONG'?'▲ wejście':'▼ wejście'}</button>
+            <div className="setup-stat" style={{display:'flex',alignItems:'center',justifyContent:'flex-end',gap:4}}>
+              <button className="action-btn red">Anuluj</button>
+              <button className="action-btn gray">Zmień TP</button>
             </div>
           </div>
         </div>
@@ -613,14 +585,13 @@ function TabSetups() {
           </div>
           <div className="setup-card-bottom">
             <div className="setup-stat"><div className="setup-stat-val">{s.w}</div><div className="setup-stat-lbl">W</div></div>
-            <div className="setup-stat"><div className="setup-stat-val">{s.tps}</div><div className="setup-stat-lbl">TPS</div></div>
-            <div className="setup-stat"><div className="setup-stat-val">{s.ms}</div><div className="setup-stat-lbl">MS</div></div>
+            <div className="setup-stat"><div className="setup-stat-val">{s.tp1}</div><div className="setup-stat-lbl">TP1</div></div>
+            <div className="setup-stat"><div className="setup-stat-val">{s.tp2}</div><div className="setup-stat-lbl">TP2</div></div>
             <div className="setup-stat"><div className="setup-stat-val red">{s.sl}</div><div className="setup-stat-lbl">SL</div></div>
-            <div className="setup-stat"><div className="setup-stat-val dim">{s.wr}%</div><div className="setup-stat-lbl">WR-TPS</div></div>
           </div>
           <div style={{padding:'0 12px 10px',display:'flex',gap:6,justifyContent:'flex-end'}}>
-            <button className="action-btn gray">setup</button>
-            <button className={`action-btn ${s.kier==='LONG'?'green':'red'}`}>{s.kier==='LONG'?'▲':'▼'} wejście</button>
+            <button className="action-btn red">Anuluj</button>
+            <button className="action-btn gray">Zmień TP</button>
           </div>
         </div>
       ))}
@@ -741,8 +712,8 @@ function TabHistoria() {
 /* ── MobileApp ── */
 function MobileApp() {
   const [tab,setTab]=useState(0);
-  const {price, stats, setups} = useDash();
-  const p = price || {}, s = stats || {};
+  const {price, stats, market, setups, statsPeriod, setStatsPeriod} = useDash();
+  const p = price || {}, s = stats || {}, m = market || {};
   const tabs=['dash','setups','algo','hist'];
   const labels=['Dashboard','Setups','Algo','Historia'];
   return (
@@ -763,13 +734,24 @@ function MobileApp() {
               <span className="topbar-pair">{p.pair||'SOL/USDT SPOT'}</span>
             </div>
           </div>
+          {(m.score!=null||m.vol_ratio!=null||m.atr!=null) && <div style={{display:'flex',gap:10,marginTop:6,fontFamily:'var(--mono)',fontSize:10}}>
+            {m.score!=null && <span style={{color:'var(--text3)'}}>Score: <span style={{color:'var(--text2)'}}>{Number(m.score).toFixed(1)}</span></span>}
+            {m.vol_ratio!=null && <span style={{color:'var(--text3)'}}>Vol: <span style={{color:'var(--text2)'}}>{Number(m.vol_ratio).toFixed(2)}x</span></span>}
+            {m.atr!=null && <span style={{color:'var(--text3)'}}>ATR: <span style={{color:'var(--text2)'}}>{Number(m.atr).toFixed(2)}</span></span>}
+          </div>}
         </div>
-        <div className="stats-strip">
-          <div className="m-stat-cell"><div className="m-stat-val dim">{fmtPrice(s.balance)}</div><div className="m-stat-lbl">Balans</div></div>
-          <div className="m-stat-cell"><div className={`m-stat-val ${s.pnl_3m>=0?'green':'red'}`}>{fmtPnl(s.pnl_3m)}</div><div className="m-stat-lbl">3m P&L</div></div>
-          <div className="m-stat-cell"><div className={`m-stat-val ${s.pnl_5d>=0?'green':'red'}`}>{fmtPnl(s.pnl_5d)}</div><div className="m-stat-lbl">5d P&L</div></div>
-          <div className="m-stat-cell"><div className="m-stat-val dim">{fmtWr(s.win_rate)}</div><div className="m-stat-lbl">Win rate</div></div>
-          <div className="m-stat-cell"><div className="m-stat-val amber">{s.active_count??'—'}</div><div className="m-stat-lbl">Aktywne</div></div>
+        <div className="stats-strip" style={{flexDirection:'column',padding:0}}>
+          <div style={{display:'flex'}}>
+            <div className="m-stat-cell"><div className={`m-stat-val ${(s.pnl||0)>=0?'green':'red'}`}>{fmtPnl(s.pnl)}</div><div className="m-stat-lbl">P&L</div></div>
+            <div className="m-stat-cell"><div className="m-stat-val dim">{s.entry_rate!=null?`${Number(s.entry_rate).toFixed(0)}%`:'—'}</div><div className="m-stat-lbl">Entry Rate</div></div>
+            <div className="m-stat-cell"><div className="m-stat-val dim">{fmtWr(s.win_rate)}</div><div className="m-stat-lbl">Win Rate</div></div>
+            <div className="m-stat-cell"><div className="m-stat-val amber">{s.active_count??'—'}</div><div className="m-stat-lbl">Aktywne</div></div>
+          </div>
+          <div style={{display:'flex',gap:4,padding:'6px 10px',borderTop:'1px solid var(--border)'}}>
+            {[{v:'today',l:'dziś'},{v:'24h',l:'24h'},{v:'7d',l:'7d'},{v:'30d',l:'30d'}].map(({v,l})=>(
+              <button key={v} onClick={()=>setStatsPeriod(v)} style={{flex:1,padding:'3px 4px',fontSize:10,fontFamily:'var(--mono)',fontWeight:600,borderRadius:3,border:`1px solid ${statsPeriod===v?'var(--blue)':'var(--border2)'}`,background:statsPeriod===v?'var(--blue-dim)':'transparent',color:statsPeriod===v?'var(--blue)':'var(--text3)',cursor:'pointer'}}>{l}</button>
+            ))}
+          </div>
         </div>
         <div className="scroll-area">
           {tab===0 && <TabDashboard/>}
@@ -797,8 +779,10 @@ function App() {
   const [isMobile,setIsMobile]=useState(window.innerWidth < 768);
   const [price,setPrice]=useState(null);
   const [stats,setStats]=useState(null);
+  const [market,setMarket]=useState(null);
   const [setups,setSetups]=useState(SETUPS.map(normalizeSetup));
   const [alert,setAlert]=useState(null);
+  const [statsPeriod,setStatsPeriod]=useState('30d');
 
   useEffect(()=>{
     const onR=()=>setIsMobile(window.innerWidth < 768);
@@ -812,8 +796,13 @@ function App() {
   },[]);
 
   useEffect(()=>{
-    const f=()=>fetch('/api/dashboard/stats').then(r=>r.ok?r.json():null).then(d=>{if(d)setStats(d);}).catch(()=>{});
+    const f=()=>fetch(`/api/dashboard/stats?period=${statsPeriod}`).then(r=>r.ok?r.json():null).then(d=>{if(d)setStats(d);}).catch(()=>{});
     f(); const id=setInterval(f,60000); return ()=>clearInterval(id);
+  },[statsPeriod]);
+
+  useEffect(()=>{
+    const f=()=>fetch('/api/market-status').then(r=>r.ok?r.json():null).then(d=>{if(d)setMarket(d);}).catch(()=>{});
+    f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
   },[]);
 
   useEffect(()=>{
@@ -827,7 +816,7 @@ function App() {
   },[]);
 
   return (
-    <DashCtx.Provider value={{price,stats,setups,alert}}>
+    <DashCtx.Provider value={{price,stats,market,setups,alert,statsPeriod,setStatsPeriod}}>
       {isMobile ? <MobileApp/> : <DesktopApp/>}
     </DashCtx.Provider>
   );
