@@ -1426,7 +1426,7 @@ def get_resolved_types(date_from: str | None = None, date_to: str | None = None)
     where = [
         "resolved = TRUE",
         "type IS NOT NULL",
-        "type NOT LIKE '% %'",     # wyklucz wolny tekst z opisami
+        "type NOT LIKE '%% %%'",     # wyklucz wolny tekst z opisami (psycopg2 escape: %% = %)
         "length(type) <= 60",      # dodatkowe zabezpieczenie przed długimi opisami
     ]
     params: dict = {}
