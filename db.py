@@ -881,6 +881,8 @@ def get_resolved_filtered(
     offset: int = 0,
     models: list[str] | None = None,
     variants: list[str] | None = None,
+    types: list[str] | None = None,
+    result_cats: list[str] | None = None,
 ) -> dict:
     """Zwraca zamknięte setupy z filtrami + total count."""
     where = ["resolved = TRUE"]
@@ -890,6 +892,19 @@ def get_resolved_filtered(
         where.append("result = ANY(%(results)s)")
         params["results"] = results
 
+    if result_cats:
+        cat_conds = []
+        if "win" in result_cats:
+            cat_conds.append("result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')")
+        if "loss" in result_cats:
+            cat_conds.append("result = 'SL'")
+        if "no_entry" in result_cats:
+            cat_conds.append("(entry_hit_at IS NULL AND result IS NULL AND cancel_reason IS NULL)")
+        if "cancelled" in result_cats:
+            cat_conds.append("cancel_reason IS NOT NULL")
+        if cat_conds:
+            where.append(f"({' OR '.join(cat_conds)})")
+
     if models:
         where.append("model = ANY(%(models)s)")
         params["models"] = models
@@ -897,6 +912,10 @@ def get_resolved_filtered(
     if variants:
         where.append("COALESCE(variant, 'baseline') = ANY(%(variants)s)")
         params["variants"] = variants
+
+    if types:
+        where.append("type = ANY(%(types)s)")
+        params["types"] = types
 
     if date_from:
         where.append("resolved_at >= %(date_from)s::date")
@@ -950,7 +969,9 @@ def get_resolved_filtered(
             cur.execute(
                 f"""
                 SELECT setup_id, alert_time, entry_hit_at, model, direction, type, variant, score,
-                       result, avg_entry, avg_exit, pnl_usd, pnl_pct,
+                       result, avg_entry, avg_exit, pnl_usd, pnl_pct, cancel_reason,
+                       ROUND(({tp1_only_calc_f})::numeric, 2)            AS tp1_only_pnl,
+                       ROUND(({tp1_only_pct_calc_f})::numeric, 2)        AS tp1_only_pnl_pct,
                        exit_time, entries, tps, sl, sl_after_tp1,
                        exchange_qty_full, exchange_qty_half,
                        hypo_result, hypo_pnl_usd, trade_usdt
@@ -1245,6 +1266,7 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
             cur.execute(
                 f"""
                 SELECT
+                    COALESCE(type, 'unknown')                                              AS scenario,
                     COALESCE(variant, 'baseline')                                          AS variant,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
@@ -1255,22 +1277,22 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                     ROUND(AVG(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS avg_pnl_usd,
                     ROUND(SUM(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS total_pnl_usd,
                     ROUND(SUM({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS total_tp1only_usd,
+                    ROUND(AVG({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS avg_tp1only_usd,
                     ROUND(AVG(rr) FILTER (WHERE entry_hit_at IS NOT NULL)::numeric, 2)    AS avg_rr,
-                    ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
-                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
-                          * 100, 1)                                                        AS tp1_rate,
                     ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS tp2_rate,
-                    COUNT(*) FILTER (WHERE result IN ('TP1+BE','TP1+SL'))                  AS tp1_be_sl_hits,
+                    ROUND(COUNT(*) FILTER (WHERE result IN ('TP1+BE','TP1+SL'))::numeric
+                          / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
+                          * 100, 1)                                                        AS tp1_be_rate,
                     ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS sl_rate
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
-                GROUP BY variant
-                ORDER BY variant
+                GROUP BY type, variant
+                ORDER BY type, variant
                 """,
                 time_params,
             )

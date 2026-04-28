@@ -215,39 +215,111 @@ const normalizeSetup = (s) => {
   };
 };
 /* ── Context ── */
-const DashCtx = React.createContext({price:null, stats:null, market:null, setups:SETUPS, alert:null, statsPeriod:'30d', setStatsPeriod:()=>{}});
+const DashCtx = React.createContext({price:null, stats:null, market:null, setups:SETUPS, alert:null, statsPeriod:'30d', setStatsPeriod:()=>{}, refreshSetups:()=>{}});
 const useDash = () => React.useContext(DashCtx);
+/* ── Modal: Zmień TP ── */
+function TPModal({ setup, onClose, onSaved }) {
+  const [tp1,setTp1]=useState(setup.tp1!=='—'?setup.tp1:'');
+  const [tp2,setTp2]=useState(setup.tp2!=='—'?setup.tp2:'');
+  const [saving,setSaving]=useState(false);
+  const [err,setErr]=useState('');
+  const save=async()=>{
+    setSaving(true); setErr('');
+    try {
+      const body={};
+      if(tp1!=='') body.tp1=parseFloat(tp1);
+      if(tp2!=='') body.tp2=parseFloat(tp2);
+      const r=await fetch(`/api/update-tps/${setup.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!r.ok){const d=await r.json();setErr(d.detail||'Błąd');setSaving(false);return;}
+      onSaved();
+    } catch(e){setErr('Błąd połączenia');setSaving(false);}
+  };
+  const inp={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'6px 10px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:13,width:'100%',boxSizing:'border-box'};
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{background:'var(--bg1)',border:'1px solid var(--border2)',borderRadius:10,padding:24,width:300,maxWidth:'90vw'}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:13,fontWeight:700,marginBottom:16,color:'var(--text1)'}}>Zmień TP — #{setup.id}</div>
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:10,color:'var(--text3)',marginBottom:4,textTransform:'uppercase',letterSpacing:'.06em'}}>TP1</div>
+          <input style={inp} value={tp1} onChange={e=>setTp1(e.target.value)} placeholder={setup.tp1} type="number" step="0.01"/>
+        </div>
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,color:'var(--text3)',marginBottom:4,textTransform:'uppercase',letterSpacing:'.06em'}}>TP2</div>
+          <input style={inp} value={tp2} onChange={e=>setTp2(e.target.value)} placeholder={setup.tp2} type="number" step="0.01"/>
+        </div>
+        {err && <div style={{color:'var(--red)',fontSize:11,marginBottom:12,fontFamily:'var(--mono)'}}>{err}</div>}
+        <div style={{display:'flex',gap:8}}>
+          <button className="action-btn gray" style={{flex:1,justifyContent:'center',padding:'7px 0'}} onClick={onClose}>Anuluj</button>
+          <button className="action-btn green" style={{flex:1,justifyContent:'center',padding:'7px 0'}} onClick={save} disabled={saving}>{saving?'…':'Zapisz'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+/* ── Setup action buttons ── */
+function SetupActions({ setup }) {
+  const {refreshSetups}=useDash();
+  const [tpModal,setTpModal]=useState(false);
+  const [cancelling,setCancelling]=useState(false);
+  const cancel=async()=>{
+    if(!confirm(`Anulować setup #${setup.id}?`)) return;
+    setCancelling(true);
+    try{
+      const r=await fetch(`/api/cancel-setup/${setup.id}`,{method:'POST'});
+      if(r.ok) refreshSetups();
+      else alert('Błąd anulowania');
+    }catch{alert('Błąd połączenia');}
+    setCancelling(false);
+  };
+  return (
+    <>
+      <div style={{display:'flex',gap:4}}>
+        <button className="action-btn red" onClick={cancel} disabled={cancelling}>{cancelling?'…':'Anuluj'}</button>
+        <button className="action-btn gray" onClick={()=>setTpModal(true)}>Zmień TP</button>
+      </div>
+      {tpModal && <TPModal setup={setup} onClose={()=>setTpModal(false)} onSaved={()=>{setTpModal(false);refreshSetups();}}/>}
+    </>
+  );
+}
 /* ── TradingView chart (desktop + mobile) ── */
+let _tvLibPromise = null;
+function loadTVLib() {
+  if (window.TradingView) return Promise.resolve();
+  if (!_tvLibPromise) _tvLibPromise = new Promise(res => {
+    const s = document.createElement('script');
+    s.src = 'https://s3.tradingview.com/tv.js';
+    s.onload = res; s.onerror = res;
+    document.head.appendChild(s);
+  });
+  return _tvLibPromise;
+}
 function TVChart({ height=240, mobile=false }) {
   const ref = React.useRef(null);
   const idRef = React.useRef('tv_' + Math.random().toString(36).slice(2));
   useEffect(()=>{
     if(!ref.current) return;
-    const container = document.createElement('div');
-    container.id = idRef.current;
-    container.style.height = height + 'px';
-    ref.current.innerHTML = '';
-    ref.current.appendChild(container);
-    const s = document.createElement('script');
-    s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-    s.async = true;
-    s.innerHTML = JSON.stringify({
-      autosize: true,
-      symbol: 'BINANCE:SOLUSDT',
-      interval: '60',
-      timezone: 'Europe/Warsaw',
-      theme: 'dark',
-      style: '1',
-      locale: 'pl',
-      backgroundColor: 'rgba(13,21,32,1)',
-      gridColor: 'rgba(26,40,64,1)',
-      hide_top_toolbar: mobile,
-      hide_legend: mobile,
-      allow_symbol_change: false,
-      save_image: false,
-      container_id: idRef.current,
+    ref.current.id = idRef.current;
+    loadTVLib().then(()=>{
+      if(!window.TradingView) return;
+      ref.current.innerHTML = '';
+      new window.TradingView.widget({
+        autosize: true,
+        symbol: 'BINANCE:SOLUSDT',
+        interval: '60',
+        timezone: 'Europe/Warsaw',
+        theme: 'dark',
+        style: '1',
+        locale: 'pl',
+        backgroundColor: 'rgba(13,21,32,1)',
+        gridColor: 'rgba(26,40,64,1)',
+        hide_top_toolbar: mobile,
+        hide_legend: mobile,
+        allow_symbol_change: false,
+        save_image: false,
+        container_id: idRef.current,
+      });
     });
-    ref.current.appendChild(s);
+    return ()=>{ if(ref.current) ref.current.innerHTML=''; };
   },[]);
   return <div ref={ref} style={{height,overflow:'hidden',borderRadius:mobile?6:0}}/>;
 }
@@ -299,10 +371,7 @@ function ViewDashboard() {
                 <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
                 <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
                 <td className="mono red">{s.sl}</td>
-                <td><div style={{display:'flex',gap:4}}>
-                  <button className="action-btn red">Anuluj</button>
-                  <button className="action-btn gray">Zmień TP</button>
-                </div></td>
+                <td><SetupActions setup={s}/></td>
               </tr>
             ))}</tbody>
           </table>
@@ -330,10 +399,7 @@ function ViewSetups() {
               <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
               <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
               <td className="mono red">{s.sl}</td>
-              <td><div style={{display:'flex',gap:4}}>
-                <button className="action-btn red">Anuluj</button>
-                <button className="action-btn gray">Zmień TP</button>
-              </div></td>
+              <td><SetupActions setup={s}/></td>
             </tr>
           ))}</tbody>
         </table>
@@ -343,7 +409,7 @@ function ViewSetups() {
 }
 /* ── Desktop: ViewAlgo ── */
 function ViewAlgo() {
-  const [period,setPeriod]=useState('1m');
+  const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
   useEffect(()=>{
@@ -351,45 +417,61 @@ function ViewAlgo() {
     fetch(`/api/dashboard/algo?period=${period}&view=${encodeURIComponent(subTab)}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
   },[period,subTab]);
-  const pnlColor=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
-  const wrColor=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
+  const pC=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
+  const wrC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
+  const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
+  const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${v}%`;
+  const pnlC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  const groups=React.useMemo(()=>{
+    if(!rows||subTab!=='wariant') return null;
+    const g={};
+    rows.forEach(r=>{const sc=r.scenario||'?';if(!g[sc])g[sc]=[];g[sc].push(r);});
+    return g;
+  },[rows,subTab]);
   return (
     <>
-      <div style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 16px',marginBottom:4,display:'flex',gap:12,alignItems:'center'}}>
+      <div style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 16px',marginBottom:4,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
         <span className="panel-title" style={{marginRight:8}}>Analityka Algo</span>
-        <div className="seg-tabs">{['1m','3m','6m+'].map(p=><div key={p} className={`seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
+        <div className="seg-tabs">{['7d','30d','3m','6m','12m'].map(p=><div key={p} className={`seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
         <div className="filter-chips" style={{marginLeft:12}}>{['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}</div>
       </div>
       {rows===null && <div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
       {rows!==null && subTab==='wariant' && <div className="panel" style={{flex:1}}>
-        <div className="panel-head"><span className="panel-title">Per wariant</span><span className="panel-badge">{rows.length}</span></div>
+        <div className="panel-head"><span className="panel-title">Per scenariusz / wariant</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Wariant</th><th>S</th><th>WR</th><th>Avg TPR</th><th>SL rate</th><th>P&L $</th></tr></thead>
-          <tbody>{rows.map((r,i)=>(
-            <tr key={i}>
-              <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
-              <td className="mono dim">{r.s}</td>
-              <td className="mono" style={{color:wrColor(r.wr)}}>{r.wr}</td>
-              <td className="mono dim">{r.tpr}</td>
-              <td className="mono dim">{r.slR}</td>
-              <td className="mono" style={{fontWeight:600,color:r.pnl==null?'var(--text3)':r.pnl>0?'var(--green)':r.pnl<0?'var(--red)':'var(--text3)'}}>
-                {r.pnl==null?'—':r.pnl>0?`+${r.pnl}$`:r.pnl===0?'0':`${r.pnl}$`}
-              </td>
-            </tr>
+          <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>P&L TP1$</th><th>P&L TP1+TP2$</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
+          <tbody>{Object.entries(groups||{}).map(([sc,variants])=>(
+            <React.Fragment key={sc}>
+              <tr><td colSpan={10} style={{background:'var(--bg3)',color:'var(--text2)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'.08em',padding:'5px 12px'}}>{sc}</td></tr>
+              {variants.map((r,i)=>(
+                <tr key={i}>
+                  <td style={{paddingLeft:24,color:'var(--text1)'}}>{r.variant}</td>
+                  <td className="mono dim">{r.entered}<span style={{color:'var(--text3)',fontSize:10}}> /{r.total}</span></td>
+                  <td className="mono" style={{color:wrC(r.entry_rate)}}>{r.entry_rate}</td>
+                  <td className="mono dim">{r.tp1_be_rate}</td>
+                  <td className="mono dim">{r.tp2_rate}</td>
+                  <td className="mono" style={{color:r.sl_rate==='0%'?'var(--green)':r.sl_rate==='100%'?'var(--red)':'var(--text2)'}}>{r.sl_rate}</td>
+                  <td className="mono" style={{color:pnlC(r.tp1_pnl)}}>{fmtU(r.tp1_pnl)}</td>
+                  <td className="mono" style={{fontWeight:600,color:pnlC(r.tp12_pnl)}}>{fmtU(r.tp12_pnl)}</td>
+                  <td className="mono" style={{color:pnlC(r.avg_pct_tp1)}}>{fmtP(r.avg_pct_tp1)}</td>
+                  <td className="mono" style={{color:pnlC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</td>
+                </tr>
+              ))}
+            </React.Fragment>
           ))}</tbody>
         </table></div>
       </div>}
       {rows!==null && subTab==='per data' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per data</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
+          <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
           <tbody>{rows.map((r,i)=>(
             <tr key={i}>
               <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
               <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
-              <td className="mono" style={{color:wrColor(r.wr)}}>{r.wr}</td>
-              <td className="mono" style={{fontWeight:600,color:pnlColor(r.pnl)}}>{r.pnl}</td>
-              <td className="mono" style={{color:pnlColor(r.tpsOnly)}}>{r.tpsOnly}</td>
+              <td className="mono" style={{color:wrC(r.wr)}}>{r.wr}</td>
+              <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
+              <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
             </tr>
           ))}</tbody>
         </table></div>
@@ -397,14 +479,14 @@ function ViewAlgo() {
       {rows!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per model</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Model</th><th>S</th><th>WR</th><th>P&L $</th><th>TPS-only $</th></tr></thead>
+          <thead><tr><th>Model</th><th>S</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
           <tbody>{rows.map((r,i)=>(
             <tr key={i}>
               <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
               <td className="mono dim">{r.s}</td>
               <td className="mono dim">{r.wr}</td>
-              <td className="mono" style={{fontWeight:600,color:pnlColor(r.pnl)}}>{r.pnl}</td>
-              <td className="mono" style={{color:pnlColor(r.tpsOnly)}}>{r.tpsOnly}</td>
+              <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
+              <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
             </tr>
           ))}</tbody>
         </table></div>
@@ -414,37 +496,59 @@ function ViewAlgo() {
 }
 /* ── Desktop: ViewHistoria ── */
 function ViewHistoria() {
-  const [filter,setFilter]=useState('wszystkie');
+  const [resultCats,setResultCats]=useState(['win','loss']);
+  const [dateFrom,setDateFrom]=useState('');
+  const [dateTo,setDateTo]=useState('');
   const [trades,setTrades]=useState(null);
+  const [total,setTotal]=useState(0);
+  const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
   useEffect(()=>{
     setTrades(null);
-    fetch(`/api/dashboard/trades?filter=${filter}`)
-      .then(r=>r.ok?r.json():{rows:[]}).then(d=>setTrades(d.rows||[])).catch(()=>setTrades([]));
-  },[filter]);
+    const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',date_from:dateFrom,date_to:dateTo,limit:100});
+    fetch(`/api/dashboard/trades?${p}`)
+      .then(r=>r.ok?r.json():{rows:[]}).then(d=>{setTrades(d.rows||[]);setTotal(d.total||0);}).catch(()=>setTrades([]));
+  },[resultCats,dateFrom,dateTo]);
+  const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
+  const resBg=(r)=>r==='SL'?'var(--red-dim)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--bg3)':'var(--green-dim)';
+  const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
+  const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}%`;
+  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  const CATS=[{v:'win',l:'Wygrane'},{v:'loss',l:'Straty'},{v:'no_entry',l:'Nie weszło'},{v:'cancelled',l:'Anulowane'}];
+  const inpStyle={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10};
   return (
     <div className="panel" style={{flex:1}}>
-      <div className="panel-head">
+      <div className="panel-head" style={{flexWrap:'wrap',gap:8}}>
         <span className="panel-title">Zamknięte setups</span>
-        <div className="panel-right">
-          <div className="filter-chips">{['wszystkie','long','short','tps','sl'].map(f=><div key={f} className={`filter-chip ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>{f}</div>)}</div>
-          <span className="panel-badge">{trades?trades.length:'…'}</span>
+        <div className="panel-right" style={{flexWrap:'wrap',gap:8,flex:1}}>
+          <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+            {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
+          </div>
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={inpStyle}/>
+            <span style={{color:'var(--text3)',fontSize:10}}>–</span>
+            <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={inpStyle}/>
+            {(dateFrom||dateTo)&&<span style={{color:'var(--blue)',fontSize:11,cursor:'pointer'}} onClick={()=>{setDateFrom('');setDateTo('');}}>✕</span>}
+          </div>
+          <span className="panel-badge">{trades?`${trades.length}/${total}`:'…'}</span>
         </div>
       </div>
       <div className="panel-body scroll-y">
         {trades===null && <div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
         {trades!==null && <table className="tbl">
-          <thead><tr><th>#ID</th><th>Kierunek</th><th>Model</th><th>Typ</th><th>Wejście</th><th>TP</th><th>Wynik</th><th>P&L $</th><th>Data</th></tr></thead>
+          <thead><tr><th>ID</th><th>Definicja</th><th>Wejście</th><th>Wyjście</th><th>Kier</th><th>Typ / Wariant</th><th>Wynik</th><th>P&L TP1$</th><th>P&L TP1+TP2$</th><th>%TP1</th><th>%TP1+TP2</th></tr></thead>
           <tbody>{trades.map((t,i)=>(
             <tr key={i}>
               <td className="mono" style={{color:'var(--text3)'}}>{t.id}</td>
-              <td><span className={`kier-badge ${t.kier.toLowerCase()}`}>{t.kier}</span></td>
-              <td style={{fontSize:11,color:'var(--text3)'}}>{t.model}</td>
-              <td style={{fontSize:11,color:'var(--text2)',maxWidth:200}}>{t.typ}</td>
-              <td className="mono dim">{t.we!=null?t.we.toFixed(2):'—'}</td>
-              <td className="mono dim">{t.tp!=null?Number(t.tp).toFixed(2):'—'}</td>
-              <td><span style={{fontFamily:'var(--mono)',fontSize:11,color:t.ms==='TPS'?'var(--green)':'var(--red)',background:t.ms==='TPS'?'var(--green-dim)':'var(--red-dim)',border:`1px solid ${t.ms==='TPS'?'#00d68f33':'#ff4d6a33'}`,padding:'2px 8px',borderRadius:3}}>{t.ms}</span></td>
-              <td className="mono" style={{fontWeight:600,color:t.pnl>0?'var(--green)':'var(--red)'}}>{t.pnl!=null?(t.pnl>0?'+':'')+t.pnl.toFixed(1)+'$':'—'}</td>
-              <td className="mono" style={{color:'var(--text3)',fontSize:11}}>{t.date}</td>
+              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{t.t_def||'—'}</td>
+              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{t.t_entry||'—'}</td>
+              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{t.t_exit||'—'}</td>
+              <td><span className={`kier-badge ${(t.kier||'long').toLowerCase()}`}>{t.kier}</span></td>
+              <td style={{fontSize:10,color:'var(--text2)',maxWidth:160}}>{t.typ}<br/><span style={{color:'var(--text3)'}}>{t.variant}</span></td>
+              <td><span style={{fontFamily:'var(--mono)',fontSize:10,color:resC(t.result),background:resBg(t.result),padding:'2px 7px',borderRadius:3,whiteSpace:'nowrap'}}>{t.result}</span></td>
+              <td className="mono" style={{color:pC(t.pnl_tp1)}}>{fmtU(t.pnl_tp1)}</td>
+              <td className="mono" style={{fontWeight:600,color:pC(t.pnl_tp12)}}>{fmtU(t.pnl_tp12)}</td>
+              <td className="mono" style={{color:pC(t.pnl_tp1_pct)}}>{fmtP(t.pnl_tp1_pct)}</td>
+              <td className="mono" style={{color:pC(t.pnl_pct)}}>{fmtP(t.pnl_pct)}</td>
             </tr>
           ))}</tbody>
         </table>}
@@ -492,14 +596,14 @@ function DesktopApp() {
     <div className="d-root">
       <Sidebar tab={tab} setTab={setTab}/>
       <div className="d-main">
-        {m.price!=null && <div style={{background:'var(--bg2)',borderBottom:'1px solid var(--border)',padding:'6px 24px',display:'flex',alignItems:'center',gap:16,fontSize:11,fontFamily:'var(--mono)',flexShrink:0,flexWrap:'wrap'}}>
-          <span style={{fontWeight:600,color:'var(--text1)'}}>${Number(m.price).toFixed(2)}</span>
+        <div style={{background:'var(--bg2)',borderBottom:'1px solid var(--border)',padding:'6px 24px',display:'flex',alignItems:'center',gap:16,fontSize:11,fontFamily:'var(--mono)',flexShrink:0,flexWrap:'wrap'}}>
+          {m.price!=null ? <span style={{fontWeight:600,color:'var(--text1)'}}>${Number(m.price).toFixed(2)}</span> : <span style={{color:'var(--text3)'}}>Ładowanie…</span>}
           {m.regime && <span className={`regime-badge ${m.regime_direction==='up'?'up':'down'}`} style={{margin:0}}>{regLabel(m.regime,m.regime_direction)}</span>}
           {m.score!=null && <span style={{color:'var(--text2)'}}>Score: <span style={{color:'var(--text1)'}}>{Number(m.score).toFixed(1)}</span></span>}
           {m.vol_ratio!=null && <span style={{color:'var(--text2)'}}>Vol: <span style={{color:'var(--text1)'}}>{Number(m.vol_ratio).toFixed(2)}x</span></span>}
           {m.atr!=null && <span style={{color:'var(--text2)'}}>ATR: <span style={{color:'var(--text1)'}}>{Number(m.atr).toFixed(2)}</span></span>}
-          {m.last_scans&&m.last_scans.algo2 && <span style={{color:'var(--text3)'}}>Algo2 scan: <span style={{color:'var(--text2)'}}>{m.last_scans.algo2}</span></span>}
-        </div>}
+          {m.last_scans&&m.last_scans['Algo2'] && <span style={{color:'var(--text3)'}}>Algo2: <span style={{color:'var(--text2)'}}>{m.last_scans['Algo2'].count} setup{m.last_scans['Algo2'].count!==1?'ów':''}</span> · <span style={{color:'var(--text3)',fontSize:10}}>{String(m.last_scans['Algo2'].time||'').slice(11,16)}</span></span>}
+        </div>
         <div className="d-topbar">
           <div className="stat-cell"><div className={`stat-val ${(s.pnl||0)>=0?'green':'red'}`}>{fmtPnl(s.pnl)}</div><div className="stat-lbl">P&L</div></div>
           <div className="stat-cell"><div className="stat-val dim">{s.entry_rate!=null?`${Number(s.entry_rate).toFixed(0)}%`:'—'}</div><div className="stat-lbl">Entry Rate</div></div>
@@ -549,9 +653,8 @@ function TabDashboard() {
             <div className="setup-stat"><div className="setup-stat-val">{s.w}</div><div className="setup-stat-lbl">W</div></div>
             <div className="setup-stat"><div className="setup-stat-val">{s.tp1}</div><div className="setup-stat-lbl">TP1</div></div>
             <div className="setup-stat"><div className="setup-stat-val red">{s.sl}</div><div className="setup-stat-lbl">SL</div></div>
-            <div className="setup-stat" style={{display:'flex',alignItems:'center',justifyContent:'flex-end',gap:4}}>
-              <button className="action-btn red">Anuluj</button>
-              <button className="action-btn gray">Zmień TP</button>
+            <div className="setup-stat" style={{display:'flex',alignItems:'center',justifyContent:'flex-end'}}>
+              <SetupActions setup={s}/>
             </div>
           </div>
         </div>
@@ -590,8 +693,7 @@ function TabSetups() {
             <div className="setup-stat"><div className="setup-stat-val red">{s.sl}</div><div className="setup-stat-lbl">SL</div></div>
           </div>
           <div style={{padding:'0 12px 10px',display:'flex',gap:6,justifyContent:'flex-end'}}>
-            <button className="action-btn red">Anuluj</button>
-            <button className="action-btn gray">Zmień TP</button>
+            <SetupActions setup={s}/>
           </div>
         </div>
       ))}
@@ -600,7 +702,7 @@ function TabSetups() {
 }
 /* ── Mobile: TabAlgo ── */
 function TabAlgo() {
-  const [period,setPeriod]=useState('1m');
+  const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
   useEffect(()=>{
@@ -608,32 +710,38 @@ function TabAlgo() {
     fetch(`/api/dashboard/algo?period=${period}&view=${encodeURIComponent(subTab)}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
   },[period,subTab]);
-  const pC=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
+  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
   const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
+  const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
+  const groups=React.useMemo(()=>{
+    if(!rows||subTab!=='wariant') return null;
+    const g={};
+    rows.forEach(r=>{const sc=r.scenario||'?';if(!g[sc])g[sc]=[];g[sc].push(r);});
+    return g;
+  },[rows,subTab]);
   return (
     <div>
       <div className="sec-header" style={{paddingBottom:10}}><span className="sec-title">Analityka Algo</span></div>
-      <div className="m-seg-tabs">{['1m','3m','6m+'].map(p=><div key={p} className={`m-seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
+      <div className="m-seg-tabs">{['7d','30d','3m','6m','12m'].map(p=><div key={p} className={`m-seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
       <div className="filter-scroll">{['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}</div>
       {rows===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
-      {rows!==null && subTab==='wariant' && <div className="section-wrap">
-        <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
-          <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Wariant</div>
-          <div style={{width:28,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>S</div>
-          <div style={{width:46,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
-          <div style={{width:60,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L $</div>
-        </div>
-        {rows.map((r,i)=>(
-          <div key={i} className="algo-row">
-            <div style={{flex:1}}><div className="algo-name">{r.name}</div><div className="algo-sub">TPR: {r.tpr} · SL: {r.slR}</div></div>
-            <div style={{width:28,textAlign:'center',fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>{r.s}</div>
-            <div style={{width:46,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:wC(r.wr)}}>{r.wr}</div>
-            <div className="algo-pnl" style={{width:60,color:r.pnl==null?'var(--text3)':r.pnl>0?'var(--green)':r.pnl<0?'var(--red)':'var(--text3)'}}>
-              {r.pnl==null?'—':r.pnl>0?`+${r.pnl}$`:r.pnl===0?'0':`${r.pnl}$`}
-            </div>
+      {rows!==null && subTab==='wariant' && Object.entries(groups||{}).map(([sc,variants])=>(
+        <div key={sc} className="section-wrap">
+          <div style={{padding:'6px 16px',background:'var(--bg2)',fontSize:10,fontWeight:700,color:'var(--text2)',textTransform:'uppercase',letterSpacing:'.08em'}}>{sc}</div>
+          <div style={{display:'flex',padding:'6px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
+            <div style={{flex:1,fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase'}}>Wariant</div>
+            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1</div>
+            <div style={{width:70,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1+TP2</div>
           </div>
-        ))}
-      </div>}
+          {variants.map((r,i)=>(
+            <div key={i} className="algo-row">
+              <div style={{flex:1}}><div className="algo-name" style={{fontSize:11}}>{r.variant}</div><div className="algo-sub">Entry: {r.entry_rate} · SL: {r.sl_rate}</div></div>
+              <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.tp1_pnl)}}>{fmtU(r.tp1_pnl)}</div>
+              <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.tp12_pnl)}}>{fmtU(r.tp12_pnl)}</div>
+            </div>
+          ))}
+        </div>
+      ))}
       {rows!==null && subTab==='per data' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
           <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Data</div>
@@ -657,16 +765,14 @@ function TabAlgo() {
       {rows!==null && subTab==='per model' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
           <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Model</div>
-          <div style={{width:36,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>S</div>
-          <div style={{width:36,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
-          <div style={{width:62,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L $</div>
+          <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1</div>
+          <div style={{width:70,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1+TP2</div>
         </div>
         {rows.map((r,i)=>(
           <div key={i} className="algo-row">
-            <div style={{flex:1}}><div className="algo-name">{r.name}</div><div className="algo-sub">TPS-only: {r.tpsOnly}</div></div>
-            <div style={{width:36,textAlign:'center',fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>{r.s}</div>
-            <div style={{width:36,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{r.wr}</div>
-            <div className="algo-pnl" style={{width:62,fontSize:13,color:pC(r.pnl)}}>{r.pnl}</div>
+            <div style={{flex:1}}><div className="algo-name">{r.name}</div></div>
+            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.pnl)}}>{r.pnl}</div>
+            <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.tpsOnly)}}>{r.tpsOnly}</div>
           </div>
         ))}
       </div>}
@@ -675,34 +781,41 @@ function TabAlgo() {
 }
 /* ── Mobile: TabHistoria ── */
 function TabHistoria() {
-  const [filter,setFilter]=useState('wszystkie');
+  const [resultCats,setResultCats]=useState(['win','loss']);
   const [trades,setTrades]=useState(null);
+  const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
   useEffect(()=>{
     setTrades(null);
-    fetch(`/api/dashboard/trades?filter=${filter}`)
+    const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',limit:50});
+    fetch(`/api/dashboard/trades?${p}`)
       .then(r=>r.ok?r.json():{rows:[]}).then(d=>setTrades(d.rows||[])).catch(()=>setTrades([]));
-  },[filter]);
+  },[resultCats]);
+  const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
+  const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
+  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  const CATS=[{v:'win',l:'Win'},{v:'loss',l:'SL'},{v:'no_entry',l:'Brak'},{v:'cancelled',l:'Anul.'}];
   return (
     <div>
       <div className="sec-header"><span className="sec-title">Zamknięte setups</span><span className="sec-badge">{trades?trades.length:'…'}</span></div>
-      <div className="filter-scroll">{['wszystkie','long','short','tps','sl'].map(f=><div key={f} className={`filter-chip ${filter===f?'active':''}`} onClick={()=>setFilter(f)}>{f}</div>)}</div>
+      <div className="filter-scroll">
+        {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
+      </div>
       {trades===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
       {trades!==null && trades.map((t,i)=>(
         <div key={i} className="hist-card">
           <div className="hist-card-row1">
             <div style={{display:'flex',alignItems:'center',gap:8}}>
-              <span className={`kier-badge ${t.kier.toLowerCase()}`}>{t.kier}</span>
+              <span className={`kier-badge ${(t.kier||'long').toLowerCase()}`}>{t.kier}</span>
               <span style={{fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>#{t.id}</span>
-              <span style={{fontSize:10,color:'var(--text3)'}}>{t.date}</span>
+              <span style={{fontSize:10,color:'var(--text3)'}}>{t.t_def||'—'}</span>
             </div>
-            <div className="hist-pnl" style={{color:t.pnl>0?'var(--green)':'var(--red)'}}>{t.pnl!=null?(t.pnl>0?'+':'')+t.pnl.toFixed(1)+'$':'—'}</div>
+            <span style={{fontFamily:'var(--mono)',fontSize:11,color:resC(t.result),padding:'2px 7px',borderRadius:3,background:resC(t.result)==='var(--green)'?'var(--green-dim)':resC(t.result)==='var(--red)'?'var(--red-dim)':'var(--bg3)'}}>{t.result}</span>
           </div>
-          <div className="hist-typ" style={{marginBottom:6}}>{t.typ}</div>
+          <div className="hist-typ" style={{marginBottom:6}}>{t.typ} · <span style={{color:'var(--text3)'}}>{t.variant}</span></div>
           <div className="hist-meta">
-            <span className="hist-item">WE: <span>{t.we!=null?t.we.toFixed(2):'—'}</span></span>
-            <span className="hist-item">TP: <span>{t.tp!=null?Number(t.tp).toFixed(2):'—'}</span></span>
-            <span className="hist-item">Wynik: <span style={{color:t.ms==='TPS'?'var(--green)':'var(--red)'}}>{t.ms}</span></span>
-            <span className="hist-item" style={{marginLeft:'auto'}}>{t.model}</span>
+            <span className="hist-item">TP1: <span style={{color:pC(t.pnl_tp1)}}>{fmtU(t.pnl_tp1)}</span></span>
+            <span className="hist-item">TP1+TP2: <span style={{color:pC(t.pnl_tp12)}}>{fmtU(t.pnl_tp12)}</span></span>
+            <span className="hist-item" style={{marginLeft:'auto'}}>{t.t_entry?`WE: ${t.t_entry.slice(11,16)}`:'brak WE'}</span>
           </div>
         </div>
       ))}
@@ -734,11 +847,12 @@ function MobileApp() {
               <span className="topbar-pair">{p.pair||'SOL/USDT SPOT'}</span>
             </div>
           </div>
-          {(m.score!=null||m.vol_ratio!=null||m.atr!=null) && <div style={{display:'flex',gap:10,marginTop:6,fontFamily:'var(--mono)',fontSize:10}}>
+          <div style={{display:'flex',gap:10,marginTop:6,fontFamily:'var(--mono)',fontSize:10,flexWrap:'wrap'}}>
             {m.score!=null && <span style={{color:'var(--text3)'}}>Score: <span style={{color:'var(--text2)'}}>{Number(m.score).toFixed(1)}</span></span>}
             {m.vol_ratio!=null && <span style={{color:'var(--text3)'}}>Vol: <span style={{color:'var(--text2)'}}>{Number(m.vol_ratio).toFixed(2)}x</span></span>}
             {m.atr!=null && <span style={{color:'var(--text3)'}}>ATR: <span style={{color:'var(--text2)'}}>{Number(m.atr).toFixed(2)}</span></span>}
-          </div>}
+            {m.last_scans&&m.last_scans['Algo2'] && <span style={{color:'var(--text3)'}}>Algo2: <span style={{color:'var(--text2)'}}>{m.last_scans['Algo2'].count} stp</span></span>}
+          </div>
         </div>
         <div className="stats-strip" style={{flexDirection:'column',padding:0}}>
           <div style={{display:'flex'}}>
@@ -805,9 +919,13 @@ function App() {
     f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
   },[]);
 
+  const refreshSetups=React.useCallback(()=>{
+    fetch('/api/dashboard/setups').then(r=>r.ok?r.json():[]).then(d=>setSetups(d.map(normalizeSetup))).catch(()=>{});
+  },[]);
+
   useEffect(()=>{
-    const f=()=>fetch('/api/dashboard/setups').then(r=>r.ok?r.json():[]).then(d=>setSetups(d.map(normalizeSetup))).catch(()=>{});
-    f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
+    refreshSetups();
+    const id=setInterval(refreshSetups,30000); return ()=>clearInterval(id);
   },[]);
 
   useEffect(()=>{
@@ -816,7 +934,7 @@ function App() {
   },[]);
 
   return (
-    <DashCtx.Provider value={{price,stats,market,setups,alert,statsPeriod,setStatsPeriod}}>
+    <DashCtx.Provider value={{price,stats,market,setups,alert,statsPeriod,setStatsPeriod,refreshSetups}}>
       {isMobile ? <MobileApp/> : <DesktopApp/>}
     </DashCtx.Provider>
   );
