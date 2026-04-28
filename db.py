@@ -1282,7 +1282,7 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                     ROUND(COUNT(*) FILTER (WHERE result IN ('TP2','TP1+TP2'))::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS tp2_rate,
-                    ROUND(COUNT(*) FILTER (WHERE result IN ('TP1+BE','TP1+SL'))::numeric
+                    ROUND(COUNT(*) FILTER (WHERE result = 'TP1+BE')::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS tp1_be_rate,
                     ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
