@@ -3068,7 +3068,7 @@ def _fmt_pnl(val) -> str:
     return f"+${v:.1f}" if v >= 0 else f"-${abs(v):.1f}"
 
 
-_DASHBOARD_PERIOD_DAYS: dict[str, int | None] = {"1m": 30, "3m": 90, "6m+": None}
+_DASHBOARD_PERIOD_DAYS: dict[str, int | None] = {"7d": 7, "30d": 30, "3m": 90, "6m": 180, "12m": 365}
 
 _STATUS_PL = {
     "pending":   "czeka",
@@ -3145,76 +3145,106 @@ def api_dashboard_setups():
     return result
 
 
+def _map_result_display(t: dict) -> str:
+    res = t.get("result") or ""
+    if res == "TP1+TP2":                    return "TP1+TP2"
+    if res in ("TP2",):                     return "TP1+TP2"
+    if res in ("TP1+BE", "TP1+SL"):         return "TP1+BE"
+    if res == "TP1":                        return "TP1"
+    if res == "SL":                         return "SL"
+    if t.get("cancel_reason"):              return "Anulowane"
+    if t.get("entry_hit_at") is None:       return "Nie weszło"
+    return "Nieokreślone"
+
+
 @app.get("/api/dashboard/trades")
 def api_dashboard_trades(
-    filter: str = "wszystkie",
-    limit:  int = 50,
-    offset: int = 0,
+    types:       str = "",
+    variants:    str = "",
+    result_cats: str = "win,loss",
+    directions:  str = "",
+    date_from:   str = "",
+    date_to:     str = "",
+    limit:       int = 50,
+    offset:      int = 0,
 ):
     """Zamknięte setupy dla zakładki Historia.
-    filter: wszystkie | long | short | tps | sl
+    result_cats: comma-separated — win | loss | no_entry | cancelled
     """
-    result_list: list[str] | None = None
-    direction_filter: str | None = None
-
-    if filter == "long":
-        direction_filter = "long"
-    elif filter == "short":
-        direction_filter = "short"
-    elif filter == "tps":
-        result_list = list(_WIN_RESULTS)
-    elif filter == "sl":
-        result_list = ["SL"]
-
-    data = db.get_resolved_filtered(results=result_list, limit=min(limit, 200), offset=offset)
+    data = db.get_resolved_filtered(
+        types       = [t.strip() for t in types.split(",")   if t.strip()] or None,
+        variants    = [v.strip() for v in variants.split(",") if v.strip()] or None,
+        result_cats = [c.strip() for c in result_cats.split(",") if c.strip()] or None,
+        date_from   = date_from or None,
+        date_to     = date_to   or None,
+        limit       = min(limit, 200),
+        offset      = offset,
+    )
     rows = data["rows"]
 
-    if direction_filter:
-        rows = [r for r in rows if (r.get("direction") or "").lower() == direction_filter]
+    if directions:
+        dirs = {d.strip().lower() for d in directions.split(",") if d.strip()}
+        rows = [r for r in rows if (r.get("direction") or "").lower() in dirs]
 
+    def _f(v): return float(v) if v is not None else None
+    def _dt(v, n): return str(v)[:n] if v else None
     trades = []
     for t in rows:
-        res = t.get("result") or ""
-        ms  = "TPS" if res in _WIN_RESULTS else ("SL" if res == "SL" else "—")
         tps = t.get("tps") or []
         trades.append({
-            "id":    t["setup_id"],
-            "kier":  (t.get("direction") or "").upper(),
-            "model": t.get("model", ""),
-            "typ":   t.get("type", ""),
-            "we":    float(t["avg_entry"]) if t.get("avg_entry") is not None else None,
-            "tp":    float(t["avg_exit"])  if t.get("avg_exit")  is not None else (float(tps[0]) if tps else None),
-            "pnl":   float(t["pnl_usd"])   if t.get("pnl_usd")  is not None else None,
-            "ms":    ms,
-            "date":  str(t.get("alert_time", ""))[:10],
+            "id":           t["setup_id"],
+            "kier":         (t.get("direction") or "").upper(),
+            "model":        t.get("model", ""),
+            "typ":          t.get("type", ""),
+            "variant":      t.get("variant") or "baseline",
+            "t_def":        _dt(t.get("alert_time"), 16),
+            "t_entry":      _dt(t.get("entry_hit_at"), 16),
+            "t_exit":       _dt(t.get("exit_time"), 16),
+            "we":           _f(t.get("avg_entry")),
+            "tp":           _f(t.get("avg_exit")) or (_f(tps[0]) if tps else None),
+            "result":       _map_result_display(t),
+            "pnl_tp12":     _f(t.get("pnl_usd")),
+            "pnl_tp1":      _f(t.get("tp1_only_pnl")),
+            "pnl_pct":      _f(t.get("pnl_pct")),
+            "pnl_tp1_pct":  _f(t.get("tp1_only_pnl_pct")),
         })
     return {"total": data["total"], "rows": trades, "totals": data["totals"]}
 
 
 @app.get("/api/dashboard/algo")
 def api_dashboard_algo(
-    period: str = "1m",
+    period: str = "30d",
     view:   str = "wariant",
 ):
     """Dane analityczne dla zakładki Analityka Algo.
-    period: 1m | 3m | 6m+
+    period: 7d | 30d | 3m | 6m | 12m
     view:   wariant | per data | per model
     """
     if period not in _DASHBOARD_PERIOD_DAYS:
-        raise HTTPException(status_code=400, detail="Dozwolone okresy: 1m, 3m, 6m+")
+        period = "30d"
     days = _DASHBOARD_PERIOD_DAYS[period]
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
 
     if view == "wariant":
         rows = db.get_algo2_variant_summary(days)
+        def _pct(v):
+            if v is None: return None
+            return round(float(v) / trade_usdt * 100, 1)
+        def _r(v): return f"{v}%" if v is not None else "—"
         return [
             {
-                "name":  r.get("variant", ""),
-                "s":     r.get("entered") or 0,
-                "wr":    f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
-                "tpr":   str(r["avg_rr"])    if r.get("avg_rr")   is not None else "—",
-                "pnl":   r.get("total_pnl_usd"),
-                "slR":   f"{r['sl_rate']}%"  if r.get("sl_rate")  is not None else "—",
-                "total": r.get("total") or 0,
+                "scenario":     r.get("scenario", ""),
+                "variant":      r.get("variant", ""),
+                "total":        r.get("total") or 0,
+                "entered":      r.get("entered") or 0,
+                "entry_rate":   _r(r.get("entry_rate")),
+                "tp1_be_rate":  _r(r.get("tp1_be_rate")),
+                "tp2_rate":     _r(r.get("tp2_rate")),
+                "sl_rate":      _r(r.get("sl_rate")),
+                "tp1_pnl":      r.get("total_tp1only_usd"),
+                "tp12_pnl":     r.get("total_pnl_usd"),
+                "avg_pct_tp1":  _pct(r.get("avg_tp1only_usd")),
+                "avg_pct_tp12": _pct(r.get("avg_pnl_usd")),
             }
             for r in rows
         ]
