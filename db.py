@@ -1093,7 +1093,7 @@ def get_dashboard_stats(period: str = "30d") -> dict:
                 SELECT
                     COUNT(*) FILTER (WHERE resolved = FALSE)                              AS active_count,
                     COUNT(*) FILTER (WHERE {tf_all})                                      AS total_period,
-                    COUNT(*) FILTER (WHERE {tf_all} AND exchange_position_opened = TRUE)  AS entered_period,
+                    COUNT(*) FILTER (WHERE {tf_all} AND entry_hit_at IS NOT NULL)          AS entered_period,
                     COUNT(*) FILTER (WHERE resolved = TRUE AND {wins_cond} AND {tf_closed}) AS wins,
                     COUNT(*) FILTER (WHERE resolved = TRUE AND result = 'SL' AND {tf_closed}) AS losses,
                     ROUND(SUM({pnl_expr}) FILTER (
