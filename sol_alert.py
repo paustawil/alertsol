@@ -1928,31 +1928,31 @@ def check_pending(candles_m15: list[dict]):
                         print(f"[pending] {s['model']} {d}: nie weszlo")
                         db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
                         _calc_hypo_result(s, candles_m15)
-                        if not s.get("shadow"):
-                            try:
-                                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                                send_telegram(
-                                    f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}\n"
-                                    f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
-                                    f"W1: ${w1:.2f} | SL: ${sl:.2f}"
-                                )
-                            except Exception:
-                                pass
+                        try:
+                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                            shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
+                            send_telegram(
+                                f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}{shd_txt}\n"
+                                f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
+                                f"W1: ${w1:.2f} | SL: ${sl:.2f}"
+                            )
+                        except Exception:
+                            pass
                     else:
                         still_pending.append(s)
                     continue
             s["entry_hit_at"] = hit
-            if not s.get("shadow"):
-                try:
-                    sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                    send_telegram(
-                        f"✅ <b>ENTRY HIT</b> [{s['model']}]{sid_txt}\n"
-                        f"Setup {s['type']} {d.upper()} aktywowany!\n"
-                        f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
-                        f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
-                    )
-                except Exception:
-                    pass
+            try:
+                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
+                send_telegram(
+                    f"✅ <b>ENTRY HIT</b> [{s['model']}]{sid_txt}{shd_txt}\n"
+                    f"Setup {s['type']} {d.upper()} aktywowany!\n"
+                    f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
+                    f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
+                )
+            except Exception:
+                pass
 
         result, move  = None, 0.0
         exit_ts       = None
@@ -1986,35 +1986,35 @@ def check_pending(candles_m15: list[dict]):
                 # Bez TP2 — cała pozycja zamykana na TP1
                 if not tp2:
                     result, exit_ts = "TP1", c["time"]
-                    if not s.get("shadow"):
-                        try:
-                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                            send_telegram(
-                                f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}\n"
-                                f"Setup {s['type']} {d.upper()}\n"
-                                f"TP1: ${tp1:.2f} osiągnięty ✅\n"
-                                f"Pozycja zamknięta na TP1."
-                            )
-                        except Exception:
-                            pass
+                    try:
+                        sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                        shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
+                        send_telegram(
+                            f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}{shd_txt}\n"
+                            f"Setup {s['type']} {d.upper()}\n"
+                            f"TP1: ${tp1:.2f} osiągnięty ✅\n"
+                            f"Pozycja zamknięta na TP1."
+                        )
+                    except Exception:
+                        pass
                     break
                 # Z TP2 — przestaw SL i kontynuuj monitorowanie
                 if sl_after_tp1 is not None and not s.get("sl_adjusted"):
                     effective_sl   = sl_after_tp1
                     s["sl_adjusted"] = True
-                    if not s.get("shadow"):
-                        try:
-                            be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
-                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                            send_telegram(
-                                f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}\n"
-                                f"Setup {s['type']} {d.upper()}\n"
-                                f"TP1: ${tp1:.2f} osiągnięty ✅\n"
-                                f"<b>Przesuń SL na: ${sl_after_tp1:.2f}</b>  ({be_label})\n"
-                                f"Cel: TP2 ${tp2:.2f}"
-                            )
-                        except Exception:
-                            pass
+                    try:
+                        be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
+                        sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                        shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
+                        send_telegram(
+                            f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}{shd_txt}\n"
+                            f"Setup {s['type']} {d.upper()}\n"
+                            f"TP1: ${tp1:.2f} osiągnięty ✅\n"
+                            f"<b>Przesuń SL na: ${sl_after_tp1:.2f}</b>  ({be_label})\n"
+                            f"Cel: TP2 ${tp2:.2f}"
+                        )
+                    except Exception:
+                        pass
                 continue
 
             if sl_hit:
@@ -2059,17 +2059,17 @@ def check_pending(candles_m15: list[dict]):
             sign = "+" if move >= 0 else ""
             print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
             db.resolve_setup(s["setup_id"], result, eff_entry, eff_exit, move, exit_ts)
-            if not s.get("shadow"):
-                icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
-                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                try:
-                    send_telegram(
-                        f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}\n"
-                        f"Setup {s['type']} {d.upper()} zamknięty\n"
-                        f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
-                    )
-                except Exception:
-                    pass
+            icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
+            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+            shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
+            try:
+                send_telegram(
+                    f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}{shd_txt}\n"
+                    f"Setup {s['type']} {d.upper()} zamknięty\n"
+                    f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
+                )
+            except Exception:
+                pass
         # elif not s.get("shadow") and age_h > TRADE_TIMEOUT_H:
         #     db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
