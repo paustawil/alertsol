@@ -126,7 +126,7 @@ body{background:var(--bg0);font-family:var(--sans);color:var(--text1);height:100
 .sec-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--text2)}
 .sec-badge{font-family:var(--mono);font-size:11px;background:var(--bg3);color:var(--text2);padding:2px 8px;border-radius:10px;border:1px solid var(--border2)}
 .alert-banner{background:var(--amber-dim);border-top:1px solid #f5a62344;border-bottom:1px solid #f5a62344;padding:9px 12px;font-size:11px;color:var(--amber);font-family:var(--mono);line-height:1.5}
-.chart-wrap-m{margin:0 12px 4px;background:var(--bg1);border:1px solid var(--border);border-radius:6px;height:185px;position:relative;overflow:hidden}
+.chart-wrap-m{margin:0 12px 4px;background:var(--bg1);border:1px solid var(--border);border-radius:6px;height:260px;position:relative;overflow:hidden}
 .chart-label-m{position:absolute;top:8px;left:10px;font-size:10px;color:var(--text3);font-family:var(--mono);z-index:2}
 .setup-card{margin:0 12px 8px;background:var(--bg1);border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .setup-card-top{padding:10px 12px 8px;border-bottom:1px solid var(--border)}
@@ -317,8 +317,8 @@ function TVChart({ height=240, mobile=false }) {
         locale: 'pl',
         backgroundColor: 'rgba(13,21,32,1)',
         gridColor: 'rgba(26,40,64,1)',
-        hide_top_toolbar: mobile,
-        hide_legend: mobile,
+        hide_top_toolbar: false,
+        hide_legend: false,
         allow_symbol_change: false,
         save_image: false,
         container_id: idRef.current,
@@ -329,7 +329,7 @@ function TVChart({ height=240, mobile=false }) {
   return <div ref={ref} style={{height,overflow:'hidden',borderRadius:mobile?6:0}}/>;
 }
 function Chart({ height=240 }) { return <TVChart height={height} mobile={false}/>; }
-function MiniChart() { return <div className="chart-wrap-m"><TVChart height={185} mobile={true}/></div>; }
+function MiniChart() { return <div className="chart-wrap-m"><TVChart height={260} mobile={true}/></div>; }
 /* ── Desktop nav Icon ── */
 function Icon({ name, active }) {
   const c=active?'var(--blue)':'var(--text3)';
