@@ -14,6 +14,7 @@ import requests
 import openai
 import gspread
 import concurrent.futures
+import google.generativeai as genai
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
@@ -28,6 +29,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_KEY       = os.getenv("OPENAI_API_KEY", "")
 XAI_KEY          = os.getenv("XAI_API_KEY", "")
+GEMINI_KEY       = os.getenv("GEMINI_API_KEY", "")
 SYMBOL           = "SOLUSDT"
 TRADE_USDT       = float(os.getenv("BITGET_TRADE_USDT", "100"))
 LEVERAGE         = 20
@@ -45,6 +47,7 @@ ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT
 ENABLE_GPT3          = False  # standalone GPT3 detektor — wyłączony
 ENABLE_GPT3_VALIDATOR = True  # GPT3 jako filtr Algo2 setupów — aktywny (backtest Mar 15-29: +$19.76)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
+ENABLE_GEMINI2       = True   # Gemini niezależny detektor — gołe świece H1, bez Algo
 ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako shadow (dedup aktywny)
 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
@@ -209,6 +212,128 @@ def call_gpt3_validator(
     except Exception as e:
         print(f"[gpt3-val] Blad: {e}")
         return None
+
+
+# ── Gemini2 — niezależny detektor, gołe świece H1 ───────────────────────────
+
+_GEMINI2_TIMEOUT_S = 60
+_GEMINI2_MIN_PROBABILITY = 50
+
+_GEMINI2_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "trend":          {"type": "string", "enum": ["uptrend", "downtrend", "consolidation", "impulse_up", "impulse_down"]},
+        "side":           {"type": "string", "enum": ["long", "short"]},
+        "sentiment":      {"type": "string"},
+        "supports":       {"type": "array", "items": {"type": "number"}},
+        "resistances":    {"type": "array", "items": {"type": "number"}},
+        "recommendation": {"type": "string"},
+        "reasoning":      {"type": "string"},
+        "shortReasoning": {"type": "string"},
+        "entryType":      {"type": "string", "enum": ["pullback", "market", "breakout"]},
+        "profitTarget":   {"type": "number"},
+        "stopLoss":       {"type": "number"},
+        "entryPrice":     {"type": "number"},
+        "riskReward":     {"type": "number"},
+        "probability":    {"type": "number"},
+    },
+    "required": ["trend", "side", "sentiment", "supports", "resistances",
+                 "recommendation", "reasoning", "shortReasoning", "entryType",
+                 "riskReward", "probability", "profitTarget", "stopLoss", "entryPrice"],
+}
+
+
+def call_gemini2(candles_h1: list[dict], symbol: str) -> dict | None:
+    if not GEMINI_KEY:
+        print("[gemini2] Brak klucza API.")
+        return None
+    candle_data = candles_h1[-60:]
+    prompt = (
+        f"Analiza techniczna dla {symbol}. Dane: {json.dumps(candle_data)}. "
+        "Trend (uptrend, downtrend, consolidation, impulse_up, impulse_down). "
+        "Wyznacz trade setup: wejście (entryPrice), cel (profitTarget), poziom obronny (stopLoss). "
+        "WAŻNE dla Kierunku (side): "
+        "- Jeśli side to \"long\": profitTarget MUSI być wyższy niż entryPrice, stopLoss MUSI być niższy. "
+        "- Jeśli side to \"short\": profitTarget MUSI być niższy niż entryPrice, stopLoss MUSI być wyższy. "
+        "RR (Risk/Reward) powyżej 2.0. Prawdopodobieństwo 0-100. "
+        "Głębokie uzasadnienie (reasoning) i krótkie (shortReasoning) po polsku. ZWRÓĆ JSON."
+    )
+
+    def _call() -> dict:
+        genai.configure(api_key=GEMINI_KEY)
+        model = genai.GenerativeModel("gemini-3-flash-preview")
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=_GEMINI2_SCHEMA,
+                temperature=0.2,
+            ),
+        )
+        return json.loads(response.text)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_call)
+            try:
+                return future.result(timeout=_GEMINI2_TIMEOUT_S)
+            except concurrent.futures.TimeoutError:
+                print(f"[gemini2] Timeout ({_GEMINI2_TIMEOUT_S}s)")
+                future.cancel()
+                return None
+    except Exception as e:
+        print(f"[gemini2] Błąd: {e}")
+        return None
+
+
+def _gemini2_to_setup(g: dict) -> dict:
+    reasoning = (
+        f"[Gemini2] {g.get('shortReasoning', '')}\n"
+        f"Trend: {g['trend']} | Typ wejścia: {g.get('entryType', '?')} | Prob: {g.get('probability', 0)}%\n"
+        f"{g.get('reasoning', '')}"
+    )
+    return {
+        "type":         f"gemini2_{g['trend']}",
+        "direction":    g["side"],
+        "entries":      [g["entryPrice"]],
+        "tps":          [g["profitTarget"]],
+        "sl":           g["stopLoss"],
+        "sl_after_tp1": g["entryPrice"],
+        "rr":           g.get("riskReward", 0),
+        "score":        round(g.get("probability", 0) / 10, 1),
+        "variant":      "gemini2",
+        "reasoning":    reasoning,
+    }
+
+
+def gemini2_main():
+    """Wywoływana co godzinę przez scheduler. Niezależna od main() / Algo2."""
+    if not ENABLE_GEMINI2:
+        print("[gemini2] Wyłączony (ENABLE_GEMINI2=False).")
+        return
+
+    candles_h1 = fetch_klines(SYMBOL, "1h", limit=60)
+    current    = fetch_current_price(SYMBOL) or candles_h1[-1]["close"]
+
+    g2_raw = call_gemini2(candles_h1, SYMBOL)
+    if g2_raw is None:
+        print("[gemini2] Brak odpowiedzi od modelu.")
+        return
+
+    prob = g2_raw.get("probability", 0)
+    if prob <= _GEMINI2_MIN_PROBABILITY:
+        print(f"[gemini2] Odrzucony — probability={prob}% ≤ {_GEMINI2_MIN_PROBABILITY}%")
+        return
+
+    setup = _gemini2_to_setup(g2_raw)
+    rr_ok = setup["rr"] >= 2.0
+    sl_ok = abs(setup["entries"][0] - setup["sl"]) >= MIN_SL_DISTANCE
+    if not rr_ok or not sl_ok:
+        print(f"[gemini2] Odrzucony — RR={setup['rr']:.2f}, SL_dist={abs(setup['entries'][0] - setup['sl']):.2f}")
+        return
+
+    print(f"[gemini2] Setup {setup['direction']} entry={setup['entries'][0]} TP={setup['tps'][0]} SL={setup['sl']} RR={setup['rr']:.2f} prob={prob}%")
+    save_pending(setup, "Gemini2", "", current, shadow=True)
 
 
 # ── Bitget API — cena na żywo ────────────────────────────────────────────────
