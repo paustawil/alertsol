@@ -120,6 +120,14 @@ def run_grok_shadow():
         log.exception("[grok-shadow] grok_shadow_main() BŁĄD")
 
 
+def run_gemini2():
+    try:
+        import sol_alert
+        sol_alert.gemini2_main()
+    except Exception:
+        log.exception("[gemini2] gemini2_main() BŁĄD")
+
+
 # ── FastAPI dashboard ──────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -188,8 +196,18 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
 
+    # Gemini2 — co godzinę (niezależny detektor, gołe świece H1)
+    scheduler.add_job(
+        run_gemini2,
+        "interval",
+        hours=1,
+        id="gemini2",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
-    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 5min (throttle Algo2: 15min RANGE/TREND, 5min IMPULSE) | grok_shadow: co 5min (throttle: 30min RANGE/TREND, 5min IMPULSE) | sheets: co 5min | kalkulator: co 1h")
+    log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 5min (throttle Algo2: 15min RANGE/TREND, 5min IMPULSE) | grok_shadow: co 5min (throttle: 30min RANGE/TREND, 5min IMPULSE) | gemini2: co 1h | sheets: co 5min | kalkulator: co 1h")
 
     yield
 
