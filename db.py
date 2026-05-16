@@ -564,7 +564,7 @@ def mark_sheets_exported(setup_id: int) -> None:
 
 # ── Dashboard / statystyki ───────────────────────────────────────────────────
 
-def get_summary_stats() -> dict:
+def get_summary_stats(period_days: int | None = None) -> dict:
     """Zwraca statystyki podsumowujące dla dashboardu."""
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
@@ -593,6 +593,8 @@ def get_summary_stats() -> dict:
 
     trading_filter = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"
 
+    time_sql, time_params = _algo2_time_filter(period_days)
+
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -607,7 +609,9 @@ def get_summary_stats() -> dict:
                     COUNT(*) FILTER (WHERE resolved = TRUE
                         AND result = 'SL')                               AS losses
                 FROM setups
-                """
+                WHERE TRUE {time_sql}
+                """,
+                time_params,
             )
             row = dict(cur.fetchone())
 
@@ -651,9 +655,11 @@ def get_summary_stats() -> dict:
                        COUNT(*) FILTER (WHERE resolved = TRUE
                            AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))    AS wins
                 FROM setups
+                WHERE TRUE {time_sql}
                 GROUP BY model
                 ORDER BY model
-                """
+                """,
+                time_params,
             )
             row["by_model"] = [dict(r) for r in cur.fetchall()]
             row["trade_usdt"] = trade_usdt

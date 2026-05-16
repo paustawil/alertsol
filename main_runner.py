@@ -3293,7 +3293,7 @@ def api_dashboard_algo(
         ]
 
     if view == "per model":
-        stats = db.get_summary_stats()
+        stats = db.get_summary_stats(days)
         return [
             {
                 "name":    m.get("model", ""),
