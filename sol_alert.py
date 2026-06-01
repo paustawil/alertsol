@@ -47,7 +47,7 @@ ENABLE_GPT_RELAXED   = False  # wyłączony tymczasowo — zastąpiony przez GPT
 ENABLE_GPT3          = False  # standalone GPT3 detektor — wyłączony
 ENABLE_GPT3_VALIDATOR = True  # GPT3 jako filtr Algo2 setupów — aktywny (backtest Mar 15-29: +$19.76)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
-ENABLE_GEMINI2       = True   # Gemini niezależny detektor — gołe świece H1, bez Algo
+ENABLE_GEMINI2       = False  # Gemini niezależny detektor — gołe świece H1, bez Algo
 ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako shadow (dedup aktywny)
 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
