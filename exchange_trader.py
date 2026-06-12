@@ -965,19 +965,24 @@ def _sync_inner():
                 else:
                     db.release_plan_order_claim(s["setup_id"])
             else:
-                # Pozostałe: 2 plan ordery przy W1 (half qty każdy)
+                # Pozostałe: plan ordery przy W1. tp1_only składa jeden full-qty order,
+                # tp1_tp2 składa dwa half-qty ordery.
                 w1       = entries[0]
                 full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
                 half_qty = _round_qty(full_qty / 2)
                 plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, half_qty)
-                if plan1_oid and plan2_oid:
+                is_tp1_only = s.get("tp_strategy") == "tp1_only"
+                if plan1_oid and (plan2_oid or is_tp1_only):
                     s["exchange_plan_oid"]        = plan1_oid
                     s["exchange_plan2_oid"]       = plan2_oid
                     s["exchange_qty_full"]        = _fmt_qty(full_qty)
                     s["exchange_qty_half"]        = _fmt_qty(half_qty)
                     s["exchange_position_opened"] = False
                     modified = True
-                    print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
+                    if is_tp1_only:
+                        print(f"[exchange] {label}: plan order TP1-only złożony ({_fmt_qty(full_qty)} SOL @ W1={w1})")
+                    else:
+                        print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
                 else:
                     db.release_plan_order_claim(s["setup_id"])
             continue
@@ -1156,6 +1161,9 @@ def _sync_inner():
                             sign    = 1 if s.get("direction") == "long" else -1
                             pnl_usd = sign * full_qty_f * (tp1_price - float(avg_entry))
                         s["exchange_tp1_oid"] = None
+                        s["exchange_tp2_oid"] = None
+                        s["exchange_sl_oid"]  = None
+                        s["exchange_sl2_oid"] = None
                         s["exchange_done"]    = True
                         modified = True
                         print(f"[exchange] {label}: TP1-only wykonany — setup zamknięty pnl={pnl_usd}")
