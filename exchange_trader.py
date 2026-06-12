@@ -211,9 +211,9 @@ def _place_entry_plan_orders(
     client: BitgetClient, s: dict, half_qty: float
 ) -> tuple[str | None, str | None]:
     """
-    Składa DWA plan ordery przy W1, każdy na half_qty z preset TP i SL:
-      Plan 1: half_qty, preset TP=TP1, preset SL=SL
-      Plan 2: half_qty, preset TP=TP2, preset SL=SL
+    Składa plan ordery przy W1:
+    - tp1_only: JEDEN order full_qty z preset TP=TP1 i SL
+    - tp1_tp2 (domyślnie): DWA ordery half_qty — Plan1@TP1, Plan2@TP2
 
     Po triggerze każdego plan order Bitget automatycznie tworzy odpowiednie
     TPSL ordery (profit_plan + loss_plan) dla tej połowy pozycji.
@@ -261,6 +261,41 @@ def _place_entry_plan_orders(
         except Exception as e:
             log.error(f"[exchange] #{sid} place plan {label}: {e}")
         return None
+
+    if s.get("tp_strategy") == "tp1_only":
+        # Jeden order full_qty na TP1 — brak podziału na połowy
+        full_qty_single = half_qty * 2
+        params_full = {
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "marginMode":   MARGIN_MODE,
+            "marginCoin":   MARGIN_COIN,
+            "planType":     "normal_plan",
+            "size":         _fmt_qty(full_qty_single),
+            "triggerPrice": _fmt_price(s["entries"][0]),
+            "triggerType":  "mark_price",
+            "side":         "buy" if s["direction"] == "long" else "sell",
+            "tradeSide":    "open",
+            "posSide":      s["direction"],
+            "orderType":    "market",
+        }
+        if tp1 is not None:
+            params_full["stopSurplusTriggerPrice"] = _fmt_price(tp1)
+            params_full["stopSurplusTriggerType"]  = "mark_price"
+        sl = s.get("sl")
+        if sl is not None:
+            params_full["stopLossTriggerPrice"] = _fmt_price(sl)
+            params_full["stopLossTriggerType"]  = "mark_price"
+        try:
+            resp = client.post("/api/v2/mix/order/place-plan-order", params_full)
+            if resp.get("code") == "00000":
+                oid = resp["data"]["orderId"]
+                print(f"[exchange] #{sid} Plan 1(TP1-only): {oid} | {_fmt_qty(full_qty_single)} SOL @ TP1={tp1}")
+                return oid, None
+            log.error(f"[exchange] #{sid} place plan tp1_only: code={resp.get('code')} msg={resp.get('msg')}")
+        except Exception as e:
+            log.error(f"[exchange] #{sid} place plan tp1_only: {e}")
+        return None, None
 
     plan1_oid = _place_one(tp1, "1(TP1)")
     if not plan1_oid:
@@ -397,6 +432,60 @@ def _place_tpsl_orders_split(
         except Exception as e:
             log.error(f"[exchange] #{sid} place {label}: {e}")
         return None
+
+    if s.get("tp_strategy") == "tp1_only":
+        # Jeden TP i jeden SL na full_qty zamiast split
+        full_qty_single = half_qty * 2
+
+        def _place_tp_full(price, label):
+            if price is None:
+                return None
+            try:
+                resp = client.post("/api/v2/mix/order/place-tpsl-order", {
+                    "symbol":       SYMBOL,
+                    "productType":  PRODUCT_TYPE,
+                    "marginCoin":   MARGIN_COIN,
+                    "planType":     "profit_plan",
+                    "triggerPrice": _fmt_price(price),
+                    "triggerType":  "mark_price",
+                    "executePrice": "0",
+                    "holdSide":     hold_side,
+                    "size":         _fmt_qty(full_qty_single),
+                })
+                if resp.get("code") == "00000":
+                    oid = resp["data"]["orderId"]
+                    print(f"[exchange] #{sid} {label}(full): {oid} | {_fmt_qty(full_qty_single)} SOL @ {price}")
+                    return oid
+                log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
+            except Exception as e:
+                log.error(f"[exchange] #{sid} place {label}: {e}")
+            return None
+
+        def _place_sl_full(label):
+            if sl is None:
+                return None
+            try:
+                resp = client.post("/api/v2/mix/order/place-tpsl-order", {
+                    "symbol":       SYMBOL,
+                    "productType":  PRODUCT_TYPE,
+                    "marginCoin":   MARGIN_COIN,
+                    "planType":     "loss_plan",
+                    "triggerPrice": _fmt_price(sl),
+                    "triggerType":  "mark_price",
+                    "executePrice": "0",
+                    "holdSide":     hold_side,
+                    "size":         _fmt_qty(full_qty_single),
+                })
+                if resp.get("code") == "00000":
+                    oid = resp["data"]["orderId"]
+                    print(f"[exchange] #{sid} {label}(full): {oid} | {_fmt_qty(full_qty_single)} SOL @ {sl}")
+                    return oid
+                log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
+            except Exception as e:
+                log.error(f"[exchange] #{sid} place {label}: {e}")
+            return None
+
+        return _place_tp_full(tp1, "TP1"), None, _place_sl_full("SL1"), None
 
     tp1_id = _place_tp(tp1, "TP1")
     tp2_id = _place_tp(tp2, "TP2")
@@ -1053,24 +1142,36 @@ def _sync_inner():
                     tps_list   = s.get("tps") or []
                     tp1_price  = float(tps_list[0]) if tps_list else None
                     avg_entry  = s.get("avg_entry")
-                    # Użyj sl_after_tp1 jeśli dostępny, fallback na avg_entry (break-even)
-                    sl_new_raw = s.get("sl_after_tp1")
-                    sl_new     = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
+                    full_qty_f = float((s.get("exchange_qty_full") or "0").replace(",", "."))
                     half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
 
                     # Anuluj SL1 (Bitget mógł już auto-anulować)
                     if sl_oid:
                         _cancel_order(client, sl_oid, "loss_plan")
 
-                    # Przesuń SL2 → nowy SL (sl_after_tp1 lub BE)
-                    # Bitget często auto-anuluje SL2 gdy TP1 zamknie połowę pozycji —
-                    # dlatego próbujemy modify, a jeśli się nie uda, składamy nowy order.
+                    if s.get("tp_strategy") == "tp1_only":
+                        # Cała pozycja zamknięta na TP1 — zakończ setup od razu
+                        pnl_usd = None
+                        if avg_entry and tp1_price and full_qty_f:
+                            sign    = 1 if s.get("direction") == "long" else -1
+                            pnl_usd = sign * full_qty_f * (tp1_price - float(avg_entry))
+                        s["exchange_tp1_oid"] = None
+                        s["exchange_done"]    = True
+                        modified = True
+                        print(f"[exchange] {label}: TP1-only wykonany — setup zamknięty pnl={pnl_usd}")
+                        if sid and sid != "?":
+                            db.resolve_setup(int(sid), "TP1", avg_entry, tp1_price, pnl_usd, None)
+                        continue
+
+                    # Strategia TP1+TP2: przesuń SL2 → sl_after_tp1 (BE) i czekaj na TP2
+                    sl_new_raw = s.get("sl_after_tp1")
+                    sl_new     = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
+
                     new_sl2_oid = sl2_oid
                     if sl_new and half_qty_f > 0:
                         if sl2_oid and _modify_sl(client, sl2_oid, sl_new, half_qty_f):
                             print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new}")
                         else:
-                            # modify nie powiodło się — anuluj stary i złóż nowy loss_plan
                             if sl2_oid:
                                 _cancel_order(client, sl2_oid, "loss_plan")
                             new_sl2_oid = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
@@ -1088,7 +1189,7 @@ def _sync_inner():
                     s["exchange_tp1_oid"]  = None
                     s["exchange_tp1_done"] = True
                     s["exchange_sl_oid"]   = None
-                    s["exchange_sl2_oid"]  = new_sl2_oid  # zaktualizuj OID jeśli złożony nowy
+                    s["exchange_sl2_oid"]  = new_sl2_oid
                     modified = True
                     print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 (SL2={new_sl2_oid})")
                     if sid and sid != "?":
