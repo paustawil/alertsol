@@ -828,7 +828,8 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 # shallow   = płytszy pullback (fib25-38) z ciaśniejszym SL (fib50), też strength>=4
 _PULLBACK_VARIANTS: dict[str, tuple] = {
     "baseline": (0.38, 0.50, 0.618, 0.3, 5, False),
-    "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
+    # "shallow" — zarchiwizowany: 100% SL, -21.2% avg (backtest 30d)
+    # "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
 }
 
 
@@ -948,6 +949,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [tp1, tp2], "rr": rr_val,
                         "score": strength,
                         "variant": vname,
+                        "tp_strategy": "tp1_tp2",
                         "force_shadow": v_shadow,
                         "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
                     })
@@ -958,8 +960,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     if not dist_ok: reasons.append(f"dist>3%({w-current_price:.2f})")
                     log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
-        # impulse_continuation_short — mini-pullback w impulsie (1-2 zielone świece = odbicie w dół)
-        if regime_name.startswith("IMPULSE_"):
+        # impulse_continuation_short — zarchiwizowany: 100% SL przy wejściu, -12.5% avg (backtest 30d)
+        if False:  # noqa: SIM210
             _cont_spike = regime.get("spike_score", 0)
             atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
             last6 = candles_m15[-6:]
@@ -999,7 +1001,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
                 w = round(current_price, 2)
-                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
+                # m15_atr — zarchiwizowany: słabe +3.1% avg, 66.7% SL (backtest 30d)
+                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
                     _sl  = round(current_price + _vatr * 1.2, 2)
                     _tp1 = round(current_price - _vatr * 2.0, 2)
                     _tp2 = round(current_price - _vatr * _tp2_mult, 2)
@@ -1012,6 +1015,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "entries": [w], "sl": _sl, "sl_after_tp1": w,
                             "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
                             "score": strength, "variant": _vname,
+                            "tp_strategy": "tp1_only",
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
                             "force_shadow": True,
                         })
@@ -1058,6 +1062,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [tp1, tp2], "rr": rr_val,
                         "score": strength,
                         "variant": vname,
+                        "tp_strategy": "tp1_tp2",
                         "force_shadow": v_shadow,
                         "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
                     })
@@ -1068,8 +1073,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     if not dist_ok: reasons.append(f"dist>3%({current_price-w:.2f})")
                     log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
-        # impulse_continuation_long — mini-pullback w impulsie (1-2 czerwone świece = cofnięcie w górę)
-        if regime_name.startswith("IMPULSE_"):
+        # impulse_continuation_long — zarchiwizowany: brak symetrii z short, brak danych (backtest 30d)
+        if False:  # noqa: SIM210
             _cont_spike = regime.get("spike_score", 0)
             atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
             last6 = candles_m15[-6:]
@@ -1109,7 +1114,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
                 w = round(current_price, 2)
-                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
+                # m15_atr — zarchiwizowany: słabe +3.3% avg (backtest 30d)
+                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
                     _sl  = round(current_price - _vatr * 1.2, 2)
                     _tp1 = round(current_price + _vatr * 2.0, 2)
                     _tp2 = round(current_price + _vatr * _tp2_mult, 2)
@@ -1122,6 +1128,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "entries": [w], "sl": _sl, "sl_after_tp1": w,
                             "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
                             "score": strength, "variant": _vname,
+                            "tp_strategy": "tp1_only",
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
                             "force_shadow": True,
                         })
@@ -1177,6 +1184,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((w - tp1) / (sl - w), 1),
                     "score": 0,
+                    "tp_strategy": "tp1_only",
                     "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={r_touches}",
                 })
             # range_support_long
@@ -1221,6 +1229,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": round((tp1 - w) / (w - sl), 1),
                     "score": 0,
+                    "tp_strategy": "tp1_only",
                     "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={s_touches}",
                 })
     else:
