@@ -211,6 +211,7 @@ def insert_setup(row: dict) -> int | None:
         "shadow":          row.get("shadow", False),
         "trade_usdt":      float(os.getenv("BITGET_TRADE_USDT", "100")),
         "variant":         row.get("variant", "baseline"),
+        "status":          row.get("status", "pending"),
     }
 
     with _conn() as conn:
@@ -229,7 +230,7 @@ def insert_setup(row: dict) -> int | None:
                     entry_trigger, reasoning, llm_scores,
                     entries, tps, sl, sl_after_tp1, rr,
                     entry_hit_at, entries_hit, sl_adjusted, shadow,
-                    trade_usdt, variant
+                    trade_usdt, variant, status
                 )
                 SELECT
                     %(alert_time)s, %(alert_timestamp)s, %(model)s, %(rejection)s, %(type)s,
@@ -237,7 +238,7 @@ def insert_setup(row: dict) -> int | None:
                     %(entry_trigger)s, %(reasoning)s, %(llm_scores)s,
                     %(entries)s, %(tps)s, %(sl)s, %(sl_after_tp1)s, %(rr)s,
                     %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s, %(shadow)s,
-                    %(trade_usdt)s, %(variant)s
+                    %(trade_usdt)s, %(variant)s, %(status)s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM setups
                     WHERE resolved = FALSE

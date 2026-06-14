@@ -63,6 +63,17 @@ IMPULSE_COOLDOWN_RETRACE_PCT  = 0.50       # 50% retrace = blokada odpada
 _last_confirmed_impulse: dict = {}         # direction, time, start_price, peak_price, score
 
 
+def _is_type_bitget_enabled(setup_type: str, variant: str | None) -> bool:
+    """Zwraca True jeśli typ+wariant ma Bitget enabled=True w ustawieniach aplikacji."""
+    try:
+        settings = db.get_app_settings()
+        key = f"{setup_type}__{variant or 'baseline'}"
+        cfg = (settings.get("type_configs") or {}).get(key, {})
+        return bool(cfg.get("enabled", False))
+    except Exception:
+        return False
+
+
 def _clean_log(text: str) -> str:
     """Usuwa linie separatorów (===) i timestamp-header z logów algo."""
     lines = []
@@ -1178,6 +1189,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
+                    "variant": "baseline",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
                     "sl_after_tp1": round(w, 2),
                     "tps": [round(tp1, 2), round(tp2, 2)],
@@ -1223,6 +1235,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_support_long", "direction": "long",
+                    "variant": "baseline",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
                     "sl_after_tp1": round(w, 2),
                     "tps": [round(tp1, 2), round(tp2, 2)],
@@ -1865,11 +1878,12 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         "tps":             tps,
         "rr":              setup.get("rr", 0),
         "entry_hit_at":    int(datetime.now(timezone.utc).timestamp()) if _immediate_entry else None,
+        "status":          "open" if _immediate_entry else "pending",
         "tp1_hit_at":      None,
         "sl_adjusted":     False,
         "entries_hit":     1,
         "shadow":          shadow,
-        "variant":         setup.get("variant") or setup.get("type", "baseline"),
+        "variant":         setup.get("variant") or "baseline",
     }
     sid = db.insert_setup(row)
     if sid is None:
@@ -2207,11 +2221,15 @@ def check_pending(candles_m15: list[dict]):
         #     db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
             still_pending.append(s)
-            db.update_setup(s["setup_id"],
-                            entry_hit_at=s.get("entry_hit_at"),
-                            tp1_hit_at=s.get("tp1_hit_at"),
-                            sl_adjusted=s.get("sl_adjusted", False),
-                            entries_hit=s.get("entries_hit", 1))
+            _upd: dict = dict(
+                entry_hit_at=s.get("entry_hit_at"),
+                tp1_hit_at=s.get("tp1_hit_at"),
+                sl_adjusted=s.get("sl_adjusted", False),
+                entries_hit=s.get("entries_hit", 1),
+            )
+            if s.get("entry_hit_at") is not None:
+                _upd["status"] = "open"
+            db.update_setup(s["setup_id"], **_upd)
 
 
 
@@ -2566,21 +2584,29 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     for s in force_shadow_setups:
         s["reasoning"] = algo2_log
         if not validate_setup(s, "Algo2"):
-            save_pending(s, "Algo2", "", current, shadow=True)
+            shadow_s = not _is_type_bitget_enabled(s.get("type", ""), s.get("variant"))
+            save_pending(s, "Algo2", "", current, shadow=shadow_s)
             if s.get("setup_id"):
-                print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
-                try:
-                    tps = s.get("tps", [])
-                    send_telegram(
-                        f"👁 <b>[Shadow] #{s['setup_id']}</b> {s['type']} {s['direction'].upper()}\n"
-                        f"W1: ${s['entries'][0]:.2f} | SL: ${s['sl']:.2f}"
-                        + (f" | TP1: ${tps[0]:.2f}" if len(tps) > 0 else "")
-                        + (f" | TP2: ${tps[1]:.2f}" if len(tps) > 1 else "")
-                        + f" | RR: {s['rr']}"
-                        + (f"\n<i>{s.get('variant', '')}</i>" if s.get('variant') else "")
-                    )
-                except Exception:
-                    pass
+                if shadow_s:
+                    print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
+                    try:
+                        tps = s.get("tps", [])
+                        send_telegram(
+                            f"👁 <b>[Shadow] #{s['setup_id']}</b> {s['type']} {s['direction'].upper()}\n"
+                            f"W1: ${s['entries'][0]:.2f} | SL: ${s['sl']:.2f}"
+                            + (f" | TP1: ${tps[0]:.2f}" if len(tps) > 0 else "")
+                            + (f" | TP2: ${tps[1]:.2f}" if len(tps) > 1 else "")
+                            + f" | RR: {s['rr']}"
+                            + (f"\n<i>{s.get('variant', '')}</i>" if s.get('variant') else "")
+                        )
+                    except Exception:
+                        pass
+                else:
+                    print(f"[algo2] Real order: {s['type']} #{s['setup_id']} RR={s['rr']}")
+                    try:
+                        send_telegram(format_alert("Algo2", s, current, True))
+                    except Exception:
+                        pass
 
     if not regular_setups:
         return "saved" if any(s.get("setup_id") for s in force_shadow_setups) else "no_setups"
@@ -2637,7 +2663,7 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         print("[algo2] IMPULSE — GPT3 Validator pominięty.")
     # ── koniec walidatora ─────────────────────────────────────────────────
 
-    is_shadow = ALGO2_SHADOW_MODE
+    is_shadow = ALGO2_SHADOW_MODE and not _is_type_bitget_enabled(best.get("type", ""), best.get("variant"))
     save_pending(best, "Algo2", "", current, shadow=is_shadow)
     if best.get("setup_id"):
         if is_shadow:
@@ -2709,6 +2735,18 @@ def breakout_scan():
         if _bs_should_run:
             print("[algo2] IMPULSE w breakout_scan — uruchamiam detekcję Algo2.")
             _algo2_run(regime, candles_m15, candles_h1, current, is_impulse=True)
+
+    # Vol-spike fast path — duży spike (>=5x) przed przebiciem szczytu (reżim TREND)
+    # Pozwala zareagować na gwałtowny ruch zanim formalnie spełni warunki IMPULSE.
+    elif not is_impulse and vol_ratio >= 5.0:
+        _bs_vol_should_run = False
+        with _algo2_lock:
+            if now - _last_algo2_ts >= 2 * 60:
+                _last_algo2_ts = now
+                _bs_vol_should_run = True
+        if _bs_vol_should_run:
+            print(f"[algo2] Vol-spike {vol_ratio:.1f}x w breakout_scan (TREND) — uruchamiam detekcję Algo2.")
+            _algo2_run(regime, candles_m15, candles_h1, current, is_impulse=False)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
