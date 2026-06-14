@@ -1731,10 +1731,10 @@ function renderScanBlock(el, model, scan) {{
   for (var i = 0; i < rawLines.length; i++) {{
     var line = rawLines[i].trim();
     if (!line || /^=+$/.test(line) || line.indexOf('candles count') !== -1) continue;
-    if (/^\[.*\] Algo2 analiza/.test(line)) continue;
+    if (/^\\[.*\\] Algo2 analiza/.test(line)) continue;
     var safe = escHtml(line);
     if (line.startsWith('WYNIK:')) {{
-      var hasSetup = !/:\s*0 setup/.test(line);
+      var hasSetup = !/:\\s*0 setup/.test(line);
       htmlLines.push('<span style="color:' + (hasSetup ? 'lightgreen' : '#777') + ';font-size:0.8em;font-weight:bold">' + safe + '</span>');
     }} else if (line.startsWith('→')) {{
       var isSkip = line.indexOf('SKIP') !== -1;
