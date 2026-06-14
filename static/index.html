@@ -427,20 +427,30 @@ function ViewAlgo() {
   const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
+  const [scenarioFilter,setScenarioFilter]=useState([]);
   const [variantFilter,setVariantFilter]=useState([]);
+  const [availScenarios,setAvailScenarios]=useState([]);
   const [availVariants,setAvailVariants]=useState([]);
+  const toggleScenario=(s)=>setScenarioFilter(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   const toggleVariant=(v)=>setVariantFilter(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
   useEffect(()=>{
     if(subTab!=='per data') return;
-    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[]).then(setAvailVariants).catch(()=>{});
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():{scenarios:[],variants:[]})
+      .then(data=>{
+        const sc=data.scenarios||[]; const va=data.variants||[];
+        setAvailScenarios(sc); setAvailVariants(va);
+        setScenarioFilter(sc.filter(s=>s.active).map(s=>s.name));
+        setVariantFilter(va.filter(v=>v.active).map(v=>v.name));
+      }).catch(()=>{});
   },[subTab]);
   useEffect(()=>{
     setRows(null);
     const p=new URLSearchParams({period,view:subTab});
-    if(subTab==='per data'&&variantFilter.length>0) p.set('variants',variantFilter.join(','));
+    if(subTab==='per data'&&scenarioFilter.length>0) p.set('scenarios',scenarioFilter.join(','));
+    if(subTab==='per data'&&variantFilter.length>0)  p.set('variants',variantFilter.join(','));
     fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab,variantFilter]);
+  },[period,subTab,scenarioFilter,variantFilter]);
   const pC=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
   const wrC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
@@ -451,6 +461,20 @@ function ViewAlgo() {
     const g={};
     rows.forEach(r=>{const sc=r.scenario||'?';if(!g[sc])g[sc]=[];g[sc].push(r);});
     return g;
+  },[rows,subTab]);
+  const periodSummary=React.useMemo(()=>{
+    if(!rows||subTab!=='per data') return null;
+    let n=0,w=0,l=0,pnl=0,tp1=0,hasPnl=false,hasTp1=false;
+    rows.forEach(r=>{
+      n+=r.n||0; w+=r.w||0; l+=r.l||0;
+      const p=parseFloat(String(r.pnl).replace(/[^0-9.\-]/g,''));
+      const t=parseFloat(String(r.tpsOnly).replace(/[^0-9.\-]/g,''));
+      if(!isNaN(p)){pnl+=p;hasPnl=true;}
+      if(!isNaN(t)){tp1+=t;hasTp1=true;}
+    });
+    const wr=w+l>0?`${(w/(w+l)*100).toFixed(1)}%`:'—';
+    const fmt=(v,has)=>has?(v>=0?`+${v.toFixed(2)}`:`${v.toFixed(2)}`):'—';
+    return {n,w,l,wr,pnl:fmt(pnl,hasPnl),tp1:fmt(tp1,hasTp1),pnlV:hasPnl?pnl:null,tp1V:hasTp1?tp1:null};
   },[rows,subTab]);
   return (
     <>
@@ -486,10 +510,30 @@ function ViewAlgo() {
         </table></div>
       </div>}
       {rows!==null && subTab==='per data' && <>
-        {availVariants.length>1 && <div style={{display:'flex',gap:6,flexWrap:'wrap',padding:'6px 2px',alignItems:'center'}}>
-          <span style={{fontSize:11,color:'var(--text3)',marginRight:2}}>Wariant:</span>
-          {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilter.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)}>{v}</div>)}
-          {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.6}} onClick={()=>setVariantFilter([])}>✕ wyczyść</div>}
+        <div style={{display:'flex',flexDirection:'column',gap:4,padding:'6px 2px'}}>
+          {availScenarios.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+            <span style={{fontSize:10,color:'var(--text3)',minWidth:68,fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Scenariusz:</span>
+            {availScenarios.map(s=><div key={s.name} className={`filter-chip ${scenarioFilter.includes(s.name)?'active':''}`} onClick={()=>toggleScenario(s.name)} style={{opacity:s.active?1:.45}}>{s.name}</div>)}
+            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.map(s=>s.name))}>wszystkie</div>
+            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.filter(s=>s.active).map(s=>s.name))}>tylko włączone</div>
+            {scenarioFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setScenarioFilter([])}>✕</div>}
+          </div>}
+          {availVariants.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+            <span style={{fontSize:10,color:'var(--text3)',minWidth:68,fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Wariant:</span>
+            {availVariants.map(v=><div key={v.name} className={`filter-chip ${variantFilter.includes(v.name)?'active':''}`} onClick={()=>toggleVariant(v.name)} style={{opacity:v.active?1:.45}}>{v.name}</div>)}
+            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.map(v=>v.name))}>wszystkie</div>
+            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.filter(v=>v.active).map(v=>v.name))}>tylko włączone</div>
+            {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setVariantFilter([])}>✕</div>}
+          </div>}
+        </div>
+        {periodSummary && <div style={{display:'flex',gap:16,padding:'8px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,marginBottom:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:11,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Σ okres</span>
+          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--text3)'}}>N </span>{periodSummary.n}</span>
+          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--green)'}}>W </span>{periodSummary.w}</span>
+          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--red)'}}>L </span>{periodSummary.l}</span>
+          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--text3)'}}>WR </span>{periodSummary.wr}</span>
+          <span className="mono" style={{fontSize:13,fontWeight:700,color:pC(periodSummary.pnl)}}>P&L {periodSummary.pnl}</span>
+          <span className="mono" style={{fontSize:12,color:pC(periodSummary.tp1)}}>TP1 {periodSummary.tp1}</span>
         </div>}
         <div className="panel" style={{flex:1}}>
           <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
@@ -783,21 +827,31 @@ function TabAlgo() {
   const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
+  const [scenarioFilter,setScenarioFilter]=useState([]);
   const [variantFilter,setVariantFilter]=useState([]);
+  const [availScenarios,setAvailScenarios]=useState([]);
   const [availVariants,setAvailVariants]=useState([]);
+  const toggleScenario=(s)=>setScenarioFilter(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   const toggleVariant=(v)=>setVariantFilter(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
   useEffect(()=>{
     if(subTab!=='per data') return;
-    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[]).then(setAvailVariants).catch(()=>{});
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():{scenarios:[],variants:[]})
+      .then(data=>{
+        const sc=data.scenarios||[]; const va=data.variants||[];
+        setAvailScenarios(sc); setAvailVariants(va);
+        setScenarioFilter(sc.filter(s=>s.active).map(s=>s.name));
+        setVariantFilter(va.filter(v=>v.active).map(v=>v.name));
+      }).catch(()=>{});
   },[subTab]);
   useEffect(()=>{
     setRows(null);
     const p=new URLSearchParams({period,view:subTab});
-    if(subTab==='per data'&&variantFilter.length>0) p.set('variants',variantFilter.join(','));
+    if(subTab==='per data'&&scenarioFilter.length>0) p.set('scenarios',scenarioFilter.join(','));
+    if(subTab==='per data'&&variantFilter.length>0)  p.set('variants',variantFilter.join(','));
     fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab,variantFilter]);
-  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  },[period,subTab,scenarioFilter,variantFilter]);
+  const pC=(v)=>v==null?'var(--text3)':String(v).startsWith('+')?'var(--green)':String(v).startsWith('-')?'var(--red)':'var(--text3)';
   const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
   const groups=React.useMemo(()=>{
@@ -805,6 +859,20 @@ function TabAlgo() {
     const g={};
     rows.forEach(r=>{const sc=r.scenario||'?';if(!g[sc])g[sc]=[];g[sc].push(r);});
     return g;
+  },[rows,subTab]);
+  const periodSummary=React.useMemo(()=>{
+    if(!rows||subTab!=='per data') return null;
+    let n=0,w=0,l=0,pnl=0,tp1=0,hasPnl=false,hasTp1=false;
+    rows.forEach(r=>{
+      n+=r.n||0; w+=r.w||0; l+=r.l||0;
+      const p=parseFloat(String(r.pnl).replace(/[^0-9.\-]/g,''));
+      const t=parseFloat(String(r.tpsOnly).replace(/[^0-9.\-]/g,''));
+      if(!isNaN(p)){pnl+=p;hasPnl=true;}
+      if(!isNaN(t)){tp1+=t;hasTp1=true;}
+    });
+    const wr=w+l>0?`${(w/(w+l)*100).toFixed(1)}%`:'—';
+    const fmt=(v,has)=>has?(v>=0?`+${v.toFixed(2)}`:`${v.toFixed(2)}`):'—';
+    return {n,w,l,wr,pnl:fmt(pnl,hasPnl),tp1:fmt(tp1,hasTp1)};
   },[rows,subTab]);
   return (
     <div>
@@ -830,12 +898,33 @@ function TabAlgo() {
         </div>
       ))}
       {rows!==null && subTab==='per data' && <>
-        {availVariants.length>1 && <div style={{padding:'8px 16px',borderBottom:'1px solid var(--border)'}}>
-          <div style={{fontSize:9,color:'var(--text3)',marginBottom:6,textTransform:'uppercase',letterSpacing:'.06em'}}>Filtruj wariant:</div>
-          <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-            {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilter.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)} style={{fontSize:11}}>{v}</div>)}
-            {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.6,fontSize:11}} onClick={()=>setVariantFilter([])}>✕ wyczyść</div>}
-          </div>
+        <div style={{padding:'8px 16px',borderBottom:'1px solid var(--border)',display:'flex',flexDirection:'column',gap:8}}>
+          {availScenarios.length>0 && <>
+            <div style={{fontSize:9,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',fontWeight:600}}>Scenariusz:</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {availScenarios.map(s=><div key={s.name} className={`filter-chip ${scenarioFilter.includes(s.name)?'active':''}`} onClick={()=>toggleScenario(s.name)} style={{fontSize:11,opacity:s.active?1:.45}}>{s.name}</div>)}
+              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.map(s=>s.name))}>wszystkie</div>
+              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.filter(s=>s.active).map(s=>s.name))}>tylko włączone</div>
+              {scenarioFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setScenarioFilter([])}>✕</div>}
+            </div>
+          </>}
+          {availVariants.length>0 && <>
+            <div style={{fontSize:9,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',fontWeight:600}}>Wariant:</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {availVariants.map(v=><div key={v.name} className={`filter-chip ${variantFilter.includes(v.name)?'active':''}`} onClick={()=>toggleVariant(v.name)} style={{fontSize:11,opacity:v.active?1:.45}}>{v.name}</div>)}
+              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.map(v=>v.name))}>wszystkie</div>
+              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.filter(v=>v.active).map(v=>v.name))}>tylko włączone</div>
+              {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setVariantFilter([])}>✕</div>}
+            </div>
+          </>}
+        </div>
+        {periodSummary && <div style={{display:'flex',gap:12,padding:'8px 16px',background:'var(--bg2)',borderBottom:'1px solid var(--border)',flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em'}}>Σ okres</span>
+          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--text3)'}}>N </span>{periodSummary.n}</span>
+          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--green)'}}>W </span>{periodSummary.w}</span>
+          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--red)'}}>L </span>{periodSummary.l}</span>
+          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--text3)'}}>WR </span>{periodSummary.wr}</span>
+          <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,color:pC(periodSummary.pnl)}}>P&L {periodSummary.pnl}</span>
         </div>}
         <div className="section-wrap">
           <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
