@@ -175,27 +175,27 @@ _LOGIN_HTML = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AlertSol — Logowanie</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       background: #0d0d12;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    }
-    .card {
+    }}
+    .card {{
       background: #16161f;
       border: 1px solid #2a2a3a;
       border-radius: 16px;
       padding: 48px 40px;
       text-align: center;
       width: 360px;
-    }
-    .logo { font-size: 36px; margin-bottom: 8px; }
-    h1 { color: #e2e8f0; font-size: 22px; font-weight: 600; margin-bottom: 6px; }
-    p  { color: #64748b; font-size: 14px; margin-bottom: 32px; }
-    a.btn {
+    }}
+    .logo {{ font-size: 36px; margin-bottom: 8px; }}
+    h1 {{ color: #e2e8f0; font-size: 22px; font-weight: 600; margin-bottom: 6px; }}
+    p  {{ color: #64748b; font-size: 14px; margin-bottom: 32px; }}
+    a.btn {{
       display: inline-flex;
       align-items: center;
       gap: 12px;
@@ -207,10 +207,10 @@ _LOGIN_HTML = """<!DOCTYPE html>
       padding: 12px 24px;
       border-radius: 8px;
       transition: opacity .15s;
-    }
-    a.btn:hover { opacity: .88; }
-    a.btn svg { flex-shrink: 0; }
-    .err { color: #f87171; font-size: 13px; margin-top: 20px; }
+    }}
+    a.btn:hover {{ opacity: .88; }}
+    a.btn svg {{ flex-shrink: 0; }}
+    .err {{ color: #f87171; font-size: 13px; margin-top: 20px; }}
   </style>
 </head>
 <body>
