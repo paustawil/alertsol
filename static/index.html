@@ -422,35 +422,69 @@ function ViewSetups() {
     </div>
   );
 }
+/* ── FilterTree — drzewko checkbox type→variant ── */
+function FilterTree({tree,selected,onSelect}) {
+  const selSet=new Set(selected);
+  const mk=(sc,v)=>`${sc}:${v}`;
+  const allOf=node=>node.variants.length>0&&node.variants.every(v=>selSet.has(mk(node.name,v.name)));
+  const someOf=node=>node.variants.some(v=>selSet.has(mk(node.name,v.name)));
+  const toggleType=node=>{
+    const all=allOf(node); const next=new Set(selSet);
+    node.variants.forEach(v=>{const k=mk(node.name,v.name);all?next.delete(k):next.add(k);});
+    onSelect([...next]);
+  };
+  const togglePair=(sc,v)=>{const k=mk(sc,v);const next=new Set(selSet);next.has(k)?next.delete(k):next.add(k);onSelect([...next]);};
+  const cb={width:13,height:13,accentColor:'var(--amber)',cursor:'pointer',flexShrink:0};
+  return <div style={{fontSize:12}}>
+    <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+      <span className="filter-chip" style={{fontSize:10}} onClick={()=>onSelect(tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>mk(n.name,v.name))))}>tylko włączone</span>
+      <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>onSelect(tree.flatMap(n=>n.variants.map(v=>mk(n.name,v.name))))}>wszystkie</span>
+      <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>onSelect([])}>✕ wyczyść</span>
+    </div>
+    {tree.map(node=>(
+      <div key={node.name} style={{marginBottom:5}}>
+        <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',userSelect:'none'}}>
+          <input type="checkbox" style={cb} checked={allOf(node)}
+            ref={el=>{if(el) el.indeterminate=someOf(node)&&!allOf(node);}}
+            onChange={()=>toggleType(node)}/>
+          <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:node.active?'var(--text1)':'var(--text3)'}}>{node.name}</span>
+          {!node.active&&<span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>arch.</span>}
+        </label>
+        <div style={{paddingLeft:20,marginTop:2,display:'flex',flexDirection:'column',gap:2}}>
+          {node.variants.map(v=>(
+            <label key={v.name} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',userSelect:'none'}}>
+              <input type="checkbox" style={cb} checked={selSet.has(mk(node.name,v.name))} onChange={()=>togglePair(node.name,v.name)}/>
+              <span style={{fontFamily:'var(--mono)',fontSize:11,color:v.active?'var(--text2)':'var(--text3)'}}>{v.name}</span>
+              {!v.active&&<span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>arch.</span>}
+            </label>
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>;
+}
 /* ── Desktop: ViewAlgo ── */
 function ViewAlgo() {
   const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
-  const [scenarioFilter,setScenarioFilter]=useState([]);
-  const [variantFilter,setVariantFilter]=useState([]);
-  const [availScenarios,setAvailScenarios]=useState([]);
-  const [availVariants,setAvailVariants]=useState([]);
-  const toggleScenario=(s)=>setScenarioFilter(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
-  const toggleVariant=(v)=>setVariantFilter(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
+  const [filterTree,setFilterTree]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState([]);
   useEffect(()=>{
     if(subTab!=='per data') return;
-    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():{scenarios:[],variants:[]})
-      .then(data=>{
-        const sc=data.scenarios||[]; const va=data.variants||[];
-        setAvailScenarios(sc); setAvailVariants(va);
-        setScenarioFilter(sc.filter(s=>s.active).map(s=>s.name));
-        setVariantFilter(va.filter(v=>v.active).map(v=>v.name));
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[])
+      .then(tree=>{
+        setFilterTree(tree);
+        setSelectedPairs(tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
       }).catch(()=>{});
   },[subTab]);
   useEffect(()=>{
     setRows(null);
     const p=new URLSearchParams({period,view:subTab});
-    if(subTab==='per data'&&scenarioFilter.length>0) p.set('scenarios',scenarioFilter.join(','));
-    if(subTab==='per data'&&variantFilter.length>0)  p.set('variants',variantFilter.join(','));
+    if(subTab==='per data'&&selectedPairs.length>0) p.set('pairs',selectedPairs.join(','));
     fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab,scenarioFilter,variantFilter]);
+  },[period,subTab,selectedPairs]);
   const pC=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
   const wrC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
@@ -510,45 +544,37 @@ function ViewAlgo() {
         </table></div>
       </div>}
       {rows!==null && subTab==='per data' && <>
-        <div style={{display:'flex',flexDirection:'column',gap:4,padding:'6px 2px'}}>
-          {availScenarios.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-            <span style={{fontSize:10,color:'var(--text3)',minWidth:68,fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Scenariusz:</span>
-            {availScenarios.map(s=><div key={s.name} className={`filter-chip ${scenarioFilter.includes(s.name)?'active':''}`} onClick={()=>toggleScenario(s.name)} style={{opacity:s.active?1:.45}}>{s.name}</div>)}
-            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.map(s=>s.name))}>wszystkie</div>
-            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.filter(s=>s.active).map(s=>s.name))}>tylko włączone</div>
-            {scenarioFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setScenarioFilter([])}>✕</div>}
+        <div style={{display:'flex',gap:8,alignItems:'flex-start',flex:1,minHeight:0}}>
+          {filterTree.length>0 && <div style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',minWidth:200,maxWidth:260,flexShrink:0}}>
+            <div style={{fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}}>Filtr setupów</div>
+            <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
           </div>}
-          {availVariants.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-            <span style={{fontSize:10,color:'var(--text3)',minWidth:68,fontWeight:600,textTransform:'uppercase',letterSpacing:'.05em'}}>Wariant:</span>
-            {availVariants.map(v=><div key={v.name} className={`filter-chip ${variantFilter.includes(v.name)?'active':''}`} onClick={()=>toggleVariant(v.name)} style={{opacity:v.active?1:.45}}>{v.name}</div>)}
-            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.map(v=>v.name))}>wszystkie</div>
-            <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.filter(v=>v.active).map(v=>v.name))}>tylko włączone</div>
-            {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setVariantFilter([])}>✕</div>}
-          </div>}
-        </div>
-        {periodSummary && <div style={{display:'flex',gap:16,padding:'8px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,marginBottom:4,flexWrap:'wrap',alignItems:'center'}}>
-          <span style={{fontSize:11,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Σ okres</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--text3)'}}>N </span>{periodSummary.n}</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--green)'}}>W </span>{periodSummary.w}</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--red)'}}>L </span>{periodSummary.l}</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--text3)'}}>WR </span>{periodSummary.wr}</span>
-          <span className="mono" style={{fontSize:13,fontWeight:700,color:pC(periodSummary.pnl)}}>P&L {periodSummary.pnl}</span>
-          <span className="mono" style={{fontSize:12,color:pC(periodSummary.tp1)}}>TP1 {periodSummary.tp1}</span>
-        </div>}
-        <div className="panel" style={{flex:1}}>
-          <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
-          <div className="panel-body scroll-y"><table className="tbl">
-            <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
-            <tbody>{rows.map((r,i)=>(
-              <tr key={i}>
-                <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
-                <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
-                <td className="mono" style={{color:wrC(r.wr)}}>{r.wr}</td>
-                <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
-                <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
-              </tr>
-            ))}</tbody>
-          </table></div>
+          <div style={{flex:1,display:'flex',flexDirection:'column',gap:4,minWidth:0}}>
+          <div className="panel" style={{flex:1}}>
+            <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
+            <div className="panel-body scroll-y"><table className="tbl">
+              <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
+              <tbody>{rows.map((r,i)=>(
+                <tr key={i}>
+                  <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
+                  <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
+                  <td className="mono" style={{color:wrC(r.wr)}}>{r.wr}</td>
+                  <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
+                  <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
+                </tr>
+              ))}</tbody>
+              {periodSummary && <tfoot><tr style={{background:'var(--bg3)',borderTop:'2px solid var(--border)'}}>
+                <td className="mono" style={{fontWeight:700,color:'var(--text2)',fontSize:10,letterSpacing:'.04em'}}>Σ OKRES</td>
+                <td className="mono" style={{fontWeight:700}}>{periodSummary.n}</td>
+                <td className="mono green" style={{fontWeight:700}}>{periodSummary.w}</td>
+                <td className="mono red" style={{fontWeight:700}}>{periodSummary.l}</td>
+                <td className="mono" style={{fontWeight:700,color:wrC(periodSummary.wr)}}>{periodSummary.wr}</td>
+                <td className="mono" style={{fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</td>
+                <td className="mono" style={{color:pC(periodSummary.tp1)}}>{periodSummary.tp1}</td>
+              </tr></tfoot>}
+            </table></div>
+          </div>
+          </div>
         </div>
       </>}
       {rows!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
@@ -827,30 +853,23 @@ function TabAlgo() {
   const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
-  const [scenarioFilter,setScenarioFilter]=useState([]);
-  const [variantFilter,setVariantFilter]=useState([]);
-  const [availScenarios,setAvailScenarios]=useState([]);
-  const [availVariants,setAvailVariants]=useState([]);
-  const toggleScenario=(s)=>setScenarioFilter(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
-  const toggleVariant=(v)=>setVariantFilter(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
+  const [filterTree,setFilterTree]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState([]);
   useEffect(()=>{
     if(subTab!=='per data') return;
-    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():{scenarios:[],variants:[]})
-      .then(data=>{
-        const sc=data.scenarios||[]; const va=data.variants||[];
-        setAvailScenarios(sc); setAvailVariants(va);
-        setScenarioFilter(sc.filter(s=>s.active).map(s=>s.name));
-        setVariantFilter(va.filter(v=>v.active).map(v=>v.name));
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[])
+      .then(tree=>{
+        setFilterTree(tree);
+        setSelectedPairs(tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
       }).catch(()=>{});
   },[subTab]);
   useEffect(()=>{
     setRows(null);
     const p=new URLSearchParams({period,view:subTab});
-    if(subTab==='per data'&&scenarioFilter.length>0) p.set('scenarios',scenarioFilter.join(','));
-    if(subTab==='per data'&&variantFilter.length>0)  p.set('variants',variantFilter.join(','));
+    if(subTab==='per data'&&selectedPairs.length>0) p.set('pairs',selectedPairs.join(','));
     fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab,scenarioFilter,variantFilter]);
+  },[period,subTab,selectedPairs]);
   const pC=(v)=>v==null?'var(--text3)':String(v).startsWith('+')?'var(--green)':String(v).startsWith('-')?'var(--red)':'var(--text3)';
   const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
@@ -898,33 +917,9 @@ function TabAlgo() {
         </div>
       ))}
       {rows!==null && subTab==='per data' && <>
-        <div style={{padding:'8px 16px',borderBottom:'1px solid var(--border)',display:'flex',flexDirection:'column',gap:8}}>
-          {availScenarios.length>0 && <>
-            <div style={{fontSize:9,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',fontWeight:600}}>Scenariusz:</div>
-            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-              {availScenarios.map(s=><div key={s.name} className={`filter-chip ${scenarioFilter.includes(s.name)?'active':''}`} onClick={()=>toggleScenario(s.name)} style={{fontSize:11,opacity:s.active?1:.45}}>{s.name}</div>)}
-              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.map(s=>s.name))}>wszystkie</div>
-              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setScenarioFilter(availScenarios.filter(s=>s.active).map(s=>s.name))}>tylko włączone</div>
-              {scenarioFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setScenarioFilter([])}>✕</div>}
-            </div>
-          </>}
-          {availVariants.length>0 && <>
-            <div style={{fontSize:9,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',fontWeight:600}}>Wariant:</div>
-            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-              {availVariants.map(v=><div key={v.name} className={`filter-chip ${variantFilter.includes(v.name)?'active':''}`} onClick={()=>toggleVariant(v.name)} style={{fontSize:11,opacity:v.active?1:.45}}>{v.name}</div>)}
-              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.map(v=>v.name))}>wszystkie</div>
-              <div className="filter-chip" style={{opacity:.55,fontSize:10}} onClick={()=>setVariantFilter(availVariants.filter(v=>v.active).map(v=>v.name))}>tylko włączone</div>
-              {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.35,fontSize:10}} onClick={()=>setVariantFilter([])}>✕</div>}
-            </div>
-          </>}
-        </div>
-        {periodSummary && <div style={{display:'flex',gap:12,padding:'8px 16px',background:'var(--bg2)',borderBottom:'1px solid var(--border)',flexWrap:'wrap',alignItems:'center'}}>
-          <span style={{fontSize:9,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em'}}>Σ okres</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--text3)'}}>N </span>{periodSummary.n}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--green)'}}>W </span>{periodSummary.w}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--red)'}}>L </span>{periodSummary.l}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--text3)'}}>WR </span>{periodSummary.wr}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,color:pC(periodSummary.pnl)}}>P&L {periodSummary.pnl}</span>
+        {filterTree.length>0 && <div style={{padding:'10px 16px',borderBottom:'1px solid var(--border)'}}>
+          <div style={{fontSize:9,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}}>Filtr setupów</div>
+          <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
         </div>}
         <div className="section-wrap">
           <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
@@ -945,6 +940,14 @@ function TabAlgo() {
               <div className="data-pnl" style={{color:pC(r.pnl)}}>{r.pnl}</div>
             </div>
           ))}
+          {periodSummary && <div style={{display:'flex',padding:'8px 16px',borderTop:'2px solid var(--border)',background:'var(--bg3)'}}>
+            <div style={{width:52,fontFamily:'var(--mono)',fontSize:10,fontWeight:700,color:'var(--text2)',letterSpacing:'.04em'}}>Σ OKRES</div>
+            <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700}}>{periodSummary.n}</div>
+            <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--green)'}}>{periodSummary.w}</div>
+            <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--red)'}}>{periodSummary.l}</div>
+            <div style={{flex:1,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:wC(periodSummary.wr)}}>{periodSummary.wr}</div>
+            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</div>
+          </div>}
         </div>
       </>}
       {rows!==null && subTab==='per model' && <div className="section-wrap">
