@@ -3234,12 +3234,14 @@ def api_dashboard_trades(
 
 @app.get("/api/dashboard/algo")
 def api_dashboard_algo(
-    period: str = "30d",
-    view:   str = "wariant",
+    period:   str = "30d",
+    view:     str = "wariant",
+    variants: str | None = None,
 ):
     """Dane analityczne dla zakładki Analityka Algo.
     period: 7d | 30d | 3m | 6m | 12m
     view:   wariant | per data | per model
+    variants: opcjonalna lista wariantów oddzielona przecinkami (dla view=per data)
     """
     if period not in _DASHBOARD_PERIOD_DAYS:
         period = "30d"
@@ -3271,24 +3273,19 @@ def api_dashboard_algo(
         ]
 
     if view == "per data":
-        flat = db.get_algo2_daily_stats(days)
-        by_day: dict = {}
-        for r in flat:
-            day = str(r.get("day", ""))
-            if day not in by_day:
-                by_day[day] = {}
-            model_key = "gemini2" if r.get("model") == "Gemini2" else "algo2"
-            by_day[day][model_key] = {
-                "n":  r.get("total") or 0,
-                "w":  r.get("wins")  or 0,
-                "l":  r.get("losses") or 0,
-                "wr": f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
+        variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
+        rows = db.get_algo2_daily_stats(days, variants=variant_list)
+        return [
+            {
+                "date":    str(r.get("day", "")),
+                "n":       r.get("total") or 0,
+                "w":       r.get("wins")   or 0,
+                "l":       r.get("losses") or 0,
+                "wr":      f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
                 "pnl":     _fmt_pnl(r.get("total_pnl_usd")),
                 "tpsOnly": _fmt_pnl(r.get("total_tp1only_usd")),
             }
-        return [
-            {"date": day, "algo2": entry.get("algo2"), "gemini2": entry.get("gemini2")}
-            for day, entry in sorted(by_day.items(), reverse=True)
+            for r in rows
         ]
 
     if view == "per model":
@@ -3308,6 +3305,20 @@ def api_dashboard_algo(
         ]
 
     raise HTTPException(status_code=400, detail="Dozwolone widoki: wariant, per data, per model")
+
+
+@app.get("/api/algo2/variants-list")
+def api_algo2_variants_list():
+    """Lista unikalnych wariantów Algo2 dostępnych w bazie."""
+    rows = db.get_algo2_variant_summary()
+    seen: set = set()
+    result = []
+    for r in rows:
+        v = r.get("variant") or "baseline"
+        if v not in seen:
+            seen.add(v)
+            result.append(v)
+    return sorted(result)
 
 
 @app.get("/api/dashboard/alert")

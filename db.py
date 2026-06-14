@@ -1306,8 +1306,10 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
-    """Zestawienie wyników per dzień kalendarzowy (czas Warsaw) dla Algo2 i Gemini2."""
+def get_algo2_daily_stats(period_days: int | None = None, variants: list[str] | None = None) -> list[dict]:
+    """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw).
+    variants: opcjonalna lista wariantów do filtrowania (None = wszystkie).
+    """
     time_sql, time_params = _algo2_time_filter(period_days)
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
@@ -1330,12 +1332,18 @@ def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
+    variant_sql = ""
+    variant_params: dict = {}
+    if variants:
+        placeholders = ", ".join(f"%(v{i})s" for i in range(len(variants)))
+        variant_sql = f"AND COALESCE(variant, 'baseline') IN ({placeholders})"
+        variant_params = {f"v{i}": v for i, v in enumerate(variants)}
+    params = {**time_params, **variant_params}
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 f"""
                 SELECT
-                    model,
                     (alert_time AT TIME ZONE 'Europe/Warsaw')::date                        AS day,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
@@ -1347,12 +1355,13 @@ def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
                     ROUND(SUM(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS total_pnl_usd,
                     ROUND(SUM({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS total_tp1only_usd
                 FROM setups
-                WHERE model IN ('Algo2', 'Gemini2')
+                WHERE model = 'Algo2'
                   {time_sql}
-                GROUP BY model, day
-                ORDER BY day DESC, model
+                  {variant_sql}
+                GROUP BY day
+                ORDER BY day DESC
                 """,
-                time_params,
+                params,
             )
             return [dict(r) for r in cur.fetchall()]
 
