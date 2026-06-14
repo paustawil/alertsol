@@ -63,7 +63,7 @@ def _get_effective_trade_params(setup_type: str, variant: str | None) -> tuple[f
         base_lev  = int(settings.get("leverage") or LEVERAGE)
         key = f"{setup_type}__{variant or 'baseline'}"
         cfg = (settings.get("type_configs") or {}).get(key, {})
-        enabled   = cfg.get("enabled", True)
+        enabled   = cfg.get("enabled", False)
         eff_usdt  = float(cfg["trade_usdt"]) if cfg.get("trade_usdt") else base_usdt
         eff_lev   = int(cfg["leverage"])     if cfg.get("leverage")   else base_lev
         return eff_usdt, eff_lev, bool(enabled)

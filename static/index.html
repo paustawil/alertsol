@@ -770,7 +770,9 @@ function ViewHistoria() {
 /* ── Desktop: ViewSettings ── */
 const ALGO2_TYPES = [
   { key: 'trend_pullback_long__baseline',      label: 'Trend Pullback Long',        variant: 'baseline' },
+  { key: 'trend_pullback_long__shallow',       label: 'Trend Pullback Long',        variant: 'shallow'  },
   { key: 'trend_pullback_short__baseline',     label: 'Trend Pullback Short',       variant: 'baseline' },
+  { key: 'trend_pullback_short__shallow',      label: 'Trend Pullback Short',       variant: 'shallow'  },
   { key: 'impulse_aggressive_long__h1_atr',    label: 'Impulse Aggressive Long',    variant: 'h1_atr'   },
   { key: 'impulse_aggressive_short__h1_atr',   label: 'Impulse Aggressive Short',   variant: 'h1_atr'   },
   { key: 'range_support_long__baseline',       label: 'Range Support Long',         variant: 'baseline' },
@@ -791,7 +793,7 @@ function ViewSettings() {
           ALGO2_TYPES.map(t => {
             const saved = (d.type_configs || {})[t.key] || {};
             return [t.key, {
-              enabled:    saved.enabled !== false,
+              enabled:    saved.enabled === true,
               trade_usdt: saved.trade_usdt != null ? String(saved.trade_usdt) : '',
               leverage:   saved.leverage   != null ? String(saved.leverage)   : '',
             }];
@@ -843,7 +845,7 @@ function ViewSettings() {
   if (!cfg) return <div style={{padding:40, color:'var(--text3)', fontFamily:'var(--mono)', fontSize:12}}>Ładowanie…</div>;
 
   return (
-    <div style={{padding:'24px 28px', maxWidth:780, overflowY:'auto', height:'100%'}}>
+    <div style={{maxWidth:780}}>
       <div style={{fontSize:18, fontWeight:700, color:'var(--text1)', marginBottom:24}}>Ustawienia</div>
 
       {/* Baza */}
