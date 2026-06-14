@@ -167,6 +167,19 @@ _GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
 _GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 _SESSION_SECRET       = os.getenv("SESSION_SECRET", "change-me-set-SESSION_SECRET-env-var")
 _ALLOWED_EMAIL        = "paulina@lerta.pl"
+# Ustaw dokładnie ten sam URI co w Google Cloud Console → Credentials → Authorized redirect URIs
+_GOOGLE_REDIRECT_URI  = os.getenv("GOOGLE_REDIRECT_URI", "")
+
+
+def _build_redirect_uri(request: Request) -> str:
+    """Buduje redirect URI. Priorytet: env var > auto-detect z wymuszonym https."""
+    if _GOOGLE_REDIRECT_URI:
+        return _GOOGLE_REDIRECT_URI
+    base = str(request.base_url).rstrip("/")
+    # Railway terminuje SSL na proxy — wewnętrznie http, zewnętrznie https
+    if base.startswith("http://") and "localhost" not in base and "127.0.0.1" not in base:
+        base = "https://" + base[7:]
+    return base + "/auth/callback"
 
 _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="pl">
@@ -258,7 +271,7 @@ async def auth_login(request: Request):
         return RedirectResponse(url="/", status_code=302)
     if not _GOOGLE_CLIENT_ID:
         return HTMLResponse("<pre>Błąd: GOOGLE_CLIENT_ID nie jest ustawiony.</pre>", status_code=500)
-    redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+    redirect_uri = _build_redirect_uri(request)
     params = urlencode({
         "client_id":     _GOOGLE_CLIENT_ID,
         "redirect_uri":  redirect_uri,
@@ -274,7 +287,7 @@ async def auth_login(request: Request):
 @app.get("/auth/callback", include_in_schema=False)
 async def auth_callback(request: Request, code: str = None, error: str = None):
     if error or not code:
-        redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+        redirect_uri = _build_redirect_uri(request)
         params = urlencode({
             "client_id":     _GOOGLE_CLIENT_ID,
             "redirect_uri":  redirect_uri,
@@ -286,7 +299,7 @@ async def auth_callback(request: Request, code: str = None, error: str = None):
         err_block = '<p class="err">Logowanie anulowane. Spróbuj ponownie.</p>'
         return HTMLResponse(_LOGIN_HTML.format(google_url=google_url, error_block=err_block), status_code=400)
 
-    redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+    redirect_uri = _build_redirect_uri(request)
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             "https://oauth2.googleapis.com/token",
