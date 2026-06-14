@@ -1878,6 +1878,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         "tps":             tps,
         "rr":              setup.get("rr", 0),
         "entry_hit_at":    int(datetime.now(timezone.utc).timestamp()) if _immediate_entry else None,
+        "status":          "open" if _immediate_entry else "pending",
         "tp1_hit_at":      None,
         "sl_adjusted":     False,
         "entries_hit":     1,
@@ -2220,11 +2221,15 @@ def check_pending(candles_m15: list[dict]):
         #     db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
             still_pending.append(s)
-            db.update_setup(s["setup_id"],
-                            entry_hit_at=s.get("entry_hit_at"),
-                            tp1_hit_at=s.get("tp1_hit_at"),
-                            sl_adjusted=s.get("sl_adjusted", False),
-                            entries_hit=s.get("entries_hit", 1))
+            _upd: dict = dict(
+                entry_hit_at=s.get("entry_hit_at"),
+                tp1_hit_at=s.get("tp1_hit_at"),
+                sl_adjusted=s.get("sl_adjusted", False),
+                entries_hit=s.get("entries_hit", 1),
+            )
+            if s.get("entry_hit_at") is not None:
+                _upd["status"] = "open"
+            db.update_setup(s["setup_id"], **_upd)
 
 
 
