@@ -1178,6 +1178,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
+                    "variant": "baseline",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
                     "sl_after_tp1": round(w, 2),
                     "tps": [round(tp1, 2), round(tp2, 2)],
@@ -1223,6 +1224,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_support_long", "direction": "long",
+                    "variant": "baseline",
                     "entries": [round(w, 2)], "sl": round(sl, 2),
                     "sl_after_tp1": round(w, 2),
                     "tps": [round(tp1, 2), round(tp2, 2)],
@@ -1869,7 +1871,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         "sl_adjusted":     False,
         "entries_hit":     1,
         "shadow":          shadow,
-        "variant":         setup.get("variant") or setup.get("type", "baseline"),
+        "variant":         setup.get("variant") or "baseline",
     }
     sid = db.insert_setup(row)
     if sid is None:
