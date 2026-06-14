@@ -959,8 +959,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     if not dist_ok: reasons.append(f"dist>3%({w-current_price:.2f})")
                     log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
-        # impulse_continuation_short — zarchiwizowany: 100% SL przy wejściu, -12.5% avg (backtest 30d)
-        if False:  # noqa: SIM210
+        # impulse_continuation_short
+        if regime_name.startswith("IMPULSE_"):
             _cont_spike = regime.get("spike_score", 0)
             atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
             last6 = candles_m15[-6:]
@@ -972,7 +972,6 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 pullback_high = max(c["high"] for c in last6[-2:])
                 w = round(pullback_high, 2)
                 sl = round(pullback_high + atr * 0.8, 2)
-                # TP: projekcja ATR_M15 poniżej bieżącej ceny (kontynuacja impulsu w dół)
                 tp1 = round(current_price - atr_m15 * 1.5, 2)
                 tp2 = round(current_price - atr_m15 * 2.5, 2)
                 rr_ok = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
@@ -985,6 +984,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
                         "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1),
                         "score": strength,
+                        "variant": "baseline",
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
 
@@ -1072,8 +1072,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     if not dist_ok: reasons.append(f"dist>3%({current_price-w:.2f})")
                     log_lines.append(f"    ✗ REJECTED [{vname}]: {', '.join(reasons)}")
 
-        # impulse_continuation_long — zarchiwizowany: brak symetrii z short, brak danych (backtest 30d)
-        if False:  # noqa: SIM210
+        # impulse_continuation_long
+        if regime_name.startswith("IMPULSE_"):
             _cont_spike = regime.get("spike_score", 0)
             atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
             last6 = candles_m15[-6:]
@@ -1085,7 +1085,6 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 pullback_low = min(c["low"] for c in last6[-2:])
                 w = round(pullback_low, 2)
                 sl = round(pullback_low - atr * 0.8, 2)
-                # TP: projekcja ATR_M15 powyżej bieżącej ceny (kontynuacja impulsu w górę)
                 tp1 = round(current_price + atr_m15 * 1.5, 2)
                 tp2 = round(current_price + atr_m15 * 2.5, 2)
                 rr_ok = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
@@ -1098,6 +1097,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "entries": [w], "sl": sl, "sl_after_tp1": w,
                         "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1),
                         "score": strength,
+                        "variant": "baseline",
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
 
