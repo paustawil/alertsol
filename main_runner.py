@@ -3234,14 +3234,14 @@ def api_dashboard_trades(
 
 @app.get("/api/dashboard/algo")
 def api_dashboard_algo(
-    period:   str = "30d",
-    view:     str = "wariant",
-    variants: str | None = None,
+    period:    str = "30d",
+    view:      str = "wariant",
+    scenarios: str | None = None,
 ):
     """Dane analityczne dla zakładki Analityka Algo.
     period: 7d | 30d | 3m | 6m | 12m
     view:   wariant | per data | per model
-    variants: opcjonalna lista wariantów oddzielona przecinkami (dla view=per data)
+    scenarios: opcjonalna lista typów setupów oddzielona przecinkami (dla view=per data)
     """
     if period not in _DASHBOARD_PERIOD_DAYS:
         period = "30d"
@@ -3273,8 +3273,8 @@ def api_dashboard_algo(
         ]
 
     if view == "per data":
-        variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
-        rows = db.get_algo2_daily_stats(days, variants=variant_list)
+        scenario_list = [s.strip() for s in scenarios.split(",") if s.strip()] if scenarios else None
+        rows = db.get_algo2_daily_stats(days, scenarios=scenario_list)
         return [
             {
                 "date":    str(r.get("day", "")),
@@ -3309,16 +3309,20 @@ def api_dashboard_algo(
 
 @app.get("/api/algo2/variants-list")
 def api_algo2_variants_list():
-    """Lista unikalnych wariantów Algo2 dostępnych w bazie."""
-    rows = db.get_algo2_variant_summary()
+    """Lista unikalnych scenariuszy (typów setupów) Algo2 z flagą active.
+    active=True oznacza scenariusz który miał setupy w ostatnich 90 dniach.
+    """
+    all_rows    = db.get_algo2_variant_summary()
+    recent_rows = db.get_algo2_variant_summary(90)
+    active_scenarios = {r.get("scenario") for r in recent_rows}
     seen: set = set()
     result = []
-    for r in rows:
-        v = r.get("variant") or "baseline"
-        if v not in seen:
-            seen.add(v)
-            result.append(v)
-    return sorted(result)
+    for r in all_rows:
+        sc = r.get("scenario") or "unknown"
+        if sc not in seen:
+            seen.add(sc)
+            result.append({"name": sc, "active": sc in active_scenarios})
+    return sorted(result, key=lambda x: x["name"])
 
 
 @app.get("/api/dashboard/alert")
