@@ -68,47 +68,13 @@ def run_breakout_scan():
 
 
 def run_sheets_export():
-    """Eksportuje nowo zamknięte setupy do Google Sheets."""
-    try:
-        import sol_alert
-        unexported = db.get_unexported_resolved()
-        if not unexported:
-            return
-        log.info(f"[sheets-export] Eksportuję {len(unexported)} setupów...")
-        for s in unexported:
-            entry_ts = s.get("entry_hit_at")
-            exit_dt  = s.get("exit_time")
-            exit_ts  = int(exit_dt.timestamp()) if exit_dt else None
-            result   = s.get("result", "")
-            avg_entry = float(s["avg_entry"]) if s.get("avg_entry") else None
-            avg_exit  = float(s["avg_exit"])  if s.get("avg_exit")  else None
-            move      = float(s["pnl_usd"])   if s.get("pnl_usd")   else 0.0
-
-            try:
-                if s.get("shadow") and s.get("model") == "Grok":
-                    ok = sol_alert.log_to_grok_shadow(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                elif s.get("shadow"):
-                    ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                else:
-                    ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                if ok:
-                    db.mark_sheets_exported(s["setup_id"])
-                    log.info(f"[sheets-export] Setup #{s['setup_id']} wyeksportowany.")
-                else:
-                    log.warning(f"[sheets-export] Setup #{s['setup_id']} — eksport nieudany, spróbuję ponownie.")
-            except Exception:
-                log.exception(f"[sheets-export] Błąd eksportu setupu #{s['setup_id']}")
-    except Exception:
-        log.exception("[sheets-export] Błąd ogólny")
+    """Google Sheets export — wyłączony."""
+    pass
 
 
 def run_profit_calculator_export():
-    """Odświeża arkusz kalkulatora zysku/straty w Google Sheets."""
-    try:
-        import sol_alert
-        sol_alert.export_profit_calculator_to_sheets()
-    except Exception:
-        log.exception("[kalkulator] Błąd eksportu kalkulatora")
+    """Google Sheets profit calculator — wyłączony."""
+    pass
 
 
 def run_grok_shadow():
@@ -166,25 +132,6 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
 
-    # Sheets export — co 5 minut
-    scheduler.add_job(
-        run_sheets_export,
-        "interval",
-        minutes=5,
-        id="sheets_export",
-        max_instances=1,
-        coalesce=True,
-    )
-
-    # Kalkulator zysku/straty — co godzinę (nadpisuje arkusz aktualnymi danymi)
-    scheduler.add_job(
-        run_profit_calculator_export,
-        "interval",
-        hours=1,
-        id="profit_calculator",
-        max_instances=1,
-        coalesce=True,
-    )
 
     # Grok shadow — co 5 min (wewnętrznie throttled: detekcja co 60 min lub co 5 min podczas IMPULSE)
     scheduler.add_job(
@@ -1884,82 +1831,12 @@ def admin_init_sheets():
 
 @app.post("/admin/run-sheets-export")
 def admin_run_sheets_export():
-    """Uruchamia eksport do Sheets synchronicznie i zwraca szczegółowy raport."""
-    import sol_alert
-
-    # Sprawdź czy kolumna sheets_exported istnieje
-    try:
-        with db._conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM setups WHERE resolved = TRUE AND sheets_exported = FALSE"
-                )
-                pending_count = cur.fetchone()[0]
-    except Exception as e:
-        return {"ok": False, "stage": "db_check", "error": str(e)}
-
-    if pending_count == 0:
-        # Sprawdź ile jest w ogóle zamkniętych setupów
-        with db._conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM setups WHERE resolved = TRUE")
-                total_resolved = cur.fetchone()[0]
-        return {
-            "ok": True,
-            "pending_export": 0,
-            "total_resolved": total_resolved,
-            "message": "Brak setupów do wyeksportowania (wszystkie już wyeksportowane lub brak zamkniętych).",
-        }
-
-    unexported = db.get_unexported_resolved()
-    exported_ok, exported_fail, errors = 0, 0, []
-
-    # Otwórz arkusze raz dla całego batcha — unika rate limitingu Google Sheets API
-    try:
-        _, sh2 = sol_alert._get_sheets()
-    except Exception as e:
-        return {"ok": False, "stage": "open_sheets", "error": str(e)}
-
-    for s in unexported:
-        sid = s.get("setup_id")
-        try:
-            entry_ts  = s.get("entry_hit_at")
-            exit_dt   = s.get("exit_time")
-            exit_ts   = int(exit_dt.timestamp()) if exit_dt else None
-            result    = s.get("result", "")
-            avg_entry = float(s["avg_entry"]) if s.get("avg_entry") else None
-            avg_exit  = float(s["avg_exit"])  if s.get("avg_exit")  else None
-            move      = float(s["pnl_usd"])   if s.get("pnl_usd")   else 0.0
-
-            if s.get("shadow"):
-                ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-            else:
-                ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move, _sh2=sh2)
-
-            if ok:
-                db.mark_sheets_exported(sid)
-                exported_ok += 1
-            else:
-                exported_fail += 1
-                errors.append({"setup_id": sid, "error": "eksport zwrócił False — sprawdź logi Railway"})
-        except Exception as e:
-            exported_fail += 1
-            errors.append({"setup_id": sid, "error": str(e)})
-
-    return {
-        "ok": exported_fail == 0,
-        "exported": exported_ok,
-        "failed": exported_fail,
-        "errors": errors,
-    }
+    return {"ok": False, "message": "Google Sheets integration wyłączona."}
 
 
 @app.post("/admin/run-profit-calculator")
 def admin_run_profit_calculator():
-    """Uruchamia kalkulator zysku/straty i eksportuje wyniki do Google Sheets."""
-    import sol_alert
-    ok = sol_alert.export_profit_calculator_to_sheets()
-    return {"ok": ok}
+    return {"ok": False, "message": "Google Sheets integration wyłączona."}
 
 
 @app.get("/admin/test-candles")
@@ -3085,7 +2962,7 @@ _STATUS_PL = {
     "pending":   "czeka",
     "open":      "pozycja",
     "after_tp1": "po_tp1",
-    "closed":    "closed",
+    "closed":    "zamknięte",
 }
 
 _WIN_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2"}
@@ -3160,10 +3037,69 @@ def api_dashboard_setups():
 
 @app.get("/api/dashboard/types")
 def api_dashboard_types(date_from: str = "", date_to: str = ""):
-    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii.
-    Filtruje po zakresie dat żeby pokazywać tylko aktualne scenariusze.
-    """
-    return db.get_resolved_types(date_from=date_from or None, date_to=date_to or None)
+    return db.get_all_types()
+
+
+@app.get("/api/dashboard/all-setups")
+def api_all_setups(
+    statuses:      str = "",
+    types:         str = "",
+    variants:      str = "",
+    shadow_filter: str = "all",
+    date_from:     str = "",
+    date_to:       str = "",
+    limit:         int = 200,
+    offset:        int = 0,
+):
+    """Wszystkie setupy (aktywne + zamknięte) dla zunifikowanej zakładki Setups."""
+    shadow: bool | None = None
+    if shadow_filter == "shadow":
+        shadow = True
+    elif shadow_filter == "real":
+        shadow = False
+
+    data = db.get_all_setups_filtered(
+        statuses  = [s.strip() for s in statuses.split(",")  if s.strip()] or None,
+        types     = [t.strip() for t in types.split(",")     if t.strip()] or None,
+        variants  = [v.strip() for v in variants.split(",")  if v.strip()] or None,
+        shadow    = shadow,
+        date_from = date_from or None,
+        date_to   = date_to   or None,
+        limit     = min(limit, 500),
+        offset    = offset,
+    )
+
+    def _f(v): return float(v) if v is not None else None
+    def _dt(v, n): return str(v)[:n] if v else None
+
+    rows = []
+    for s in data["rows"]:
+        rows.append({
+            "id":                       s["setup_id"],
+            "model":                    s.get("model", ""),
+            "kier":                     (s.get("direction") or "").upper(),
+            "typ":                      s.get("type", ""),
+            "variant":                  s.get("variant") or "baseline",
+            "t_def":                    _dt(s.get("alert_time"), 16),
+            "t_entry":                  _dt(s.get("entry_hit_at"), 16),
+            "t_exit":                   _dt(s.get("exit_time"), 16),
+            "status_key":               s.get("status", "pending"),
+            "status":                   _STATUS_PL.get(s.get("status", "pending"), s.get("status", "")),
+            "resolved":                 s.get("resolved", False),
+            "result":                   _map_result_display(s) if s.get("resolved") else None,
+            "pnl_tp1":                  _f(s.get("tp1_only_pnl")),
+            "pnl_tp12":                 _f(s.get("pnl_usd")),
+            "pnl_pct":                  _f(s.get("pnl_pct")),
+            "pnl_tp1_pct":              _f(s.get("tp1_only_pnl_pct")),
+            "shadow":                   s.get("shadow", False),
+            "exchange_position_opened": s.get("exchange_position_opened", False),
+            "score":                    _f(s.get("score")),
+            "rr":                       _f(s.get("rr")),
+            "entries":                  s.get("entries") or [],
+            "tps":                      s.get("tps") or [],
+            "sl":                       _f(s.get("sl")),
+        })
+    return {"total": data["total"], "rows": rows}
 
 
 def _map_result_display(t: dict) -> str:

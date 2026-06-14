@@ -395,29 +395,115 @@ function ViewDashboard() {
     </>
   );
 }
-/* ── Desktop: ViewSetups ── */
+/* ── Desktop: ViewSetups (unified — all statuses) ── */
 function ViewSetups() {
-  const {setups} = useDash();
+  const [statusFilters,setStatusFilters]=useState([]);
+  const [shadowFilter,setShadowFilter]=useState('all');
+  const [typeFilters,setTypeFilters]=useState([]);
+  const [variantFilters,setVariantFilters]=useState([]);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
+  const [availTypes,setAvailTypes]=useState([]);
+  const [availVariants,setAvailVariants]=useState([]);
+  const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
+  const [dateTo,setDateTo]=useState('');
+  const [rows,setRows]=useState(null);
+  const [total,setTotal]=useState(0);
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'closed',l:'Zamknięte'}];
+  const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'shadow',l:'Shadow'}];
+  const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  const toggleType=(t)=>setTypeFilters(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t]);
+  const toggleVariant=(v)=>setVariantFilters(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
+  useEffect(()=>{
+    fetch('/api/dashboard/types').then(r=>r.ok?r.json():{types:[],variants:[]})
+      .then(d=>{setAvailTypes(d.types||[]);setAvailVariants(d.variants||[]);}).catch(()=>{});
+  },[]);
+  useEffect(()=>{
+    setRows(null);
+    const p=new URLSearchParams({limit:200,shadow_filter:shadowFilter});
+    if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
+    if(typeFilters.length>0) p.set('types',typeFilters.join(','));
+    if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
+    if(dateFrom) p.set('date_from',dateFrom);
+    if(dateTo) p.set('date_to',dateTo);
+    fetch(`/api/dashboard/all-setups?${p}`)
+      .then(r=>r.ok?r.json():{rows:[],total:0})
+      .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
+  },[statusFilters,shadowFilter,typeFilters,variantFilters,dateFrom,dateTo]);
+  const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
+  const resBg=(r)=>r==='SL'?'var(--red-dim)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--bg3)':r?'var(--green-dim)':'transparent';
+  const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
+  const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}%`;
+  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  const inpStyle={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10};
+  const activeTypeCount=typeFilters.length+variantFilters.length;
+  const StatusPill=({sk,sl})=>{
+    const cls={pending:'czeka',open:'pozycja',after_tp1:'po_tp1'}[sk]||'';
+    if(cls) return <span className={`status-pill ${cls}`}><span className="status-dot"></span>{sl}</span>;
+    return <span style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:10,fontFamily:'var(--mono)',padding:'2px 8px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}><span className="status-dot"></span>{sl}</span>;
+  };
+  const SrcBadge=({shadow,exch})=>{
+    if(shadow) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
+    if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
+    return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
+  };
   return (
     <div className="panel" style={{flex:1}}>
-      <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{setups.length}</span></div>
+      <div className="panel-head" style={{flexDirection:'column',alignItems:'stretch',gap:8}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span className="panel-title">Setups</span>
+          <span className="panel-badge">{rows?`${rows.length}/${total}`:'…'}</span>
+        </div>
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Status:</span>
+          {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
+        </div>
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Źródło:</span>
+          <div className="seg-tabs">
+            {SHADOW_OPTS.map(({v,l})=><div key={v} className={`seg-tab ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)}>{l}</div>)}
+          </div>
+          <div className={`filter-chip ${showTypeFilter?'active':''}`} style={{marginLeft:8,fontFamily:'var(--mono)',fontSize:9}} onClick={()=>setShowTypeFilter(p=>!p)}>
+            Typ/Wariant{activeTypeCount>0?` (${activeTypeCount})`:''} {showTypeFilter?'▴':'▾'}
+          </div>
+          {activeTypeCount>0&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>{setTypeFilters([]);setVariantFilters([]);}}>✕</span>}
+        </div>
+        {showTypeFilter&&<div style={{display:'flex',flexDirection:'column',gap:6,padding:'4px 0',borderTop:'1px solid var(--border)'}}>
+          {availTypes.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Scenariusz:</span>
+            {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
+          </div>}
+          {availVariants.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Wariant:</span>
+            {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilters.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v}</div>)}
+          </div>}
+        </div>}
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={inpStyle}/>
+          <span style={{color:'var(--text3)',fontSize:10}}>–</span>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={inpStyle}/>
+          {(dateFrom||dateTo)&&<span style={{color:'var(--blue)',fontSize:11,cursor:'pointer'}} onClick={()=>{setDateFrom('');setDateTo('');}}>✕</span>}
+        </div>
+      </div>
       <div className="panel-body scroll-y">
-        <table className="tbl">
-          <thead><tr><th>#</th><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TP1</th><th>TP2</th><th>SL</th><th>Akcja</th></tr></thead>
-          <tbody>{setups.map((s,i)=>(
+        {rows===null&&<div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
+        {rows!==null&&<table className="tbl">
+          <thead><tr><th>ID</th><th>Alert</th><th>Wejście</th><th>Kier</th><th>Typ / Wariant</th><th>Status</th><th>Źródło</th><th>Wynik</th><th>P&L TP1$</th><th>P&L TP1+TP2$</th><th>%TP1+TP2</th></tr></thead>
+          <tbody>{rows.map((r,i)=>(
             <tr key={i}>
-              <td className="mono" style={{color:'var(--text3)'}}>{i+1}</td>
-              <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
-              <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
-              <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
-              <td style={{color:'var(--text2)',fontSize:11}}>{s.typ}{s.variant&&<div style={{color:'var(--text3)',fontSize:10}}>{s.variant}</div>}</td>
-              <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
-              <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
-              <td className="mono red">{s.sl}</td>
-              <td><SetupActions setup={s}/></td>
+              <td className="mono" style={{color:'var(--text3)'}}>{r.id}</td>
+              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{r.t_def||'—'}</td>
+              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{r.t_entry||'—'}</td>
+              <td><span className={`kier-badge ${(r.kier||'long').toLowerCase()}`}>{r.kier}</span></td>
+              <td style={{fontSize:10,color:'var(--text2)',maxWidth:160}}>{r.typ}<br/><span style={{color:'var(--text3)'}}>{r.variant}</span></td>
+              <td><StatusPill sk={r.status_key} sl={r.status}/></td>
+              <td><SrcBadge shadow={r.shadow} exch={r.exchange_position_opened}/></td>
+              <td>{r.result?<span style={{fontFamily:'var(--mono)',fontSize:10,color:resC(r.result),background:resBg(r.result),padding:'2px 7px',borderRadius:3,whiteSpace:'nowrap'}}>{r.result}</span>:<span style={{color:'var(--text3)'}}>—</span>}</td>
+              <td className="mono" style={{color:pC(r.pnl_tp1)}}>{fmtU(r.pnl_tp1)}</td>
+              <td className="mono" style={{fontWeight:600,color:pC(r.pnl_tp12)}}>{fmtU(r.pnl_tp12)}</td>
+              <td className="mono" style={{color:pC(r.pnl_pct)}}>{fmtP(r.pnl_pct)}</td>
             </tr>
           ))}</tbody>
-        </table>
+        </table>}
       </div>
     </div>
   );
@@ -595,112 +681,15 @@ function ViewAlgo() {
     </>
   );
 }
-/* ── Desktop: ViewHistoria ── */
+/* ── Desktop: ViewHistoria (legacy — redirect do ViewSetups) ── */
 function ViewHistoria() {
-  const d30=React.useMemo(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];},[]);
-  const [resultCats,setResultCats]=useState(['win','loss']);
-  const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
-  const [dateTo,setDateTo]=useState('');
-  const [typeFilters,setTypeFilters]=useState([]);
-  const [variantFilters,setVariantFilters]=useState([]);
-  const [showTypeFilter,setShowTypeFilter]=useState(false);
-  const [availTypes,setAvailTypes]=useState([]);
-  const [availVariants,setAvailVariants]=useState([]);
-  const [trades,setTrades]=useState(null);
-  const [total,setTotal]=useState(0);
-  const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
-  const toggleType=(t)=>setTypeFilters(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t]);
-  const toggleVariant=(v)=>setVariantFilters(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
-  useEffect(()=>{
-    if(!showTypeFilter) return;
-    const p=new URLSearchParams();
-    if(dateFrom) p.set('date_from',dateFrom);
-    if(dateTo) p.set('date_to',dateTo);
-    fetch(`/api/dashboard/types?${p}`).then(r=>r.ok?r.json():{types:[],variants:[]})
-      .then(d=>{
-        setAvailTypes(d.types||[]);
-        setAvailVariants(d.variants||[]);
-        setTypeFilters(prev=>prev.filter(t=>(d.types||[]).includes(t)));
-        setVariantFilters(prev=>prev.filter(v=>(d.variants||[]).includes(v)));
-      }).catch(()=>{});
-  },[showTypeFilter,dateFrom,dateTo]);
-  useEffect(()=>{
-    setTrades(null);
-    const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',date_from:dateFrom,date_to:dateTo,limit:100});
-    if(typeFilters.length>0) p.set('types',typeFilters.join(','));
-    if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
-    fetch(`/api/dashboard/trades?${p}`)
-      .then(r=>r.ok?r.json():{rows:[]}).then(d=>{setTrades(d.rows||[]);setTotal(d.total||0);}).catch(()=>setTrades([]));
-  },[resultCats,dateFrom,dateTo,typeFilters,variantFilters]);
-  const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
-  const resBg=(r)=>r==='SL'?'var(--red-dim)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--bg3)':'var(--green-dim)';
-  const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
-  const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}%`;
-  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
-  const CATS=[{v:'win',l:'Wygrane'},{v:'loss',l:'Straty'},{v:'no_entry',l:'Nie weszło'},{v:'cancelled',l:'Anulowane'}];
-  const inpStyle={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10};
-  const activeTypeCount=typeFilters.length+variantFilters.length;
-  return (
-    <div className="panel" style={{flex:1}}>
-      <div className="panel-head" style={{flexDirection:'column',alignItems:'stretch',gap:8}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-          <span className="panel-title">Zamknięte setups</span>
-          <span className="panel-badge">{trades?`${trades.length}/${total}`:'…'}</span>
-        </div>
-        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
-          {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
-          <div className={`filter-chip ${showTypeFilter?'active':''}`} onClick={()=>setShowTypeFilter(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>
-            Typ/Wariant{activeTypeCount>0?` (${activeTypeCount})`:''} {showTypeFilter?'▴':'▾'}
-          </div>
-          {activeTypeCount>0 && <span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>{setTypeFilters([]);setVariantFilters([]);}}>✕</span>}
-        </div>
-        {showTypeFilter && <div style={{display:'flex',flexDirection:'column',gap:6,padding:'4px 0',borderTop:'1px solid var(--border)'}}>
-          {availTypes.length===0 && <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Ładowanie…</span>}
-          {availTypes.length>0 && <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Scenariusz:</span>
-            {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
-          </div>}
-          {availVariants.length>0 && <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Wariant:</span>
-            {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilters.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v}</div>)}
-          </div>}
-        </div>}
-        <div style={{display:'flex',gap:6,alignItems:'center'}}>
-          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={inpStyle}/>
-          <span style={{color:'var(--text3)',fontSize:10}}>–</span>
-          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={inpStyle}/>
-          {(dateFrom||dateTo)&&<span style={{color:'var(--blue)',fontSize:11,cursor:'pointer'}} onClick={()=>{setDateFrom('');setDateTo('');}}>✕</span>}
-        </div>
-      </div>
-      <div className="panel-body scroll-y">
-        {trades===null && <div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
-        {trades!==null && <table className="tbl">
-          <thead><tr><th>ID</th><th>Definicja</th><th>Wejście</th><th>Wyjście</th><th>Kier</th><th>Typ / Wariant</th><th>Wynik</th><th>P&L TP1$</th><th>P&L TP1+TP2$</th><th>%TP1</th><th>%TP1+TP2</th></tr></thead>
-          <tbody>{trades.map((t,i)=>(
-            <tr key={i}>
-              <td className="mono" style={{color:'var(--text3)'}}>{t.id}</td>
-              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{t.t_def||'—'}</td>
-              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{t.t_entry||'—'}</td>
-              <td className="mono" style={{color:'var(--text3)',fontSize:10}}>{t.t_exit||'—'}</td>
-              <td><span className={`kier-badge ${(t.kier||'long').toLowerCase()}`}>{t.kier}</span></td>
-              <td style={{fontSize:10,color:'var(--text2)',maxWidth:160}}>{t.typ}<br/><span style={{color:'var(--text3)'}}>{t.variant}</span></td>
-              <td><span style={{fontFamily:'var(--mono)',fontSize:10,color:resC(t.result),background:resBg(t.result),padding:'2px 7px',borderRadius:3,whiteSpace:'nowrap'}}>{t.result}</span></td>
-              <td className="mono" style={{color:pC(t.pnl_tp1)}}>{fmtU(t.pnl_tp1)}</td>
-              <td className="mono" style={{fontWeight:600,color:pC(t.pnl_tp12)}}>{fmtU(t.pnl_tp12)}</td>
-              <td className="mono" style={{color:pC(t.pnl_tp1_pct)}}>{fmtP(t.pnl_tp1_pct)}</td>
-              <td className="mono" style={{color:pC(t.pnl_pct)}}>{fmtP(t.pnl_pct)}</td>
-            </tr>
-          ))}</tbody>
-        </table>}
-      </div>
-    </div>
-  );
+  return <ViewSetups/>;
 }
 /* ── Sidebar ── */
 function Sidebar({ tab, setTab }) {
   const {price, setups} = useDash();
   const p = price || {};
-  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Aktywne setups',badge:setups.length||null},{id:'algo',label:'Analityka Algo'},{id:'hist',label:'Historia'}];
+  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Setups'},{id:'algo',label:'Analityka Algo'}];
   return (
     <div className="sidebar">
       <div className="sidebar-logo"><div className="sidebar-brand">AlertSol</div><div className="sidebar-sub">Dashboard v2</div></div>
@@ -759,7 +748,6 @@ function DesktopApp() {
           {tab==='dash' && <ViewDashboard/>}
           {tab==='setups' && <ViewSetups/>}
           {tab==='algo' && <ViewAlgo/>}
-          {tab==='hist' && <ViewHistoria/>}
         </div>
       </div>
     </div>
@@ -813,35 +801,60 @@ function TabDashboard() {
     </div>
   );
 }
-/* ── Mobile: TabSetups ── */
+/* ── Mobile: TabSetups (unified — all statuses) ── */
 function TabSetups() {
-  const {setups} = useDash();
+  const [statusFilters,setStatusFilters]=useState([]);
+  const [shadowFilter,setShadowFilter]=useState('all');
+  const [rows,setRows]=useState(null);
+  const [total,setTotal]=useState(0);
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'closed',l:'Zamknięte'}];
+  const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  useEffect(()=>{
+    setRows(null);
+    const p=new URLSearchParams({limit:100,shadow_filter:shadowFilter});
+    if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
+    const d=new Date();d.setDate(d.getDate()-30);
+    p.set('date_from',d.toISOString().split('T')[0]);
+    fetch(`/api/dashboard/all-setups?${p}`)
+      .then(r=>r.ok?r.json():{rows:[],total:0})
+      .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
+  },[statusFilters,shadowFilter]);
+  const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
+  const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
+  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  const SrcBadge=({shadow,exch})=>{
+    if(shadow) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
+    if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
+    return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
+  };
   return (
     <div>
-      <div className="sec-header"><span className="sec-title">Aktywne setups</span><span className="sec-badge">{setups.length}</span></div>
-      {setups.map((s,i)=>(
-        <div key={i} className="setup-card">
-          <div className="setup-card-top">
-            <div className="setup-card-row1">
-              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <span className="setup-id">{s.id}</span>
-                <span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span>
-                <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{s.model}</span>
-              </div>
-              <span style={{fontSize:10,color:s.status==='short'?'var(--red)':'var(--amber)',fontFamily:'var(--mono)'}}>
-                <span className="status-dot" style={{background:s.status==='short'?'var(--red)':'var(--amber)'}}></span>{s.status}
-              </span>
+      <div className="sec-header"><span className="sec-title">Setups</span><span className="sec-badge">{rows?`${rows.length}/${total}`:'…'}</span></div>
+      <div className="filter-scroll">
+        {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
+        {['all','real','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':'Shadow'}</div>)}
+      </div>
+      {rows===null&&<div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
+      {rows!==null&&rows.map((r,i)=>(
+        <div key={i} className="hist-card">
+          <div className="hist-card-row1">
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <span className={`kier-badge ${(r.kier||'long').toLowerCase()}`}>{r.kier}</span>
+              <span style={{fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>#{r.id}</span>
+              <span style={{fontSize:10,color:'var(--text3)'}}>{r.t_def||'—'}</span>
             </div>
-            <div className="setup-typ">{s.typ}{s.variant&&<span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span>}</div>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <SrcBadge shadow={r.shadow} exch={r.exchange_position_opened}/>
+              {r.result
+                ?<span style={{fontFamily:'var(--mono)',fontSize:11,color:resC(r.result),padding:'2px 7px',borderRadius:3,background:resC(r.result)==='var(--green)'?'var(--green-dim)':resC(r.result)==='var(--red)'?'var(--red-dim)':'var(--bg3)'}}>{r.result}</span>
+                :<span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{r.status}</span>}
+            </div>
           </div>
-          <div className="setup-card-bottom">
-            <div className="setup-stat"><div className="setup-stat-val">{s.w}</div><div className="setup-stat-lbl">W</div></div>
-            <div className="setup-stat"><div className="setup-stat-val">{s.tp1}</div><div className="setup-stat-lbl">TP1</div></div>
-            <div className="setup-stat"><div className="setup-stat-val">{s.tp2}</div><div className="setup-stat-lbl">TP2</div></div>
-            <div className="setup-stat"><div className="setup-stat-val red">{s.sl}</div><div className="setup-stat-lbl">SL</div></div>
-          </div>
-          <div style={{padding:'0 12px 10px',display:'flex',gap:6,justifyContent:'flex-end'}}>
-            <SetupActions setup={s}/>
+          <div className="hist-typ" style={{marginBottom:6}}>{r.typ} · <span style={{color:'var(--text3)'}}>{r.variant}</span></div>
+          <div className="hist-meta">
+            <span className="hist-item">TP1: <span style={{color:pC(r.pnl_tp1)}}>{fmtU(r.pnl_tp1)}</span></span>
+            <span className="hist-item">TP1+TP2: <span style={{color:pC(r.pnl_tp12)}}>{fmtU(r.pnl_tp12)}</span></span>
+            <span className="hist-item" style={{marginLeft:'auto'}}>{r.t_entry?`WE: ${r.t_entry.slice(11,16)}`:'brak WE'}</span>
           </div>
         </div>
       ))}
@@ -967,80 +980,17 @@ function TabAlgo() {
     </div>
   );
 }
-/* ── Mobile: TabHistoria ── */
+/* ── Mobile: TabHistoria (legacy — kept for compat) ── */
 function TabHistoria() {
-  const [resultCats,setResultCats]=useState(['win','loss']);
-  const [typeFilters,setTypeFilters]=useState([]);
-  const [showTypeFilter,setShowTypeFilter]=useState(false);
-  const [availTypes,setAvailTypes]=useState([]);
-  const [availVariants,setAvailVariants]=useState([]);
-  const [trades,setTrades]=useState(null);
-  const dateFrom=React.useMemo(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];},[]);
-  const toggleCat=(cat)=>setResultCats(prev=>prev.includes(cat)?prev.filter(c=>c!==cat):[...prev,cat]);
-  const toggleType=(t)=>setTypeFilters(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t]);
-  useEffect(()=>{
-    if(!showTypeFilter) return;
-    fetch(`/api/dashboard/types?date_from=${dateFrom}`).then(r=>r.ok?r.json():{types:[],variants:[]})
-      .then(d=>{
-        setAvailTypes(d.types||[]);
-        setAvailVariants(d.variants||[]);
-        setTypeFilters(prev=>prev.filter(t=>(d.types||[]).includes(t)));
-      }).catch(()=>{});
-  },[showTypeFilter,dateFrom]);
-  useEffect(()=>{
-    setTrades(null);
-    const p=new URLSearchParams({result_cats:resultCats.join(',')||'none',date_from:dateFrom,limit:50});
-    if(typeFilters.length>0) p.set('types',typeFilters.join(','));
-    fetch(`/api/dashboard/trades?${p}`)
-      .then(r=>r.ok?r.json():{rows:[]}).then(d=>setTrades(d.rows||[])).catch(()=>setTrades([]));
-  },[resultCats,typeFilters,dateFrom]);
-  const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':'var(--green)';
-  const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
-  const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
-  const CATS=[{v:'win',l:'Win'},{v:'loss',l:'SL'},{v:'no_entry',l:'Brak'},{v:'cancelled',l:'Anul.'}];
-  return (
-    <div>
-      <div className="sec-header"><span className="sec-title">Zamknięte setups</span><span className="sec-badge">{trades?trades.length:'…'}</span></div>
-      <div className="filter-scroll">
-        {CATS.map(({v,l})=><div key={v} className={`filter-chip ${resultCats.includes(v)?'active':''}`} onClick={()=>toggleCat(v)}>{l}</div>)}
-        <div className={`filter-chip ${showTypeFilter?'active':''}`} onClick={()=>setShowTypeFilter(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>
-          Typ{typeFilters.length>0?` (${typeFilters.length})`:''} {showTypeFilter?'▴':'▾'}
-        </div>
-        {typeFilters.length>0 && <span style={{fontSize:10,color:'var(--blue)',cursor:'pointer',alignSelf:'center'}} onClick={()=>setTypeFilters([])}>✕</span>}
-      </div>
-      {showTypeFilter && <div className="filter-scroll" style={{paddingTop:0,flexWrap:'wrap'}}>
-        {availTypes.length===0 && <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Ładowanie…</span>}
-        {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
-      </div>}
-      {trades===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
-      {trades!==null && trades.map((t,i)=>(
-        <div key={i} className="hist-card">
-          <div className="hist-card-row1">
-            <div style={{display:'flex',alignItems:'center',gap:8}}>
-              <span className={`kier-badge ${(t.kier||'long').toLowerCase()}`}>{t.kier}</span>
-              <span style={{fontFamily:'var(--mono)',fontSize:12,color:'var(--text2)'}}>#{t.id}</span>
-              <span style={{fontSize:10,color:'var(--text3)'}}>{t.t_def||'—'}</span>
-            </div>
-            <span style={{fontFamily:'var(--mono)',fontSize:11,color:resC(t.result),padding:'2px 7px',borderRadius:3,background:resC(t.result)==='var(--green)'?'var(--green-dim)':resC(t.result)==='var(--red)'?'var(--red-dim)':'var(--bg3)'}}>{t.result}</span>
-          </div>
-          <div className="hist-typ" style={{marginBottom:6}}>{t.typ} · <span style={{color:'var(--text3)'}}>{t.variant}</span></div>
-          <div className="hist-meta">
-            <span className="hist-item">TP1: <span style={{color:pC(t.pnl_tp1)}}>{fmtU(t.pnl_tp1)}</span></span>
-            <span className="hist-item">TP1+TP2: <span style={{color:pC(t.pnl_tp12)}}>{fmtU(t.pnl_tp12)}</span></span>
-            <span className="hist-item" style={{marginLeft:'auto'}}>{t.t_entry?`WE: ${t.t_entry.slice(11,16)}`:'brak WE'}</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  return <TabSetups/>;
 }
 /* ── MobileApp ── */
 function MobileApp() {
   const [tab,setTab]=useState(0);
   const {price, stats, market, setups, statsPeriod, setStatsPeriod} = useDash();
   const p = price || {}, s = stats || {}, m = market || {};
-  const tabs=['dash','setups','algo','hist'];
-  const labels=['Dashboard','Setups','Algo','Historia'];
+  const tabs=['dash','setups','algo'];
+  const labels=['Dashboard','Setups','Algo'];
   return (
     <div className="m-root">
       <div className="phone-wrap">
@@ -1083,7 +1033,6 @@ function MobileApp() {
           {tab===0 && <TabDashboard/>}
           {tab===1 && <TabSetups/>}
           {tab===2 && <TabAlgo/>}
-          {tab===3 && <TabHistoria/>}
         </div>
         <div className="bottom-nav">
           {tabs.map((t,i)=>(

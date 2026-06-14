@@ -2554,10 +2554,6 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     }
 
     if not algo2_setups:
-        log_to_alerty("Algo2", "brak_setupu", {
-            "type": "", "direction": "", "reasoning": algo2_log,
-            "kurs": round(current, 2),
-        })
         return "no_setups"
 
     # Podziel na force_shadow (testy) i regularne
@@ -2607,7 +2603,6 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
 
     rejection = validate_setup(best, "Algo2")
     if rejection:
-        log_to_alerty("Algo2", rejection, best)
         return "skipped"
 
     # ── GPT3 Validator — pomijany w IMPULSE (szybkość > jakość) ──────────
@@ -2629,7 +2624,6 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
             val_conf   = val_result.get("confidence", 0)
             print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
             if not approved:
-                log_to_alerty("Algo2", f"GPT3-val odrzucił: {val_reason}", best)
                 save_pending(best, "Algo2", f"GPT3-val odrzucił: {val_reason}", current, shadow=True)
                 if best.get("setup_id"):
                     db.update_setup(best["setup_id"], llm_scores={
@@ -2647,7 +2641,6 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     is_shadow = ALGO2_SHADOW_MODE
     save_pending(best, "Algo2", "", current, shadow=is_shadow)
     if best.get("setup_id"):
-        log_to_alerty("Algo2", "", best)
         if is_shadow:
             send_telegram(f"👁 <b>[Algo2-shadow]</b> {best['type']} {best['direction'].upper()}"
                           f" | W=${best['entries'][0]:.2f} SL=${best['sl']:.2f}"
