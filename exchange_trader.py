@@ -44,7 +44,7 @@ SYMBOL       = "SOLUSDT"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN  = "USDT"
 MARGIN_MODE  = "crossed"
-LEVERAGE     = 20
+LEVERAGE     = int(os.getenv("BITGET_LEVERAGE", "20"))
 TRADE_USDT    = float(os.getenv("BITGET_TRADE_USDT") or "100.0")
 MAX_POSITIONS = int(os.getenv("BITGET_MAX_POSITIONS") or "5")
 QTY_STEP     = 0.1
@@ -53,6 +53,24 @@ BASE_URL     = "https://api.bitget.com"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _get_effective_trade_params(setup_type: str, variant: str | None) -> tuple[float, int, bool]:
+    """Zwraca (trade_usdt, leverage, enabled) dla danego type+variant.
+    Jeśli typ jest wyłączony → enabled=False. Indywidualne wartości nadpisują bazowe."""
+    try:
+        settings = db.get_app_settings()
+        base_usdt = float(settings.get("trade_usdt") or TRADE_USDT)
+        base_lev  = int(settings.get("leverage") or LEVERAGE)
+        key = f"{setup_type}__{variant or 'baseline'}"
+        cfg = (settings.get("type_configs") or {}).get(key, {})
+        enabled   = cfg.get("enabled", True)
+        eff_usdt  = float(cfg["trade_usdt"]) if cfg.get("trade_usdt") else base_usdt
+        eff_lev   = int(cfg["leverage"])     if cfg.get("leverage")   else base_lev
+        return eff_usdt, eff_lev, bool(enabled)
+    except Exception as e:
+        log.warning(f"[exchange] _get_effective_trade_params błąd: {e}")
+        return TRADE_USDT, LEVERAGE, True
+
 
 def _round_qty(qty: float) -> float:
     return max(math.floor(qty / QTY_STEP) * QTY_STEP, QTY_STEP)
@@ -311,7 +329,12 @@ def _place_entry_plan_orders(
     return plan1_oid, plan2_oid
 
 
-def _place_market_entry(client: "BitgetClient", s: dict) -> bool:
+def _place_market_entry(
+    client: "BitgetClient",
+    s: dict,
+    trade_usdt: float | None = None,
+    leverage: int | None = None,
+) -> bool:
     """Market order open + natychmiastowe TPSL dla aggressive setups.
     Zwraca True przy sukcesie i ustawia pola exchange_* na s."""
     direction = s["direction"]
@@ -320,7 +343,9 @@ def _place_market_entry(client: "BitgetClient", s: dict) -> bool:
     side      = "buy" if direction == "long" else "sell"
     sid       = s.get("setup_id", "?")
 
-    full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+    eff_usdt = trade_usdt if trade_usdt is not None else TRADE_USDT
+    eff_lev  = leverage   if leverage   is not None else LEVERAGE
+    full_qty = _round_qty((eff_usdt * eff_lev) / w1)
     half_qty = _round_qty(full_qty / 2)
 
     try:
@@ -953,9 +978,17 @@ def _sync_inner():
                 print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
                 continue
 
+            eff_usdt, eff_lev, type_enabled = _get_effective_trade_params(
+                s.get("type", ""), s.get("variant")
+            )
+            if not type_enabled:
+                print(f"[exchange] {label}: pominięty — typ wyłączony w ustawieniach")
+                db.release_plan_order_claim(s["setup_id"])
+                continue
+
             if "aggressive" in s.get("type", ""):
                 # Aggressive: market order natychmiast, bez czekania na trigger W1
-                ok = _place_market_entry(client, s)
+                ok = _place_market_entry(client, s, trade_usdt=eff_usdt, leverage=eff_lev)
                 if ok:
                     now_ts = int(time.time())
                     s["entry_hit_at"] = now_ts
@@ -967,7 +1000,7 @@ def _sync_inner():
             else:
                 # Pozostałe: 2 plan ordery przy W1 (half qty każdy)
                 w1       = entries[0]
-                full_qty = _round_qty((TRADE_USDT * LEVERAGE) / w1)
+                full_qty = _round_qty((eff_usdt * eff_lev) / w1)
                 half_qty = _round_qty(full_qty / 2)
                 plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, half_qty)
                 if plan1_oid and plan2_oid:

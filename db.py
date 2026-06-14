@@ -1660,3 +1660,44 @@ def get_all_setups_filtered(
             rows = [_row_to_dict(r) for r in cur.fetchall()]
 
     return {"total": total, "rows": rows}
+
+
+# ── Ustawienia aplikacji ───────────────────────────────────────────────────────
+
+_SETTINGS_DEFAULT: dict = {
+    "trade_usdt":    100.0,
+    "leverage":      20,
+    "max_positions": 5,
+    "type_configs":  {},
+}
+
+
+def get_app_settings() -> dict:
+    """Zwraca ustawienia aplikacji. Jeśli tabela pusta — zwraca defaults."""
+    try:
+        with _conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT data FROM app_settings WHERE id = 1")
+                row = cur.fetchone()
+        data = dict(row["data"]) if row and row["data"] else {}
+    except Exception as e:
+        log.warning(f"[settings] get_app_settings błąd: {e}")
+        data = {}
+    result = {**_SETTINGS_DEFAULT, **data}
+    if "type_configs" not in result:
+        result["type_configs"] = {}
+    return result
+
+
+def save_app_settings(data: dict) -> None:
+    """Zapisuje ustawienia aplikacji do DB."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings (id, data, updated_at)
+                VALUES (1, %s::jsonb, NOW())
+                ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+                """,
+                (json.dumps(data),),
+            )

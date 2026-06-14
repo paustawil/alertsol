@@ -2375,10 +2375,18 @@ class TpsUpdate(BaseModel):
     sl:  float | None = None
 
 
+class TypeConfig(BaseModel):
+    enabled: bool = True
+    trade_usdt: float | None = None
+    leverage: int | None = None
+
+
 class SettingsUpdate(BaseModel):
     trade_usdt: float | None = None
+    leverage: int | None = None
     alert_interval: int | None = None
     max_positions: int | None = None
+    type_configs: dict[str, TypeConfig] | None = None
 
 
 @app.post("/api/update-tps/{setup_id}")
@@ -2728,10 +2736,8 @@ def api_update_result(setup_id: int, body: ResultUpdate):
 
 @app.get("/api/settings")
 def api_get_settings():
-    """Zwraca aktualne ustawienia systemu."""
-    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
-    max_positions = int(os.getenv("BITGET_MAX_POSITIONS", "5"))
-    # Alert interval: extract from scheduler job
+    """Zwraca aktualne ustawienia systemu (DB + runtime)."""
+    stored = db.get_app_settings()
     alert_minutes = 15
     try:
         job = scheduler.get_job("sol_alert")
@@ -2745,18 +2751,22 @@ def api_get_settings():
     except Exception:
         pass
     return {
-        "trade_usdt": trade_usdt,
+        "trade_usdt":    stored.get("trade_usdt", 100.0),
+        "leverage":      stored.get("leverage", 20),
         "alert_interval": alert_minutes,
-        "max_positions": max_positions,
+        "max_positions": stored.get("max_positions", 5),
+        "type_configs":  stored.get("type_configs", {}),
     }
 
 
 @app.post("/api/settings")
 def api_update_settings(body: SettingsUpdate):
-    """Aktualizuje ustawienia systemu w runtime (env vars + scheduler)."""
+    """Aktualizuje ustawienia systemu (DB + runtime)."""
+    stored = db.get_app_settings()
     updated = []
 
     if body.trade_usdt is not None and body.trade_usdt > 0:
+        stored["trade_usdt"] = body.trade_usdt
         os.environ["BITGET_TRADE_USDT"] = str(body.trade_usdt)
         try:
             import exchange_trader
@@ -2770,9 +2780,19 @@ def api_update_settings(body: SettingsUpdate):
             pass
         updated.append(f"trade_usdt={body.trade_usdt}")
 
+    if body.leverage is not None and body.leverage > 0:
+        stored["leverage"] = body.leverage
+        os.environ["BITGET_LEVERAGE"] = str(body.leverage)
+        try:
+            import exchange_trader
+            exchange_trader.LEVERAGE = body.leverage
+        except Exception:
+            pass
+        updated.append(f"leverage={body.leverage}")
+
     if body.max_positions is not None and body.max_positions > 0:
+        stored["max_positions"] = body.max_positions
         os.environ["BITGET_MAX_POSITIONS"] = str(body.max_positions)
-        # Update exchange_trader module-level var if already imported
         try:
             import exchange_trader
             exchange_trader.MAX_POSITIONS = body.max_positions
@@ -2782,18 +2802,21 @@ def api_update_settings(body: SettingsUpdate):
 
     if body.alert_interval is not None and body.alert_interval > 0:
         minutes = body.alert_interval
-        # Build cron minute expression: 0, N, 2N, ... < 60
         cron_parts = [str(m) for m in range(0, 60, minutes)]
         cron_expr = ",".join(cron_parts)
         try:
-            scheduler.reschedule_job(
-                "sol_alert",
-                trigger=CronTrigger(minute=cron_expr),
-            )
-            updated.append(f"alert_interval={minutes}min (cron: {cron_expr})")
+            scheduler.reschedule_job("sol_alert", trigger=CronTrigger(minute=cron_expr))
+            updated.append(f"alert_interval={minutes}min")
         except Exception as e:
             updated.append(f"alert_interval=BŁĄD: {e}")
 
+    if body.type_configs is not None:
+        stored["type_configs"] = {
+            k: v.model_dump() for k, v in body.type_configs.items()
+        }
+        updated.append(f"type_configs={list(body.type_configs.keys())}")
+
+    db.save_app_settings(stored)
     return {"ok": True, "updated": updated}
 
 
