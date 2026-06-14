@@ -63,6 +63,17 @@ IMPULSE_COOLDOWN_RETRACE_PCT  = 0.50       # 50% retrace = blokada odpada
 _last_confirmed_impulse: dict = {}         # direction, time, start_price, peak_price, score
 
 
+def _is_type_bitget_enabled(setup_type: str, variant: str | None) -> bool:
+    """Zwraca True jeśli typ+wariant ma Bitget enabled=True w ustawieniach aplikacji."""
+    try:
+        settings = db.get_app_settings()
+        key = f"{setup_type}__{variant or 'baseline'}"
+        cfg = (settings.get("type_configs") or {}).get(key, {})
+        return bool(cfg.get("enabled", False))
+    except Exception:
+        return False
+
+
 def _clean_log(text: str) -> str:
     """Usuwa linie separatorów (===) i timestamp-header z logów algo."""
     lines = []
@@ -2568,21 +2579,29 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     for s in force_shadow_setups:
         s["reasoning"] = algo2_log
         if not validate_setup(s, "Algo2"):
-            save_pending(s, "Algo2", "", current, shadow=True)
+            shadow_s = not _is_type_bitget_enabled(s.get("type", ""), s.get("variant"))
+            save_pending(s, "Algo2", "", current, shadow=shadow_s)
             if s.get("setup_id"):
-                print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
-                try:
-                    tps = s.get("tps", [])
-                    send_telegram(
-                        f"👁 <b>[Shadow] #{s['setup_id']}</b> {s['type']} {s['direction'].upper()}\n"
-                        f"W1: ${s['entries'][0]:.2f} | SL: ${s['sl']:.2f}"
-                        + (f" | TP1: ${tps[0]:.2f}" if len(tps) > 0 else "")
-                        + (f" | TP2: ${tps[1]:.2f}" if len(tps) > 1 else "")
-                        + f" | RR: {s['rr']}"
-                        + (f"\n<i>{s.get('variant', '')}</i>" if s.get('variant') else "")
-                    )
-                except Exception:
-                    pass
+                if shadow_s:
+                    print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
+                    try:
+                        tps = s.get("tps", [])
+                        send_telegram(
+                            f"👁 <b>[Shadow] #{s['setup_id']}</b> {s['type']} {s['direction'].upper()}\n"
+                            f"W1: ${s['entries'][0]:.2f} | SL: ${s['sl']:.2f}"
+                            + (f" | TP1: ${tps[0]:.2f}" if len(tps) > 0 else "")
+                            + (f" | TP2: ${tps[1]:.2f}" if len(tps) > 1 else "")
+                            + f" | RR: {s['rr']}"
+                            + (f"\n<i>{s.get('variant', '')}</i>" if s.get('variant') else "")
+                        )
+                    except Exception:
+                        pass
+                else:
+                    print(f"[algo2] Real order: {s['type']} #{s['setup_id']} RR={s['rr']}")
+                    try:
+                        send_telegram(format_alert("Algo2", s, current, True))
+                    except Exception:
+                        pass
 
     if not regular_setups:
         return "saved" if any(s.get("setup_id") for s in force_shadow_setups) else "no_setups"
@@ -2639,7 +2658,7 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         print("[algo2] IMPULSE — GPT3 Validator pominięty.")
     # ── koniec walidatora ─────────────────────────────────────────────────
 
-    is_shadow = ALGO2_SHADOW_MODE
+    is_shadow = ALGO2_SHADOW_MODE and not _is_type_bitget_enabled(best.get("type", ""), best.get("variant"))
     save_pending(best, "Algo2", "", current, shadow=is_shadow)
     if best.get("setup_id"):
         if is_shadow:
