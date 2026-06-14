@@ -1496,6 +1496,38 @@ def get_all_types() -> dict:
     return {"types": types, "variants": variants}
 
 
+def get_all_variants_tree() -> list[dict]:
+    """Tree {name, active, variants:[{name,active}]} ze wszystkich setupów.
+    active = miał setupy w ostatnich 90 dniach."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT type, COALESCE(variant,'baseline') AS v FROM setups "
+                "WHERE type IS NOT NULL AND type NOT LIKE '%% %%' AND length(type) <= 60 "
+                "ORDER BY type, v"
+            )
+            all_pairs = {(r[0], r[1]) for r in cur.fetchall()}
+            cur.execute(
+                "SELECT DISTINCT type, COALESCE(variant,'baseline') AS v FROM setups "
+                "WHERE type IS NOT NULL AND type NOT LIKE '%% %%' AND length(type) <= 60 "
+                "  AND alert_time >= NOW() - INTERVAL '90 days' "
+                "ORDER BY type, v"
+            )
+            recent_pairs = {(r[0], r[1]) for r in cur.fetchall()}
+
+    tree: dict = {}
+    for (sc, v) in sorted(all_pairs):
+        if sc not in tree:
+            tree[sc] = []
+        tree[sc].append({"name": v, "active": (sc, v) in recent_pairs})
+
+    return [
+        {"name": sc, "active": any(x["active"] for x in vlist),
+         "variants": sorted(vlist, key=lambda x: x["name"])}
+        for sc, vlist in sorted(tree.items())
+    ]
+
+
 def get_all_setups_filtered(
     statuses: list[str] | None = None,
     types: list[str] | None = None,
@@ -1506,13 +1538,27 @@ def get_all_setups_filtered(
     limit: int = 100,
     offset: int = 0,
 ) -> dict:
-    """Zwraca wszystkie setupy (aktywne i zamknięte) z filtrami."""
+    """Zwraca wszystkie setupy (aktywne i zamknięte) z filtrami.
+    Obsługiwane statusy: pending, open, after_tp1, zamkniete, anulowane."""
     where: list[str] = []
     params: dict = {}
 
     if statuses:
-        where.append("status = ANY(%(statuses)s)")
-        params["statuses"] = statuses
+        status_conds: list[str] = []
+        normal = [s for s in statuses if s not in ("zamkniete", "anulowane")]
+        if normal:
+            status_conds.append("status = ANY(%(statuses_normal)s)")
+            params["statuses_normal"] = normal
+        if "zamkniete" in statuses:
+            status_conds.append(
+                "(status = 'closed' AND (result IS NULL OR result != 'anulowany') AND cancel_reason IS NULL)"
+            )
+        if "anulowane" in statuses:
+            status_conds.append(
+                "(status = 'closed' AND (result = 'anulowany' OR cancel_reason IS NOT NULL))"
+            )
+        if status_conds:
+            where.append(f"({' OR '.join(status_conds)})")
 
     if types:
         where.append("type = ANY(%(types)s)")
