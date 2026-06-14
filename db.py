@@ -1496,42 +1496,50 @@ def get_all_types() -> dict:
     return {"types": types, "variants": variants}
 
 
-def get_all_variants_tree() -> list[dict]:
-    """Tree {name, active, variants:[{name,active}]} ze wszystkich setupów.
+def get_all_variants_tree_by_model() -> list[dict]:
+    """3-poziomowe drzewo model→typ→wariant ze wszystkich setupów.
     active = miał setupy w ostatnich 90 dniach."""
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT type, COALESCE(variant,'baseline') AS v FROM setups "
+                "SELECT DISTINCT COALESCE(model,'?') AS m, type, COALESCE(variant,'baseline') AS v "
+                "FROM setups "
                 "WHERE type IS NOT NULL AND type NOT LIKE '%% %%' AND length(type) <= 60 "
-                "ORDER BY type, v"
+                "ORDER BY m, type, v"
             )
-            all_pairs = {(r[0], r[1]) for r in cur.fetchall()}
+            all_rows = [(r[0], r[1], r[2]) for r in cur.fetchall()]
             cur.execute(
-                "SELECT DISTINCT type, COALESCE(variant,'baseline') AS v FROM setups "
+                "SELECT DISTINCT COALESCE(model,'?') AS m, type, COALESCE(variant,'baseline') AS v "
+                "FROM setups "
                 "WHERE type IS NOT NULL AND type NOT LIKE '%% %%' AND length(type) <= 60 "
-                "  AND alert_time >= NOW() - INTERVAL '90 days' "
-                "ORDER BY type, v"
+                "  AND alert_time >= NOW() - INTERVAL '90 days'"
             )
-            recent_pairs = {(r[0], r[1]) for r in cur.fetchall()}
+            recent = {(r[0], r[1], r[2]) for r in cur.fetchall()}
 
     tree: dict = {}
-    for (sc, v) in sorted(all_pairs):
-        if sc not in tree:
-            tree[sc] = []
-        tree[sc].append({"name": v, "active": (sc, v) in recent_pairs})
+    for (model, type_, variant) in all_rows:
+        if model not in tree:
+            tree[model] = {}
+        if type_ not in tree[model]:
+            tree[model][type_] = []
+        tree[model][type_].append({"name": variant, "active": (model, type_, variant) in recent})
 
-    return [
-        {"name": sc, "active": any(x["active"] for x in vlist),
-         "variants": sorted(vlist, key=lambda x: x["name"])}
-        for sc, vlist in sorted(tree.items())
-    ]
+    result = []
+    for model in sorted(tree):
+        types = [
+            {"name": t, "active": any(v["active"] for v in vs),
+             "variants": sorted(vs, key=lambda x: x["name"])}
+            for t, vs in sorted(tree[model].items())
+        ]
+        result.append({"name": model, "active": any(t["active"] for t in types), "types": types})
+    return result
 
 
 def get_all_setups_filtered(
     statuses: list[str] | None = None,
     types: list[str] | None = None,
     variants: list[str] | None = None,
+    models: list[str] | None = None,
     shadow: bool | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -1539,23 +1547,29 @@ def get_all_setups_filtered(
     offset: int = 0,
 ) -> dict:
     """Zwraca wszystkie setupy (aktywne i zamknięte) z filtrami.
-    Obsługiwane statusy: pending, open, after_tp1, zamkniete, anulowane."""
+    Obsługiwane statusy: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo."""
     where: list[str] = []
     params: dict = {}
 
     if statuses:
         status_conds: list[str] = []
-        normal = [s for s in statuses if s not in ("zamkniete", "anulowane")]
+        normal = [s for s in statuses if s not in ("zamkniete", "anulowane", "nie_weszlo")]
         if normal:
             status_conds.append("status = ANY(%(statuses_normal)s)")
             params["statuses_normal"] = normal
         if "zamkniete" in statuses:
             status_conds.append(
-                "(status = 'closed' AND (result IS NULL OR result != 'anulowany') AND cancel_reason IS NULL)"
+                "(status = 'closed' AND entry_hit_at IS NOT NULL"
+                " AND (result IS NULL OR result != 'anulowany') AND cancel_reason IS NULL)"
             )
         if "anulowane" in statuses:
             status_conds.append(
                 "(status = 'closed' AND (result = 'anulowany' OR cancel_reason IS NOT NULL))"
+            )
+        if "nie_weszlo" in statuses:
+            status_conds.append(
+                "(status = 'closed' AND entry_hit_at IS NULL AND cancel_reason IS NULL"
+                " AND (result IS NULL OR result NOT IN ('anulowany')))"
             )
         if status_conds:
             where.append(f"({' OR '.join(status_conds)})")
@@ -1567,6 +1581,10 @@ def get_all_setups_filtered(
     if variants:
         where.append("COALESCE(variant, 'baseline') = ANY(%(variants)s)")
         params["variants"] = variants
+
+    if models:
+        where.append("COALESCE(model, '?') = ANY(%(models)s)")
+        params["models"] = models
 
     if shadow is not None:
         where.append("shadow = %(shadow)s")
