@@ -795,9 +795,10 @@ function ViewSettings() {
           ALGO2_TYPES.map(t => {
             const saved = (d.type_configs || {})[t.key] || {};
             return [t.key, {
-              enabled:    saved.enabled === true,
-              trade_usdt: saved.trade_usdt != null ? String(saved.trade_usdt) : '',
-              leverage:   saved.leverage   != null ? String(saved.leverage)   : '',
+              enabled:     saved.enabled === true,
+              trade_usdt:  saved.trade_usdt  != null ? String(saved.trade_usdt) : '',
+              leverage:    saved.leverage    != null ? String(saved.leverage)   : '',
+              tp_strategy: saved.tp_strategy || '',
             }];
           })
         ),
@@ -811,9 +812,10 @@ function ViewSettings() {
     ALGO2_TYPES.forEach(t => {
       const c = cfg.type_configs[t.key];
       type_configs[t.key] = {
-        enabled:    c.enabled,
-        trade_usdt: c.trade_usdt !== '' ? parseFloat(c.trade_usdt) : null,
-        leverage:   c.leverage   !== '' ? parseInt(c.leverage)     : null,
+        enabled:     c.enabled,
+        trade_usdt:  c.trade_usdt  !== '' ? parseFloat(c.trade_usdt) : null,
+        leverage:    c.leverage    !== '' ? parseInt(c.leverage)     : null,
+        tp_strategy: c.tp_strategy !== '' ? c.tp_strategy           : null,
       };
     });
     const body = {
@@ -881,6 +883,7 @@ function ViewSettings() {
               <tr style={{borderBottom:'1px solid var(--border2)'}}>
                 <th style={{textAlign:'left', padding:'6px 12px 6px 0', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase'}}>Typ / Wariant</th>
                 <th style={{textAlign:'center', padding:'6px 12px', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase', width:80}}>Bitget</th>
+                <th style={{textAlign:'center', padding:'6px 12px', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase', width:130}}>Strategia TP</th>
                 <th style={{textAlign:'center', padding:'6px 12px', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase', width:110}}>Kwota (USDT)</th>
                 <th style={{textAlign:'center', padding:'6px 12px', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase', width:100}}>Dźwignia (x)</th>
               </tr>
@@ -905,6 +908,17 @@ function ViewSettings() {
                           color: c.enabled ? 'var(--green)' : 'var(--text3)',
                         }}
                       >{c.enabled ? 'ON' : 'OFF'}</button>
+                    </td>
+                    <td style={{textAlign:'center', padding:'10px 12px'}}>
+                      <select
+                        value={c.tp_strategy} disabled={!c.enabled}
+                        onChange={e => setType(t.key, 'tp_strategy', e.target.value)}
+                        style={{background:'var(--bg3)', border:'1px solid var(--border2)', borderRadius:4, color: c.enabled ? 'var(--text1)' : 'var(--text3)', fontFamily:'var(--mono)', fontSize:11, padding:'4px 6px', width:118, opacity: c.enabled ? 1 : 0.4, cursor: c.enabled ? 'pointer' : 'not-allowed'}}
+                      >
+                        <option value="">domyślna algo</option>
+                        <option value="tp1_only">TP1 Only</option>
+                        <option value="tp1_tp2">TP1 + TP2</option>
+                      </select>
                     </td>
                     <td style={{textAlign:'center', padding:'10px 12px'}}>
                       <input

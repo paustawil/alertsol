@@ -54,22 +54,23 @@ BASE_URL     = "https://api.bitget.com"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _get_effective_trade_params(setup_type: str, variant: str | None) -> tuple[float, int, bool]:
-    """Zwraca (trade_usdt, leverage, enabled) dla danego type+variant.
-    Jeśli typ jest wyłączony → enabled=False. Indywidualne wartości nadpisują bazowe."""
+def _get_effective_trade_params(setup_type: str, variant: str | None) -> tuple[float, int, bool, str | None]:
+    """Zwraca (trade_usdt, leverage, enabled, tp_strategy) dla danego type+variant.
+    tp_strategy=None oznacza 'użyj wartości z setupu (domyślna algorytmu)'."""
     try:
         settings = db.get_app_settings()
         base_usdt = float(settings.get("trade_usdt") or TRADE_USDT)
         base_lev  = int(settings.get("leverage") or LEVERAGE)
         key = f"{setup_type}__{variant or 'baseline'}"
         cfg = (settings.get("type_configs") or {}).get(key, {})
-        enabled   = cfg.get("enabled", False)
-        eff_usdt  = float(cfg["trade_usdt"]) if cfg.get("trade_usdt") else base_usdt
-        eff_lev   = int(cfg["leverage"])     if cfg.get("leverage")   else base_lev
-        return eff_usdt, eff_lev, bool(enabled)
+        enabled     = cfg.get("enabled", False)
+        eff_usdt    = float(cfg["trade_usdt"]) if cfg.get("trade_usdt") else base_usdt
+        eff_lev     = int(cfg["leverage"])     if cfg.get("leverage")   else base_lev
+        tp_strategy = cfg.get("tp_strategy") or None
+        return eff_usdt, eff_lev, bool(enabled), tp_strategy
     except Exception as e:
         log.warning(f"[exchange] _get_effective_trade_params błąd: {e}")
-        return TRADE_USDT, LEVERAGE, True
+        return TRADE_USDT, LEVERAGE, True, None
 
 
 def _round_qty(qty: float) -> float:
@@ -978,13 +979,15 @@ def _sync_inner():
                 print(f"[exchange] {label}: plan order już zarezerwowany przez inny proces — pomijam")
                 continue
 
-            eff_usdt, eff_lev, type_enabled = _get_effective_trade_params(
+            eff_usdt, eff_lev, type_enabled, eff_tp_strat = _get_effective_trade_params(
                 s.get("type", ""), s.get("variant")
             )
             if not type_enabled:
                 print(f"[exchange] {label}: pominięty — typ wyłączony w ustawieniach")
                 db.release_plan_order_claim(s["setup_id"])
                 continue
+            if eff_tp_strat:
+                s["tp_strategy"] = eff_tp_strat
 
             if "aggressive" in s.get("type", ""):
                 # Aggressive: market order natychmiast, bez czekania na trigger W1
