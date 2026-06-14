@@ -550,15 +550,6 @@ function ViewAlgo() {
             <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
           </div>}
           <div style={{flex:1,display:'flex',flexDirection:'column',gap:4,minWidth:0}}>
-        {periodSummary && <div style={{display:'flex',gap:16,padding:'8px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,marginBottom:4,flexWrap:'wrap',alignItems:'center'}}>
-          <span style={{fontSize:11,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Σ okres</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--text3)'}}>N </span>{periodSummary.n}</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--green)'}}>W </span>{periodSummary.w}</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--red)'}}>L </span>{periodSummary.l}</span>
-          <span className="mono" style={{fontSize:12}}><span style={{color:'var(--text3)'}}>WR </span>{periodSummary.wr}</span>
-          <span className="mono" style={{fontSize:13,fontWeight:700,color:pC(periodSummary.pnl)}}>P&L {periodSummary.pnl}</span>
-          <span className="mono" style={{fontSize:12,color:pC(periodSummary.tp1)}}>TP1 {periodSummary.tp1}</span>
-        </div>}
           <div className="panel" style={{flex:1}}>
             <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
             <div className="panel-body scroll-y"><table className="tbl">
@@ -572,6 +563,15 @@ function ViewAlgo() {
                   <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
                 </tr>
               ))}</tbody>
+              {periodSummary && <tfoot><tr style={{background:'var(--bg3)',borderTop:'2px solid var(--border)'}}>
+                <td className="mono" style={{fontWeight:700,color:'var(--text2)',fontSize:10,letterSpacing:'.04em'}}>Σ OKRES</td>
+                <td className="mono" style={{fontWeight:700}}>{periodSummary.n}</td>
+                <td className="mono green" style={{fontWeight:700}}>{periodSummary.w}</td>
+                <td className="mono red" style={{fontWeight:700}}>{periodSummary.l}</td>
+                <td className="mono" style={{fontWeight:700,color:wrC(periodSummary.wr)}}>{periodSummary.wr}</td>
+                <td className="mono" style={{fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</td>
+                <td className="mono" style={{color:pC(periodSummary.tp1)}}>{periodSummary.tp1}</td>
+              </tr></tfoot>}
             </table></div>
           </div>
           </div>
@@ -921,14 +921,6 @@ function TabAlgo() {
           <div style={{fontSize:9,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}}>Filtr setupów</div>
           <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
         </div>}
-        {periodSummary && <div style={{display:'flex',gap:12,padding:'8px 16px',background:'var(--bg2)',borderBottom:'1px solid var(--border)',flexWrap:'wrap',alignItems:'center'}}>
-          <span style={{fontSize:9,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em'}}>Σ okres</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--text3)'}}>N </span>{periodSummary.n}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--green)'}}>W </span>{periodSummary.w}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--red)'}}>L </span>{periodSummary.l}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:11}}><span style={{color:'var(--text3)'}}>WR </span>{periodSummary.wr}</span>
-          <span style={{fontFamily:'var(--mono)',fontSize:12,fontWeight:700,color:pC(periodSummary.pnl)}}>P&L {periodSummary.pnl}</span>
-        </div>}
         <div className="section-wrap">
           <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
             <div style={{width:52,fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Data</div>
@@ -948,6 +940,14 @@ function TabAlgo() {
               <div className="data-pnl" style={{color:pC(r.pnl)}}>{r.pnl}</div>
             </div>
           ))}
+          {periodSummary && <div style={{display:'flex',padding:'8px 16px',borderTop:'2px solid var(--border)',background:'var(--bg3)'}}>
+            <div style={{width:52,fontFamily:'var(--mono)',fontSize:10,fontWeight:700,color:'var(--text2)',letterSpacing:'.04em'}}>Σ OKRES</div>
+            <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700}}>{periodSummary.n}</div>
+            <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--green)'}}>{periodSummary.w}</div>
+            <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--red)'}}>{periodSummary.l}</div>
+            <div style={{flex:1,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:wC(periodSummary.wr)}}>{periodSummary.wr}</div>
+            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</div>
+          </div>}
         </div>
       </>}
       {rows!==null && subTab==='per model' && <div className="section-wrap">
