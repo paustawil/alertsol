@@ -3237,11 +3237,13 @@ def api_dashboard_algo(
     period:    str = "30d",
     view:      str = "wariant",
     scenarios: str | None = None,
+    variants:  str | None = None,
 ):
     """Dane analityczne dla zakładki Analityka Algo.
     period: 7d | 30d | 3m | 6m | 12m
     view:   wariant | per data | per model
-    scenarios: opcjonalna lista typów setupów oddzielona przecinkami (dla view=per data)
+    scenarios: lista typów setupów (dla view=per data)
+    variants:  lista wariantów parametrycznych (dla view=per data), AND z scenarios
     """
     if period not in _DASHBOARD_PERIOD_DAYS:
         period = "30d"
@@ -3274,7 +3276,8 @@ def api_dashboard_algo(
 
     if view == "per data":
         scenario_list = [s.strip() for s in scenarios.split(",") if s.strip()] if scenarios else None
-        rows = db.get_algo2_daily_stats(days, scenarios=scenario_list)
+        variant_list  = [v.strip() for v in variants.split(",")  if v.strip()] if variants  else None
+        rows = db.get_algo2_daily_stats(days, scenarios=scenario_list, variants=variant_list)
         return [
             {
                 "date":    str(r.get("day", "")),
@@ -3309,20 +3312,28 @@ def api_dashboard_algo(
 
 @app.get("/api/algo2/variants-list")
 def api_algo2_variants_list():
-    """Lista unikalnych scenariuszy (typów setupów) Algo2 z flagą active.
-    active=True oznacza scenariusz który miał setupy w ostatnich 90 dniach.
-    """
+    """Lista scenariuszy i wariantów Algo2 z flagą active (aktywne = setupy w ostatnich 90d)."""
     all_rows    = db.get_algo2_variant_summary()
     recent_rows = db.get_algo2_variant_summary(90)
     active_scenarios = {r.get("scenario") for r in recent_rows}
-    seen: set = set()
-    result = []
+    active_variants  = {r.get("variant") or "baseline" for r in recent_rows}
+    seen_sc: set = set()
+    seen_v:  set = set()
+    scenarios_out = []
+    variants_out  = []
     for r in all_rows:
         sc = r.get("scenario") or "unknown"
-        if sc not in seen:
-            seen.add(sc)
-            result.append({"name": sc, "active": sc in active_scenarios})
-    return sorted(result, key=lambda x: x["name"])
+        v  = r.get("variant") or "baseline"
+        if sc not in seen_sc:
+            seen_sc.add(sc)
+            scenarios_out.append({"name": sc, "active": sc in active_scenarios})
+        if v not in seen_v:
+            seen_v.add(v)
+            variants_out.append({"name": v, "active": v in active_variants})
+    return {
+        "scenarios": sorted(scenarios_out, key=lambda x: x["name"]),
+        "variants":  sorted(variants_out,  key=lambda x: x["name"]),
+    }
 
 
 @app.get("/api/dashboard/alert")
