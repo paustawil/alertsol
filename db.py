@@ -1106,6 +1106,7 @@ def get_dashboard_stats(period: str = "30d") -> dict:
                         WHERE resolved = TRUE AND {trading} AND {tf_closed}
                     )::numeric, 2)                                                        AS pnl
                 FROM setups
+                WHERE model = 'Algo2'
                 """
             )
             row = dict(cur.fetchone())
