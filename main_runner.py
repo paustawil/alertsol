@@ -2392,6 +2392,7 @@ class TypeConfig(BaseModel):
     enabled: bool = True
     trade_usdt: float | None = None
     leverage: int | None = None
+    tp_strategy: str | None = None  # None = domyślna algorytmu | "tp1_only" | "tp1_tp2"
 
 
 class SettingsUpdate(BaseModel):
