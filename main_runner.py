@@ -17,14 +17,18 @@ import signal
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
+import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, HTTPException, Security
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request, Security
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
 import db
 
@@ -157,6 +161,172 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AlertSol Dashboard", lifespan=lifespan)
+
+# ── Google OAuth ──────────────────────────────────────────────────────────────
+_GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
+_GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+_SESSION_SECRET       = os.getenv("SESSION_SECRET", "change-me-set-SESSION_SECRET-env-var")
+_ALLOWED_EMAIL        = "paulina@lerta.pl"
+
+_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AlertSol — Logowanie</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0d0d12;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .card {
+      background: #16161f;
+      border: 1px solid #2a2a3a;
+      border-radius: 16px;
+      padding: 48px 40px;
+      text-align: center;
+      width: 360px;
+    }
+    .logo { font-size: 36px; margin-bottom: 8px; }
+    h1 { color: #e2e8f0; font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+    p  { color: #64748b; font-size: 14px; margin-bottom: 32px; }
+    a.btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: #fff;
+      color: #1f2937;
+      font-size: 15px;
+      font-weight: 500;
+      text-decoration: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      transition: opacity .15s;
+    }
+    a.btn:hover { opacity: .88; }
+    a.btn svg { flex-shrink: 0; }
+    .err { color: #f87171; font-size: 13px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">📈</div>
+    <h1>AlertSol</h1>
+    <p>Panel traderski SOL/USDT</p>
+    <a class="btn" href="{google_url}">
+      <svg width="20" height="20" viewBox="0 0 48 48">
+        <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.2l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.6 2.7 13.8l7.9 6.1C12.5 13.1 17.8 9.5 24 9.5z"/>
+        <path fill="#4285F4" d="M46.6 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.2-10.1 7.2-17z"/>
+        <path fill="#FBBC05" d="M10.6 28.5A14.4 14.4 0 0 1 9.5 24c0-1.6.3-3.1.7-4.5l-7.9-6.1A23.9 23.9 0 0 0 0 24c0 3.9.9 7.5 2.5 10.8l8.1-6.3z"/>
+        <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.8 2.2-8.4 2.2-6.2 0-11.5-3.6-13.4-9.1l-8.1 6.3C6.6 42.4 14.6 48 24 48z"/>
+        <path fill="none" d="M0 0h48v48H0z"/>
+      </svg>
+      Zaloguj się przez Google
+    </a>
+    {error_block}
+  </div>
+</body>
+</html>"""
+
+
+class _AuthMiddleware(BaseHTTPMiddleware):
+    _PUBLIC = {"/auth/login", "/auth/callback", "/auth/logout", "/health"}
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path in self._PUBLIC or path.startswith("/static/"):
+            return await call_next(request)
+        if not request.session.get("user_email"):
+            return RedirectResponse(url="/auth/login", status_code=302)
+        return await call_next(request)
+
+
+# Kolejność add_middleware: SessionMiddleware musi być dodany PO AuthMiddleware
+# (Starlette owija od końca, więc Session będzie na zewnątrz i wykona się pierwsza)
+app.add_middleware(_AuthMiddleware)
+app.add_middleware(SessionMiddleware, secret_key=_SESSION_SECRET, same_site="lax", https_only=False)
+
+
+@app.get("/auth/login", response_class=HTMLResponse, include_in_schema=False)
+async def auth_login(request: Request):
+    if request.session.get("user_email"):
+        return RedirectResponse(url="/", status_code=302)
+    if not _GOOGLE_CLIENT_ID:
+        return HTMLResponse("<pre>Błąd: GOOGLE_CLIENT_ID nie jest ustawiony.</pre>", status_code=500)
+    redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+    params = urlencode({
+        "client_id":     _GOOGLE_CLIENT_ID,
+        "redirect_uri":  redirect_uri,
+        "response_type": "code",
+        "scope":         "openid email profile",
+        "prompt":        "select_account",
+    })
+    google_url = f"https://accounts.google.com/o/oauth2/v2/auth?{params}"
+    html = _LOGIN_HTML.format(google_url=google_url, error_block="")
+    return HTMLResponse(html)
+
+
+@app.get("/auth/callback", include_in_schema=False)
+async def auth_callback(request: Request, code: str = None, error: str = None):
+    if error or not code:
+        redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+        params = urlencode({
+            "client_id":     _GOOGLE_CLIENT_ID,
+            "redirect_uri":  redirect_uri,
+            "response_type": "code",
+            "scope":         "openid email profile",
+            "prompt":        "select_account",
+        })
+        google_url = f"https://accounts.google.com/o/oauth2/v2/auth?{params}"
+        err_block = '<p class="err">Logowanie anulowane. Spróbuj ponownie.</p>'
+        return HTMLResponse(_LOGIN_HTML.format(google_url=google_url, error_block=err_block), status_code=400)
+
+    redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code":          code,
+                "client_id":     _GOOGLE_CLIENT_ID,
+                "client_secret": _GOOGLE_CLIENT_SECRET,
+                "redirect_uri":  redirect_uri,
+                "grant_type":    "authorization_code",
+            },
+            timeout=10,
+        )
+        token_data = token_resp.json()
+
+        access_token = token_data.get("access_token")
+        if not access_token:
+            return HTMLResponse("<pre>Błąd: nie udało się pobrać tokenu.</pre>", status_code=500)
+
+        userinfo_resp = await client.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        userinfo = userinfo_resp.json()
+
+    email = userinfo.get("email", "").lower().strip()
+    if email != _ALLOWED_EMAIL:
+        log.warning(f"[auth] Nieautoryzowana próba logowania: {email}")
+        return HTMLResponse(f"<pre>Brak dostępu dla: {email}</pre>", status_code=403)
+
+    request.session["user_email"] = email
+    log.info(f"[auth] Zalogowano: {email}")
+    return RedirectResponse(url="/", status_code=302)
+
+
+@app.get("/auth/logout", include_in_schema=False)
+async def auth_logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/auth/login", status_code=302)
+
 
 # Pliki statyczne nowego dashboardu (React SPA bez build stepu)
 import pathlib as _pathlib
@@ -2205,10 +2375,18 @@ class TpsUpdate(BaseModel):
     sl:  float | None = None
 
 
+class TypeConfig(BaseModel):
+    enabled: bool = True
+    trade_usdt: float | None = None
+    leverage: int | None = None
+
+
 class SettingsUpdate(BaseModel):
     trade_usdt: float | None = None
+    leverage: int | None = None
     alert_interval: int | None = None
     max_positions: int | None = None
+    type_configs: dict[str, TypeConfig] | None = None
 
 
 @app.post("/api/update-tps/{setup_id}")
@@ -2558,10 +2736,8 @@ def api_update_result(setup_id: int, body: ResultUpdate):
 
 @app.get("/api/settings")
 def api_get_settings():
-    """Zwraca aktualne ustawienia systemu."""
-    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
-    max_positions = int(os.getenv("BITGET_MAX_POSITIONS", "5"))
-    # Alert interval: extract from scheduler job
+    """Zwraca aktualne ustawienia systemu (DB + runtime)."""
+    stored = db.get_app_settings()
     alert_minutes = 15
     try:
         job = scheduler.get_job("sol_alert")
@@ -2575,18 +2751,22 @@ def api_get_settings():
     except Exception:
         pass
     return {
-        "trade_usdt": trade_usdt,
+        "trade_usdt":    stored.get("trade_usdt", 100.0),
+        "leverage":      stored.get("leverage", 20),
         "alert_interval": alert_minutes,
-        "max_positions": max_positions,
+        "max_positions": stored.get("max_positions", 5),
+        "type_configs":  stored.get("type_configs", {}),
     }
 
 
 @app.post("/api/settings")
 def api_update_settings(body: SettingsUpdate):
-    """Aktualizuje ustawienia systemu w runtime (env vars + scheduler)."""
+    """Aktualizuje ustawienia systemu (DB + runtime)."""
+    stored = db.get_app_settings()
     updated = []
 
     if body.trade_usdt is not None and body.trade_usdt > 0:
+        stored["trade_usdt"] = body.trade_usdt
         os.environ["BITGET_TRADE_USDT"] = str(body.trade_usdt)
         try:
             import exchange_trader
@@ -2600,9 +2780,19 @@ def api_update_settings(body: SettingsUpdate):
             pass
         updated.append(f"trade_usdt={body.trade_usdt}")
 
+    if body.leverage is not None and body.leverage > 0:
+        stored["leverage"] = body.leverage
+        os.environ["BITGET_LEVERAGE"] = str(body.leverage)
+        try:
+            import exchange_trader
+            exchange_trader.LEVERAGE = body.leverage
+        except Exception:
+            pass
+        updated.append(f"leverage={body.leverage}")
+
     if body.max_positions is not None and body.max_positions > 0:
+        stored["max_positions"] = body.max_positions
         os.environ["BITGET_MAX_POSITIONS"] = str(body.max_positions)
-        # Update exchange_trader module-level var if already imported
         try:
             import exchange_trader
             exchange_trader.MAX_POSITIONS = body.max_positions
@@ -2612,18 +2802,21 @@ def api_update_settings(body: SettingsUpdate):
 
     if body.alert_interval is not None and body.alert_interval > 0:
         minutes = body.alert_interval
-        # Build cron minute expression: 0, N, 2N, ... < 60
         cron_parts = [str(m) for m in range(0, 60, minutes)]
         cron_expr = ",".join(cron_parts)
         try:
-            scheduler.reschedule_job(
-                "sol_alert",
-                trigger=CronTrigger(minute=cron_expr),
-            )
-            updated.append(f"alert_interval={minutes}min (cron: {cron_expr})")
+            scheduler.reschedule_job("sol_alert", trigger=CronTrigger(minute=cron_expr))
+            updated.append(f"alert_interval={minutes}min")
         except Exception as e:
             updated.append(f"alert_interval=BŁĄD: {e}")
 
+    if body.type_configs is not None:
+        stored["type_configs"] = {
+            k: v.model_dump() for k, v in body.type_configs.items()
+        }
+        updated.append(f"type_configs={list(body.type_configs.keys())}")
+
+    db.save_app_settings(stored)
     return {"ok": True, "updated": updated}
 
 

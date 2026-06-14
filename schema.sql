@@ -157,3 +157,12 @@ UPDATE setups SET pnl_pct = ROUND(pnl_usd / NULLIF(trade_usdt, 0) * 100, 2)
 WHERE pnl_usd IS NOT NULL
   AND trade_usdt IS NOT NULL
   AND resolved = TRUE;
+
+-- Ustawienia aplikacji (jedna wiersz JSON)
+CREATE TABLE IF NOT EXISTS app_settings (
+    id         INT PRIMARY KEY DEFAULT 1,
+    data       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT single_row CHECK (id = 1)
+);
+INSERT INTO app_settings (id, data) VALUES (1, '{}'::jsonb) ON CONFLICT DO NOTHING;

@@ -767,11 +767,182 @@ function ViewAlgo() {
 function ViewHistoria() {
   return <ViewSetups/>;
 }
+/* ── Desktop: ViewSettings ── */
+const ALGO2_TYPES = [
+  { key: 'trend_pullback_long__baseline',      label: 'Trend Pullback Long',        variant: 'baseline' },
+  { key: 'trend_pullback_short__baseline',     label: 'Trend Pullback Short',       variant: 'baseline' },
+  { key: 'impulse_aggressive_long__h1_atr',    label: 'Impulse Aggressive Long',    variant: 'h1_atr'   },
+  { key: 'impulse_aggressive_short__h1_atr',   label: 'Impulse Aggressive Short',   variant: 'h1_atr'   },
+  { key: 'range_support_long__baseline',       label: 'Range Support Long',         variant: 'baseline' },
+  { key: 'range_resistance_short__baseline',   label: 'Range Resistance Short',     variant: 'baseline' },
+];
+function ViewSettings() {
+  const [cfg, setCfg] = React.useState(null);
+  const [saving, setSaving] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+
+  React.useEffect(() => {
+    fetch('/api/settings').then(r => r.json()).then(d => {
+      setCfg({
+        trade_usdt:   String(d.trade_usdt ?? 100),
+        leverage:     String(d.leverage ?? 20),
+        max_positions: String(d.max_positions ?? 5),
+        type_configs: Object.fromEntries(
+          ALGO2_TYPES.map(t => {
+            const saved = (d.type_configs || {})[t.key] || {};
+            return [t.key, {
+              enabled:    saved.enabled !== false,
+              trade_usdt: saved.trade_usdt != null ? String(saved.trade_usdt) : '',
+              leverage:   saved.leverage   != null ? String(saved.leverage)   : '',
+            }];
+          })
+        ),
+      });
+    }).catch(() => setMsg({ ok: false, text: 'Błąd ładowania ustawień' }));
+  }, []);
+
+  const save = async () => {
+    setSaving(true); setMsg(null);
+    const type_configs = {};
+    ALGO2_TYPES.forEach(t => {
+      const c = cfg.type_configs[t.key];
+      type_configs[t.key] = {
+        enabled:    c.enabled,
+        trade_usdt: c.trade_usdt !== '' ? parseFloat(c.trade_usdt) : null,
+        leverage:   c.leverage   !== '' ? parseInt(c.leverage)     : null,
+      };
+    });
+    const body = {
+      trade_usdt:   parseFloat(cfg.trade_usdt)    || null,
+      leverage:     parseInt(cfg.leverage)         || null,
+      max_positions: parseInt(cfg.max_positions)   || null,
+      type_configs,
+    };
+    try {
+      const r = await fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const d = await r.json();
+      setMsg({ ok: d.ok, text: d.ok ? 'Zapisano ✓' : 'Błąd zapisu' });
+    } catch(e) {
+      setMsg({ ok: false, text: `Błąd: ${e}` });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setBase = (k, v) => setCfg(p => ({ ...p, [k]: v }));
+  const setType = (key, field, val) => setCfg(p => ({
+    ...p,
+    type_configs: { ...p.type_configs, [key]: { ...p.type_configs[key], [field]: val } }
+  }));
+
+  const sInp = { background:'var(--bg3)', border:'1px solid var(--border2)', borderRadius:4, color:'var(--text1)', fontFamily:'var(--mono)', fontSize:12, padding:'4px 8px', width:90, outline:'none' };
+  const sLbl = { fontSize:11, color:'var(--text3)', marginBottom:3, display:'block' };
+  const sCard = { background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:8, padding:'20px 24px', marginBottom:16 };
+  const sH = { fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'.08em', color:'var(--text3)', marginBottom:16 };
+
+  if (!cfg) return <div style={{padding:40, color:'var(--text3)', fontFamily:'var(--mono)', fontSize:12}}>Ładowanie…</div>;
+
+  return (
+    <div style={{padding:'24px 28px', maxWidth:780, overflowY:'auto', height:'100%'}}>
+      <div style={{fontSize:18, fontWeight:700, color:'var(--text1)', marginBottom:24}}>Ustawienia</div>
+
+      {/* Baza */}
+      <div style={sCard}>
+        <div style={sH}>Globalne parametry Bitget</div>
+        <div style={{display:'flex', gap:32, flexWrap:'wrap'}}>
+          <div>
+            <label style={sLbl}>Kwota bazowa (USDT)</label>
+            <input style={sInp} type="number" min="1" step="1" value={cfg.trade_usdt}
+              onChange={e => setBase('trade_usdt', e.target.value)} />
+          </div>
+          <div>
+            <label style={sLbl}>Dźwignia bazowa (x)</label>
+            <input style={sInp} type="number" min="1" max="125" step="1" value={cfg.leverage}
+              onChange={e => setBase('leverage', e.target.value)} />
+          </div>
+          <div>
+            <label style={sLbl}>Max pozycji</label>
+            <input style={sInp} type="number" min="1" max="20" step="1" value={cfg.max_positions}
+              onChange={e => setBase('max_positions', e.target.value)} />
+          </div>
+        </div>
+      </div>
+
+      {/* Per-type */}
+      <div style={sCard}>
+        <div style={sH}>Konfiguracja per typ Algo2</div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%', borderCollapse:'collapse', fontSize:12, fontFamily:'var(--mono)'}}>
+            <thead>
+              <tr style={{borderBottom:'1px solid var(--border2)'}}>
+                <th style={{textAlign:'left', padding:'6px 12px 6px 0', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase'}}>Typ / Wariant</th>
+                <th style={{textAlign:'center', padding:'6px 12px', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase', width:80}}>Bitget</th>
+                <th style={{textAlign:'center', padding:'6px 12px', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase', width:110}}>Kwota (USDT)</th>
+                <th style={{textAlign:'center', padding:'6px 12px', color:'var(--text3)', fontWeight:600, fontSize:10, textTransform:'uppercase', width:100}}>Dźwignia (x)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ALGO2_TYPES.map(t => {
+                const c = cfg.type_configs[t.key];
+                const isLong = t.key.includes('_long');
+                return (
+                  <tr key={t.key} style={{borderBottom:'1px solid var(--border)'}}>
+                    <td style={{padding:'10px 12px 10px 0'}}>
+                      <div style={{color:'var(--text1)', fontWeight:500}}>{t.label}</div>
+                      <div style={{color:'var(--text3)', fontSize:10, marginTop:2}}>{t.variant}</div>
+                    </td>
+                    <td style={{textAlign:'center', padding:'10px 12px'}}>
+                      <button
+                        onClick={() => setType(t.key, 'enabled', !c.enabled)}
+                        style={{
+                          padding:'3px 12px', borderRadius:4, fontSize:11, fontWeight:600, cursor:'pointer',
+                          border: c.enabled ? '1px solid var(--green)' : '1px solid var(--border2)',
+                          background: c.enabled ? 'var(--green-dim)' : 'var(--bg3)',
+                          color: c.enabled ? 'var(--green)' : 'var(--text3)',
+                        }}
+                      >{c.enabled ? 'ON' : 'OFF'}</button>
+                    </td>
+                    <td style={{textAlign:'center', padding:'10px 12px'}}>
+                      <input
+                        style={{...sInp, width:80, textAlign:'center', opacity: c.enabled ? 1 : 0.4}}
+                        type="number" min="1" step="1" placeholder="domyślna"
+                        value={c.trade_usdt} disabled={!c.enabled}
+                        onChange={e => setType(t.key, 'trade_usdt', e.target.value)}
+                      />
+                    </td>
+                    <td style={{textAlign:'center', padding:'10px 12px'}}>
+                      <input
+                        style={{...sInp, width:74, textAlign:'center', opacity: c.enabled ? 1 : 0.4}}
+                        type="number" min="1" max="125" step="1" placeholder="domyślna"
+                        value={c.leverage} disabled={!c.enabled}
+                        onChange={e => setType(t.key, 'leverage', e.target.value)}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{marginTop:10, fontSize:10, color:'var(--text3)'}}>Puste pola = wartość globalna</div>
+        </div>
+      </div>
+
+      {/* Zapisz */}
+      <div style={{display:'flex', alignItems:'center', gap:16}}>
+        <button
+          onClick={save} disabled={saving}
+          style={{padding:'8px 28px', background:'var(--blue)', color:'#fff', border:'none', borderRadius:6, fontWeight:700, fontSize:13, cursor:saving?'not-allowed':'pointer', opacity:saving?0.6:1}}
+        >{saving ? 'Zapisuję…' : 'Zapisz'}</button>
+        {msg && <span style={{fontSize:12, fontFamily:'var(--mono)', color:msg.ok?'var(--green)':'var(--red)'}}>{msg.text}</span>}
+      </div>
+    </div>
+  );
+}
 /* ── Sidebar ── */
 function Sidebar({ tab, setTab }) {
   const {price, setups} = useDash();
   const p = price || {};
-  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Setups'},{id:'algo',label:'Analityka Algo'}];
+  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Setups'},{id:'algo',label:'Analityka Algo'},{id:'settings',label:'Ustawienia'}];
   return (
     <div className="sidebar">
       <div className="sidebar-logo"><div className="sidebar-brand">AlertSol</div><div className="sidebar-sub">Dashboard v2</div></div>
@@ -830,6 +1001,7 @@ function DesktopApp() {
           {tab==='dash' && <ViewDashboard/>}
           {tab==='setups' && <ViewSetups/>}
           {tab==='algo' && <ViewAlgo/>}
+          {tab==='settings' && <ViewSettings/>}
         </div>
       </div>
     </div>
