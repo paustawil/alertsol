@@ -1475,3 +1475,124 @@ def get_resolved_types(date_from: str | None = None, date_to: str | None = None)
         if r[1] and ' ' not in r[1] and len(r[1]) <= 60 and r[1] not in types
     })
     return {"types": types, "variants": variants}
+
+
+def get_all_types() -> dict:
+    """Unikalne typy i warianty wszystkich setupów (aktywnych i zamkniętych)."""
+    sql = (
+        "SELECT DISTINCT type, variant FROM setups "
+        "WHERE type IS NOT NULL AND type NOT LIKE '%% %%' AND length(type) <= 60 "
+        "ORDER BY type, variant"
+    )
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    types = sorted({r[0] for r in rows if r[0]})
+    variants = sorted({
+        r[1] for r in rows
+        if r[1] and ' ' not in r[1] and len(r[1]) <= 60 and r[1] not in types
+    })
+    return {"types": types, "variants": variants}
+
+
+def get_all_setups_filtered(
+    statuses: list[str] | None = None,
+    types: list[str] | None = None,
+    variants: list[str] | None = None,
+    shadow: bool | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """Zwraca wszystkie setupy (aktywne i zamknięte) z filtrami."""
+    where: list[str] = []
+    params: dict = {}
+
+    if statuses:
+        where.append("status = ANY(%(statuses)s)")
+        params["statuses"] = statuses
+
+    if types:
+        where.append("type = ANY(%(types)s)")
+        params["types"] = types
+
+    if variants:
+        where.append("COALESCE(variant, 'baseline') = ANY(%(variants)s)")
+        params["variants"] = variants
+
+    if shadow is not None:
+        where.append("shadow = %(shadow)s")
+        params["shadow"] = shadow
+
+    if date_from:
+        where.append("alert_time >= %(date_from)s::date")
+        params["date_from"] = date_from
+
+    if date_to:
+        where.append("alert_time < (%(date_to)s::date + interval '1 day')")
+        params["date_to"] = date_to
+
+    where_sql = " AND ".join(where) if where else "TRUE"
+
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage = 20
+    _tu = f"COALESCE(trade_usdt, {trade_usdt})"
+    pnl_calc_f = f"""
+        COALESCE(pnl_usd,
+            CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                      AND avg_exit IS NOT NULL
+                      AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN (avg_exit - COALESCE(avg_entry,(entries->>0)::numeric))
+                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - avg_exit)
+                 END *
+                 COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                      FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+            END
+        )"""
+    tp1_only_calc_f = f"""
+        CASE
+            WHEN result = 'SL' THEN {pnl_calc_f}
+            WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
+                 AND (tps->>0) IS NOT NULL
+                 AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
+                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                 END
+        END"""
+    tp1_only_pct_calc_f = f"({tp1_only_calc_f}) / NULLIF({_tu}, 0) * 100"
+    pnl_pct_calc_f = f"({pnl_calc_f}) / NULLIF({_tu}, 0) * 100"
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(f"SELECT COUNT(*) AS cnt FROM setups WHERE {where_sql}", params)
+            total = cur.fetchone()["cnt"]
+
+            cur.execute(
+                f"""
+                SELECT setup_id, alert_time, entry_hit_at, exit_time, model,
+                       direction, type, variant, score, rr, status, resolved,
+                       result, avg_entry, avg_exit, pnl_usd, pnl_pct,
+                       cancel_reason, shadow,
+                       exchange_position_opened, exchange_tp1_done,
+                       ROUND(({tp1_only_calc_f})::numeric, 2)     AS tp1_only_pnl,
+                       ROUND(({tp1_only_pct_calc_f})::numeric, 2) AS tp1_only_pnl_pct,
+                       entries, tps, sl,
+                       exchange_qty_full
+                FROM setups
+                WHERE {where_sql}
+                ORDER BY alert_time DESC
+                LIMIT %(limit)s OFFSET %(offset)s
+                """,
+                {**params, "limit": limit, "offset": offset},
+            )
+            rows = [_row_to_dict(r) for r in cur.fetchall()]
+
+    return {"total": total, "rows": rows}

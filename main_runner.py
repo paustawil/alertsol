@@ -2962,7 +2962,7 @@ _STATUS_PL = {
     "pending":   "czeka",
     "open":      "pozycja",
     "after_tp1": "po_tp1",
-    "closed":    "closed",
+    "closed":    "zamknięte",
 }
 
 _WIN_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2"}
@@ -3037,10 +3037,69 @@ def api_dashboard_setups():
 
 @app.get("/api/dashboard/types")
 def api_dashboard_types(date_from: str = "", date_to: str = ""):
-    """Unikalne typy i warianty zamkniętych setupów — dla filtrów w Historii.
-    Filtruje po zakresie dat żeby pokazywać tylko aktualne scenariusze.
-    """
-    return db.get_resolved_types(date_from=date_from or None, date_to=date_to or None)
+    return db.get_all_types()
+
+
+@app.get("/api/dashboard/all-setups")
+def api_all_setups(
+    statuses:      str = "",
+    types:         str = "",
+    variants:      str = "",
+    shadow_filter: str = "all",
+    date_from:     str = "",
+    date_to:       str = "",
+    limit:         int = 200,
+    offset:        int = 0,
+):
+    """Wszystkie setupy (aktywne + zamknięte) dla zunifikowanej zakładki Setups."""
+    shadow: bool | None = None
+    if shadow_filter == "shadow":
+        shadow = True
+    elif shadow_filter == "real":
+        shadow = False
+
+    data = db.get_all_setups_filtered(
+        statuses  = [s.strip() for s in statuses.split(",")  if s.strip()] or None,
+        types     = [t.strip() for t in types.split(",")     if t.strip()] or None,
+        variants  = [v.strip() for v in variants.split(",")  if v.strip()] or None,
+        shadow    = shadow,
+        date_from = date_from or None,
+        date_to   = date_to   or None,
+        limit     = min(limit, 500),
+        offset    = offset,
+    )
+
+    def _f(v): return float(v) if v is not None else None
+    def _dt(v, n): return str(v)[:n] if v else None
+
+    rows = []
+    for s in data["rows"]:
+        rows.append({
+            "id":                       s["setup_id"],
+            "model":                    s.get("model", ""),
+            "kier":                     (s.get("direction") or "").upper(),
+            "typ":                      s.get("type", ""),
+            "variant":                  s.get("variant") or "baseline",
+            "t_def":                    _dt(s.get("alert_time"), 16),
+            "t_entry":                  _dt(s.get("entry_hit_at"), 16),
+            "t_exit":                   _dt(s.get("exit_time"), 16),
+            "status_key":               s.get("status", "pending"),
+            "status":                   _STATUS_PL.get(s.get("status", "pending"), s.get("status", "")),
+            "resolved":                 s.get("resolved", False),
+            "result":                   _map_result_display(s) if s.get("resolved") else None,
+            "pnl_tp1":                  _f(s.get("tp1_only_pnl")),
+            "pnl_tp12":                 _f(s.get("pnl_usd")),
+            "pnl_pct":                  _f(s.get("pnl_pct")),
+            "pnl_tp1_pct":              _f(s.get("tp1_only_pnl_pct")),
+            "shadow":                   s.get("shadow", False),
+            "exchange_position_opened": s.get("exchange_position_opened", False),
+            "score":                    _f(s.get("score")),
+            "rr":                       _f(s.get("rr")),
+            "entries":                  s.get("entries") or [],
+            "tps":                      s.get("tps") or [],
+            "sl":                       _f(s.get("sl")),
+        })
+    return {"total": data["total"], "rows": rows}
 
 
 def _map_result_display(t: dict) -> str:
