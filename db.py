@@ -1308,12 +1308,10 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
 
 def get_algo2_daily_stats(
     period_days: int | None = None,
-    scenarios:   list[str] | None = None,
-    variants:    list[str] | None = None,
+    pairs: list[tuple[str, str]] | None = None,
 ) -> list[dict]:
     """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw).
-    scenarios: filtr po type (None = wszystkie).
-    variants:  filtr po variant (None = wszystkie). Oba filtry łączone AND.
+    pairs: lista par (type, variant) do filtrowania; None = wszystkie.
     """
     time_sql, time_params = _algo2_time_filter(period_days)
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
@@ -1337,19 +1335,18 @@ def get_algo2_daily_stats(
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
-    scenario_sql = ""
-    scenario_params: dict = {}
-    if scenarios:
-        placeholders = ", ".join(f"%(sc{i})s" for i in range(len(scenarios)))
-        scenario_sql = f"AND type IN ({placeholders})"
-        scenario_params = {f"sc{i}": s for i, s in enumerate(scenarios)}
-    variant_sql = ""
-    variant_params: dict = {}
-    if variants:
-        placeholders = ", ".join(f"%(v{i})s" for i in range(len(variants)))
-        variant_sql = f"AND COALESCE(variant, 'baseline') IN ({placeholders})"
-        variant_params = {f"v{i}": v for i, v in enumerate(variants)}
-    params = {**time_params, **scenario_params, **variant_params}
+    pair_sql = ""
+    pair_params: dict = {}
+    if pairs:
+        conds = " OR ".join(
+            f"(type = %(pt{i})s AND COALESCE(variant,'baseline') = %(pv{i})s)"
+            for i in range(len(pairs))
+        )
+        pair_sql = f"AND ({conds})"
+        for i, (t, v) in enumerate(pairs):
+            pair_params[f"pt{i}"] = t
+            pair_params[f"pv{i}"] = v
+    params = {**time_params, **pair_params}
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -1368,8 +1365,7 @@ def get_algo2_daily_stats(
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
-                  {scenario_sql}
-                  {variant_sql}
+                  {pair_sql}
                 GROUP BY day
                 ORDER BY day DESC
                 """,
