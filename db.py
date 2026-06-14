@@ -1307,7 +1307,7 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
 
 
 def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
-    """Zestawienie wyników Algo2 per dzień kalendarzowy (czas Warsaw)."""
+    """Zestawienie wyników per dzień kalendarzowy (czas Warsaw) dla Algo2 i Gemini2."""
     time_sql, time_params = _algo2_time_filter(period_days)
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage   = 20
@@ -1335,6 +1335,7 @@ def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
             cur.execute(
                 f"""
                 SELECT
+                    model,
                     (alert_time AT TIME ZONE 'Europe/Warsaw')::date                        AS day,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
@@ -1346,10 +1347,10 @@ def get_algo2_daily_stats(period_days: int | None = None) -> list[dict]:
                     ROUND(SUM(pnl_usd) FILTER (WHERE {trading_filter})::numeric, 2)       AS total_pnl_usd,
                     ROUND(SUM({tp1_only}) FILTER (WHERE {trading_filter})::numeric, 2)    AS total_tp1only_usd
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model IN ('Algo2', 'Gemini2')
                   {time_sql}
-                GROUP BY day
-                ORDER BY day DESC
+                GROUP BY model, day
+                ORDER BY day DESC, model
                 """,
                 time_params,
             )

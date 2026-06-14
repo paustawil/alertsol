@@ -3271,18 +3271,24 @@ def api_dashboard_algo(
         ]
 
     if view == "per data":
-        rows = db.get_algo2_daily_stats(days)
-        return [
-            {
-                "date":    str(r.get("day", "")),
-                "n":       r.get("total") or 0,
-                "w":       r.get("wins")   or 0,
-                "l":       r.get("losses") or 0,
-                "wr":      f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
+        flat = db.get_algo2_daily_stats(days)
+        by_day: dict = {}
+        for r in flat:
+            day = str(r.get("day", ""))
+            if day not in by_day:
+                by_day[day] = {}
+            model_key = "gemini2" if r.get("model") == "Gemini2" else "algo2"
+            by_day[day][model_key] = {
+                "n":  r.get("total") or 0,
+                "w":  r.get("wins")  or 0,
+                "l":  r.get("losses") or 0,
+                "wr": f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
                 "pnl":     _fmt_pnl(r.get("total_pnl_usd")),
                 "tpsOnly": _fmt_pnl(r.get("total_tp1only_usd")),
             }
-            for r in rows
+        return [
+            {"date": day, "algo2": entry.get("algo2"), "gemini2": entry.get("gemini2")}
+            for day, entry in sorted(by_day.items(), reverse=True)
         ]
 
     if view == "per model":
