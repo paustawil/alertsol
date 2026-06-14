@@ -3042,8 +3042,8 @@ def api_dashboard_types(date_from: str = "", date_to: str = ""):
 
 @app.get("/api/dashboard/variants-tree")
 def api_dashboard_variants_tree():
-    """Drzewo typ→wariant ze wszystkich setupów dla FilterTree."""
-    return db.get_all_variants_tree()
+    """Drzewo model→typ→wariant ze wszystkich setupów dla FilterTree3."""
+    return db.get_all_variants_tree_by_model()
 
 
 @app.get("/api/dashboard/all-setups")
@@ -3051,6 +3051,7 @@ def api_all_setups(
     statuses:      str = "",
     types:         str = "",
     variants:      str = "",
+    models:        str = "",
     shadow_filter: str = "all",
     date_from:     str = "",
     date_to:       str = "",
@@ -3058,7 +3059,7 @@ def api_all_setups(
     offset:        int = 0,
 ):
     """Wszystkie setupy (aktywne + zamknięte) dla zunifikowanej zakładki Setups.
-    statuses: pending, open, after_tp1, zamkniete, anulowane (przecinkami)
+    statuses: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo (przecinkami)
     """
     shadow: bool | None = None
     if shadow_filter == "shadow":
@@ -3070,6 +3071,7 @@ def api_all_setups(
         statuses  = [s.strip() for s in statuses.split(",")  if s.strip()] or None,
         types     = [t.strip() for t in types.split(",")     if t.strip()] or None,
         variants  = [v.strip() for v in variants.split(",")  if v.strip()] or None,
+        models    = [m.strip() for m in models.split(",")    if m.strip()] or None,
         shadow    = shadow,
         date_from = date_from or None,
         date_to   = date_to   or None,
@@ -3083,13 +3085,16 @@ def api_all_setups(
     rows = []
     for s in data["rows"]:
         status_db = s.get("status", "pending")
-        is_cancelled = (
-            status_db == "closed"
-            and (s.get("result") == "anulowany" or s.get("cancel_reason"))
-        )
-        if is_cancelled:
-            status_key   = "anulowane"
-            status_label = "anulowane"
+        if status_db == "closed":
+            if s.get("cancel_reason") or s.get("result") == "anulowany":
+                status_key   = "anulowane"
+                status_label = "anulowane"
+            elif not s.get("entry_hit_at"):
+                status_key   = "nie_weszlo"
+                status_label = "nie weszło"
+            else:
+                status_key   = "zamkniete"
+                status_label = "zamknięte"
         else:
             status_key   = status_db
             status_label = _STATUS_PL.get(status_db, status_db)

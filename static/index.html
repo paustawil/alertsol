@@ -407,7 +407,7 @@ function ViewSetups() {
   const [dateTo,setDateTo]=useState('');
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
-  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'}];
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
   const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'shadow',l:'Shadow'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   // Załaduj drzewo typów przy pierwszym otwarciu filtra
@@ -418,26 +418,28 @@ function ViewSetups() {
         setFilterTree(tree);
         // domyślnie zaznacz wszystkie aktywne pary (jeśli selectedPairs jeszcze nie ustawione)
         setSelectedPairs(prev=>prev===null
-          ? tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`))
+          ? tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`)))
           : prev);
       }).catch(()=>{});
   },[showTypeFilter,filterTree.length]);
-  // Oblicz typy i warianty z wybranych par
-  const [typeFilters,variantFilters]=React.useMemo(()=>{
-    if(!selectedPairs||selectedPairs.length===0) return [[],[]];
-    const allPairs=filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`));
-    if(selectedPairs.length===allPairs.length) return [[],[]]; // wszystkie = brak filtra
+  // Oblicz modele, typy i warianty z wybranych par (format model:type:variant)
+  const [modelFilters,typeFilters,variantFilters]=React.useMemo(()=>{
+    if(!selectedPairs||selectedPairs.length===0) return [[],[],[]];
+    const allPairs=filterTree.flatMap(m=>m.types.flatMap(t=>t.variants.map(v=>`${m.name}:${t.name}:${v.name}`)));
+    if(selectedPairs.length===allPairs.length) return [[],[],[]]; // wszystkie = brak filtra
     return [
       [...new Set(selectedPairs.map(p=>p.split(':')[0]))],
       [...new Set(selectedPairs.map(p=>p.split(':')[1]))],
+      [...new Set(selectedPairs.map(p=>p.split(':')[2]))],
     ];
   },[selectedPairs,filterTree]);
   const pairsFiltered=selectedPairs!==null&&filterTree.length>0&&
-    selectedPairs.length<filterTree.flatMap(n=>n.variants).length;
+    selectedPairs.length<filterTree.flatMap(m=>m.types.flatMap(t=>t.variants)).length;
   useEffect(()=>{
     setRows(null);
     const p=new URLSearchParams({limit:200,shadow_filter:shadowFilter});
     if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
+    if(modelFilters.length>0) p.set('models',modelFilters.join(','));
     if(typeFilters.length>0) p.set('types',typeFilters.join(','));
     if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
     if(dateFrom) p.set('date_from',dateFrom);
@@ -445,7 +447,7 @@ function ViewSetups() {
     fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
-  },[statusFilters,shadowFilter,typeFilters,variantFilters,dateFrom,dateTo]);
+  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
   const resBg=(r)=>r==='SL'?'var(--red-dim)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--bg3)':r?'var(--green-dim)':'transparent';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
@@ -483,13 +485,13 @@ function ViewSetups() {
           <div className={`filter-chip ${showTypeFilter?'active':''}`} style={{marginLeft:8,fontFamily:'var(--mono)',fontSize:9}} onClick={()=>setShowTypeFilter(p=>!p)}>
             Typ/Wariant{pairsFiltered?` (filtr)`:''} {showTypeFilter?'▴':'▾'}
           </div>
-          {pairsFiltered&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>setSelectedPairs(filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)))}>✕ wyczyść</span>}
+          {pairsFiltered&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>setSelectedPairs(filterTree.flatMap(m=>m.types.flatMap(t=>t.variants.map(v=>`${m.name}:${t.name}:${v.name}`))))}>✕ wyczyść</span>}
         </div>
-        {/* FilterTree */}
-        {showTypeFilter&&<div style={{padding:'6px 0',borderTop:'1px solid var(--border)'}}>
+        {/* FilterTree3 */}
+        {showTypeFilter&&<div style={{padding:'6px 0',borderTop:'1px solid var(--border)',maxHeight:320,overflowY:'auto'}}>
           {filterTree.length===0&&<span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Ładowanie…</span>}
           {filterTree.length>0&&selectedPairs!==null&&
-            <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>}
+            <FilterTree3 tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>}
         </div>}
         {/* Zakres dat */}
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
@@ -522,6 +524,71 @@ function ViewSetups() {
       </div>
     </div>
   );
+}
+/* ── FilterTree3 — drzewko checkbox model→type→variant ── */
+function FilterTree3({tree,selected,onSelect}) {
+  const selSet=new Set(selected);
+  const mkKey=(m,t,v)=>`${m}:${t}:${v}`;
+  const allVariantsOf=(model,type_)=>type_.variants.length>0&&type_.variants.every(v=>selSet.has(mkKey(model.name,type_.name,v.name)));
+  const someVariantsOf=(model,type_)=>type_.variants.some(v=>selSet.has(mkKey(model.name,type_.name,v.name)));
+  const allTypesOf=(model)=>model.types.length>0&&model.types.every(t=>allVariantsOf(model,t));
+  const someTypesOf=(model)=>model.types.some(t=>someVariantsOf(model,t));
+  const toggleModel=model=>{
+    const allSel=allTypesOf(model); const next=new Set(selSet);
+    model.types.forEach(t=>t.variants.forEach(v=>{
+      const k=mkKey(model.name,t.name,v.name); allSel?next.delete(k):next.add(k);
+    }));
+    onSelect([...next]);
+  };
+  const toggleType=(model,type_)=>{
+    const allSel=allVariantsOf(model,type_); const next=new Set(selSet);
+    type_.variants.forEach(v=>{const k=mkKey(model.name,type_.name,v.name); allSel?next.delete(k):next.add(k);});
+    onSelect([...next]);
+  };
+  const toggleVariant=(m,t,v)=>{const k=mkKey(m,t,v);const next=new Set(selSet);next.has(k)?next.delete(k):next.add(k);onSelect([...next]);};
+  const cb={width:13,height:13,accentColor:'var(--amber)',cursor:'pointer',flexShrink:0};
+  const allKeys=tree.flatMap(m=>m.types.flatMap(t=>t.variants.map(v=>mkKey(m.name,t.name,v.name))));
+  const activeKeys=tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>mkKey(m.name,t.name,v.name))));
+  return <div style={{fontSize:12}}>
+    <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+      <span className="filter-chip" style={{fontSize:10}} onClick={()=>onSelect(activeKeys)}>tylko włączone</span>
+      <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>onSelect(allKeys)}>wszystkie</span>
+      <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>onSelect([])}>✕ wyczyść</span>
+    </div>
+    {tree.map(model=>(
+      <div key={model.name} style={{marginBottom:6}}>
+        <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',userSelect:'none'}}>
+          <input type="checkbox" style={cb} checked={allTypesOf(model)}
+            ref={el=>{if(el) el.indeterminate=someTypesOf(model)&&!allTypesOf(model);}}
+            onChange={()=>toggleModel(model)}/>
+          <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:model.active?'var(--text1)':'var(--text3)',textTransform:'uppercase',letterSpacing:'.05em'}}>{model.name}</span>
+          {!model.active&&<span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>arch.</span>}
+        </label>
+        <div style={{paddingLeft:16,marginTop:2}}>
+          {model.types.map(type_=>(
+            <div key={type_.name} style={{marginBottom:3}}>
+              <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',userSelect:'none'}}>
+                <input type="checkbox" style={cb} checked={allVariantsOf(model,type_)}
+                  ref={el=>{if(el) el.indeterminate=someVariantsOf(model,type_)&&!allVariantsOf(model,type_);}}
+                  onChange={()=>toggleType(model,type_)}/>
+                <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:type_.active?'var(--text1)':'var(--text3)'}}>{type_.name}</span>
+                {!type_.active&&<span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>arch.</span>}
+              </label>
+              <div style={{paddingLeft:16,marginTop:2,display:'flex',flexDirection:'column',gap:2}}>
+                {type_.variants.map(v=>(
+                  <label key={v.name} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',userSelect:'none'}}>
+                    <input type="checkbox" style={cb} checked={selSet.has(mkKey(model.name,type_.name,v.name))} onChange={()=>toggleVariant(model.name,type_.name,v.name)}/>
+                    <span style={{fontFamily:'var(--mono)',fontSize:11,color:v.active?'var(--text2)':'var(--text3)'}}>{v.name}</span>
+                    {!v.active&&<span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>arch.</span>}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>;
 }
 /* ── FilterTree — drzewko checkbox type→variant ── */
 function FilterTree({tree,selected,onSelect}) {
@@ -822,7 +889,7 @@ function TabSetups() {
   const [shadowFilter,setShadowFilter]=useState('all');
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
-  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'}];
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   useEffect(()=>{
     setRows(null);
