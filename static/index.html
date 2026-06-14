@@ -427,11 +427,20 @@ function ViewAlgo() {
   const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
+  const [variantFilter,setVariantFilter]=useState([]);
+  const [availVariants,setAvailVariants]=useState([]);
+  const toggleVariant=(v)=>setVariantFilter(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
+  useEffect(()=>{
+    if(subTab!=='per data') return;
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[]).then(setAvailVariants).catch(()=>{});
+  },[subTab]);
   useEffect(()=>{
     setRows(null);
-    fetch(`/api/dashboard/algo?period=${period}&view=${encodeURIComponent(subTab)}`)
+    const p=new URLSearchParams({period,view:subTab});
+    if(subTab==='per data'&&variantFilter.length>0) p.set('variants',variantFilter.join(','));
+    fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab]);
+  },[period,subTab,variantFilter]);
   const pC=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
   const wrC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
@@ -476,34 +485,28 @@ function ViewAlgo() {
           ))}</tbody>
         </table></div>
       </div>}
-      {rows!==null && subTab==='per data' && (()=>{
-        const mdl=(m)=>m||{n:'—',w:'—',l:'—',wr:'—',pnl:'—',tpsOnly:'—'};
-        return <div className="panel" style={{flex:1}}>
-          <div className="panel-head"><span className="panel-title">Per data</span><span className="panel-badge">{rows.length}</span></div>
+      {rows!==null && subTab==='per data' && <>
+        {availVariants.length>1 && <div style={{display:'flex',gap:6,flexWrap:'wrap',padding:'6px 2px',alignItems:'center'}}>
+          <span style={{fontSize:11,color:'var(--text3)',marginRight:2}}>Wariant:</span>
+          {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilter.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)}>{v}</div>)}
+          {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.6}} onClick={()=>setVariantFilter([])}>✕ wyczyść</div>}
+        </div>}
+        <div className="panel" style={{flex:1}}>
+          <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
           <div className="panel-body scroll-y"><table className="tbl">
-            <thead>
-              <tr>
-                <th rowSpan={2} style={{verticalAlign:'bottom'}}>Data</th>
-                <th colSpan={5} style={{textAlign:'center',borderBottom:'1px solid var(--border)',color:'var(--amber)'}}>Algo2</th>
-                <th colSpan={5} style={{textAlign:'center',borderBottom:'1px solid var(--border)',color:'var(--text2)'}}>Gemini2</th>
-              </tr>
-              <tr><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th></tr>
-            </thead>
-            <tbody>{rows.map((r,i)=>{
-              const a=mdl(r.algo2), g=mdl(r.gemini2);
-              return <tr key={i}>
+            <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
+            <tbody>{rows.map((r,i)=>(
+              <tr key={i}>
                 <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
-                <td className="mono dim">{a.n}</td><td className="mono green">{a.w}</td><td className="mono red">{a.l}</td>
-                <td className="mono" style={{color:wrC(a.wr)}}>{a.wr}</td>
-                <td className="mono" style={{fontWeight:600,color:pC(a.pnl)}}>{a.pnl}</td>
-                <td className="mono dim">{g.n}</td><td className="mono green">{g.w}</td><td className="mono red">{g.l}</td>
-                <td className="mono" style={{color:wrC(g.wr)}}>{g.wr}</td>
-                <td className="mono" style={{fontWeight:600,color:pC(g.pnl)}}>{g.pnl}</td>
-              </tr>;
-            })}</tbody>
+                <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
+                <td className="mono" style={{color:wrC(r.wr)}}>{r.wr}</td>
+                <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
+                <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
+              </tr>
+            ))}</tbody>
           </table></div>
-        </div>;
-      })()}
+        </div>
+      </>}
       {rows!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per model</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
@@ -780,11 +783,20 @@ function TabAlgo() {
   const [period,setPeriod]=useState('30d');
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
+  const [variantFilter,setVariantFilter]=useState([]);
+  const [availVariants,setAvailVariants]=useState([]);
+  const toggleVariant=(v)=>setVariantFilter(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
+  useEffect(()=>{
+    if(subTab!=='per data') return;
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[]).then(setAvailVariants).catch(()=>{});
+  },[subTab]);
   useEffect(()=>{
     setRows(null);
-    fetch(`/api/dashboard/algo?period=${period}&view=${encodeURIComponent(subTab)}`)
+    const p=new URLSearchParams({period,view:subTab});
+    if(subTab==='per data'&&variantFilter.length>0) p.set('variants',variantFilter.join(','));
+    fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab]);
+  },[period,subTab,variantFilter]);
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
   const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
@@ -817,37 +829,35 @@ function TabAlgo() {
           ))}
         </div>
       ))}
-      {rows!==null && subTab==='per data' && (()=>{
-        const mdl=(m)=>m||{n:'—',w:'—',l:'—',wr:'—',pnl:'—'};
-        const hdr=(lbl,col)=><div style={{display:'flex',padding:'4px 16px',background:'var(--bg2)',borderBottom:'1px solid var(--border)'}}>
-          <div style={{width:56}}/>
-          <div style={{flex:1,fontSize:9,fontWeight:700,color:col,textTransform:'uppercase',letterSpacing:'.08em'}}>{lbl}</div>
-          {['N','W','L','WR','P&L'].map(h=><div key={h} style={{width:h==='P&L'?52:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>{h}</div>)}
-        </div>;
-        const mRow=(m,col)=>{const d=mdl(m);return <>
-          <div style={{width:24,textAlign:'center',color:'var(--text2)',fontSize:11}}>{d.n}</div>
-          <div style={{width:24,textAlign:'center',color:'var(--green)',fontSize:11}}>{d.w}</div>
-          <div style={{width:24,textAlign:'center',color:'var(--red)',fontSize:11}}>{d.l}</div>
-          <div style={{width:24,textAlign:'center',color:wC(d.wr),fontSize:11}}>{d.wr}</div>
-          <div style={{width:52,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(d.pnl)}}>{d.pnl}</div>
-        </>;};
-        return <div className="section-wrap">
-          {hdr('Algo2','var(--amber)')}
-          {hdr('Gemini2','var(--text2)')}
+      {rows!==null && subTab==='per data' && <>
+        {availVariants.length>1 && <div style={{padding:'8px 16px',borderBottom:'1px solid var(--border)'}}>
+          <div style={{fontSize:9,color:'var(--text3)',marginBottom:6,textTransform:'uppercase',letterSpacing:'.06em'}}>Filtruj wariant:</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+            {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilter.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)} style={{fontSize:11}}>{v}</div>)}
+            {variantFilter.length>0 && <div className="filter-chip" style={{opacity:.6,fontSize:11}} onClick={()=>setVariantFilter([])}>✕ wyczyść</div>}
+          </div>
+        </div>}
+        <div className="section-wrap">
+          <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
+            <div style={{width:52,fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Data</div>
+            <div style={{width:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>N</div>
+            <div style={{width:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>W</div>
+            <div style={{width:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>L</div>
+            <div style={{flex:1,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
+            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L</div>
+          </div>
           {rows.map((r,i)=>(
-            <div key={i} style={{borderBottom:'1px solid var(--border)'}}>
-              <div style={{display:'flex',padding:'5px 16px',alignItems:'center'}}>
-                <div style={{width:56,fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{String(r.date).slice(5)}</div>
-                {mRow(r.algo2,'var(--amber)')}
-              </div>
-              <div style={{display:'flex',padding:'2px 16px 5px',alignItems:'center'}}>
-                <div style={{width:56,fontSize:9,color:'var(--text3)'}}>Gemini2</div>
-                {mRow(r.gemini2,'var(--text2)')}
-              </div>
+            <div key={i} className="data-row">
+              <div className="data-date" style={{minWidth:52}}>{String(r.date).slice(5)}</div>
+              <div style={{width:24,textAlign:'center',color:'var(--text2)',fontSize:11}}>{r.n}</div>
+              <div style={{width:24,textAlign:'center',color:'var(--green)',fontSize:11}}>{r.w}</div>
+              <div style={{width:24,textAlign:'center',color:'var(--red)',fontSize:11}}>{r.l}</div>
+              <div style={{flex:1,textAlign:'center',color:wC(r.wr),fontSize:11}}>{r.wr}</div>
+              <div className="data-pnl" style={{color:pC(r.pnl)}}>{r.pnl}</div>
             </div>
           ))}
-        </div>;
-      })()}
+        </div>
+      </>}
       {rows!==null && subTab==='per model' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
           <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Model</div>
