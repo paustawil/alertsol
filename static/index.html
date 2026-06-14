@@ -429,9 +429,15 @@ function ViewSetups() {
       .then(tree=>{
         setFilterTree(tree);
         // domyślnie zaznacz wszystkie aktywne pary (jeśli selectedPairs jeszcze nie ustawione)
-        setSelectedPairs(prev=>prev===null
-          ? tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`)))
-          : prev);
+        setSelectedPairs(prev=>{
+          if(prev!==null) return prev;
+          // Przy pierwszym otwarciu filtra — zaznacz włączone w Ustawieniach, lub all-active jako fallback
+          if(settingsFilter&&settingsFilter.types.length>0)
+            return tree.flatMap(m=>m.types.flatMap(t=>t.variants
+              .filter(v=>settingsFilter.types.includes(t.name)&&settingsFilter.variants.includes(v.name))
+              .map(v=>`${m.name}:${t.name}:${v.name}`)));
+          return tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`)));
+        });
       }).catch(()=>{});
   },[showTypeFilter,filterTree.length]);
   // Oblicz modele, typy i warianty z wybranych par (format model:type:variant)
@@ -512,7 +518,7 @@ function ViewSetups() {
         {showTypeFilter&&<div style={{padding:'6px 0',borderTop:'1px solid var(--border)',maxHeight:320,overflowY:'auto'}}>
           {filterTree.length===0&&<span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Ładowanie…</span>}
           {filterTree.length>0&&selectedPairs!==null&&
-            <FilterTree3 tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>}
+            <FilterTree3 tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs} settingsFilter={settingsFilter}/>}
         </div>}
         {/* Zakres dat */}
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
@@ -547,7 +553,7 @@ function ViewSetups() {
   );
 }
 /* ── FilterTree3 — drzewko checkbox model→type→variant ── */
-function FilterTree3({tree,selected,onSelect}) {
+function FilterTree3({tree,selected,onSelect,settingsFilter}) {
   const selSet=new Set(selected);
   const mkKey=(m,t,v)=>`${m}:${t}:${v}`;
   const allVariantsOf=(model,type_)=>type_.variants.length>0&&type_.variants.every(v=>selSet.has(mkKey(model.name,type_.name,v.name)));
@@ -570,9 +576,15 @@ function FilterTree3({tree,selected,onSelect}) {
   const cb={width:13,height:13,accentColor:'var(--amber)',cursor:'pointer',flexShrink:0};
   const allKeys=tree.flatMap(m=>m.types.flatMap(t=>t.variants.map(v=>mkKey(m.name,t.name,v.name))));
   const activeKeys=tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>mkKey(m.name,t.name,v.name))));
+  // Klucze włączone w Ustawieniach (Bitget ON)
+  const settingsKeys=settingsFilter&&settingsFilter.types.length>0
+    ? tree.flatMap(m=>m.types.flatMap(t=>t.variants
+        .filter(v=>settingsFilter.types.includes(t.name)&&settingsFilter.variants.includes(v.name))
+        .map(v=>mkKey(m.name,t.name,v.name))))
+    : activeKeys;
   return <div style={{fontSize:12}}>
     <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
-      <span className="filter-chip" style={{fontSize:10}} onClick={()=>onSelect(activeKeys)}>tylko włączone</span>
+      <span className="filter-chip" style={{fontSize:10}} onClick={()=>onSelect(settingsKeys)}>tylko włączone</span>
       <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>onSelect(allKeys)}>wszystkie</span>
       <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>onSelect([])}>✕ wyczyść</span>
     </div>
