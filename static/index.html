@@ -396,27 +396,44 @@ function ViewDashboard() {
   );
 }
 /* ── Desktop: ViewSetups (unified — all statuses) ── */
+const DEFAULT_STATUSES=['pending','open','zamkniete'];
 function ViewSetups() {
-  const [statusFilters,setStatusFilters]=useState([]);
+  const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
   const [shadowFilter,setShadowFilter]=useState('all');
-  const [typeFilters,setTypeFilters]=useState([]);
-  const [variantFilters,setVariantFilters]=useState([]);
   const [showTypeFilter,setShowTypeFilter]=useState(false);
-  const [availTypes,setAvailTypes]=useState([]);
-  const [availVariants,setAvailVariants]=useState([]);
+  const [filterTree,setFilterTree]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState(null); // null = nie załadowano jeszcze
   const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
   const [dateTo,setDateTo]=useState('');
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
-  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'closed',l:'Zamknięte'}];
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'}];
   const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'shadow',l:'Shadow'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
-  const toggleType=(t)=>setTypeFilters(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t]);
-  const toggleVariant=(v)=>setVariantFilters(prev=>prev.includes(v)?prev.filter(x=>x!==v):[...prev,v]);
+  // Załaduj drzewo typów przy pierwszym otwarciu filtra
   useEffect(()=>{
-    fetch('/api/dashboard/types').then(r=>r.ok?r.json():{types:[],variants:[]})
-      .then(d=>{setAvailTypes(d.types||[]);setAvailVariants(d.variants||[]);}).catch(()=>{});
-  },[]);
+    if(!showTypeFilter||filterTree.length>0) return;
+    fetch('/api/dashboard/variants-tree').then(r=>r.ok?r.json():[])
+      .then(tree=>{
+        setFilterTree(tree);
+        // domyślnie zaznacz wszystkie aktywne pary (jeśli selectedPairs jeszcze nie ustawione)
+        setSelectedPairs(prev=>prev===null
+          ? tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`))
+          : prev);
+      }).catch(()=>{});
+  },[showTypeFilter,filterTree.length]);
+  // Oblicz typy i warianty z wybranych par
+  const [typeFilters,variantFilters]=React.useMemo(()=>{
+    if(!selectedPairs||selectedPairs.length===0) return [[],[]];
+    const allPairs=filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`));
+    if(selectedPairs.length===allPairs.length) return [[],[]]; // wszystkie = brak filtra
+    return [
+      [...new Set(selectedPairs.map(p=>p.split(':')[0]))],
+      [...new Set(selectedPairs.map(p=>p.split(':')[1]))],
+    ];
+  },[selectedPairs,filterTree]);
+  const pairsFiltered=selectedPairs!==null&&filterTree.length>0&&
+    selectedPairs.length<filterTree.flatMap(n=>n.variants).length;
   useEffect(()=>{
     setRows(null);
     const p=new URLSearchParams({limit:200,shadow_filter:shadowFilter});
@@ -435,7 +452,6 @@ function ViewSetups() {
   const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}%`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
   const inpStyle={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10};
-  const activeTypeCount=typeFilters.length+variantFilters.length;
   const StatusPill=({sk,sl})=>{
     const cls={pending:'czeka',open:'pozycja',after_tp1:'po_tp1'}[sk]||'';
     if(cls) return <span className={`status-pill ${cls}`}><span className="status-dot"></span>{sl}</span>;
@@ -453,30 +469,29 @@ function ViewSetups() {
           <span className="panel-title">Setups</span>
           <span className="panel-badge">{rows?`${rows.length}/${total}`:'…'}</span>
         </div>
+        {/* Status */}
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Status:</span>
           {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
         </div>
+        {/* Źródło + Typ/Wariant */}
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Źródło:</span>
           <div className="seg-tabs">
             {SHADOW_OPTS.map(({v,l})=><div key={v} className={`seg-tab ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)}>{l}</div>)}
           </div>
           <div className={`filter-chip ${showTypeFilter?'active':''}`} style={{marginLeft:8,fontFamily:'var(--mono)',fontSize:9}} onClick={()=>setShowTypeFilter(p=>!p)}>
-            Typ/Wariant{activeTypeCount>0?` (${activeTypeCount})`:''} {showTypeFilter?'▴':'▾'}
+            Typ/Wariant{pairsFiltered?` (filtr)`:''} {showTypeFilter?'▴':'▾'}
           </div>
-          {activeTypeCount>0&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>{setTypeFilters([]);setVariantFilters([]);}}>✕</span>}
+          {pairsFiltered&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>setSelectedPairs(filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)))}>✕ wyczyść</span>}
         </div>
-        {showTypeFilter&&<div style={{display:'flex',flexDirection:'column',gap:6,padding:'4px 0',borderTop:'1px solid var(--border)'}}>
-          {availTypes.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Scenariusz:</span>
-            {availTypes.map(t=><div key={t} className={`filter-chip ${typeFilters.includes(t)?'active':''}`} onClick={()=>toggleType(t)} style={{fontFamily:'var(--mono)',fontSize:9}}>{t}</div>)}
-          </div>}
-          {availVariants.length>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-            <span style={{fontSize:9,color:'var(--text3)',alignSelf:'center',minWidth:50}}>Wariant:</span>
-            {availVariants.map(v=><div key={v} className={`filter-chip ${variantFilters.includes(v)?'active':''}`} onClick={()=>toggleVariant(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v}</div>)}
-          </div>}
+        {/* FilterTree */}
+        {showTypeFilter&&<div style={{padding:'6px 0',borderTop:'1px solid var(--border)'}}>
+          {filterTree.length===0&&<span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Ładowanie…</span>}
+          {filterTree.length>0&&selectedPairs!==null&&
+            <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>}
         </div>}
+        {/* Zakres dat */}
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
           <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={inpStyle}/>
           <span style={{color:'var(--text3)',fontSize:10}}>–</span>
@@ -803,11 +818,11 @@ function TabDashboard() {
 }
 /* ── Mobile: TabSetups (unified — all statuses) ── */
 function TabSetups() {
-  const [statusFilters,setStatusFilters]=useState([]);
+  const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
   const [shadowFilter,setShadowFilter]=useState('all');
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
-  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'closed',l:'Zamknięte'}];
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   useEffect(()=>{
     setRows(null);

@@ -3040,6 +3040,12 @@ def api_dashboard_types(date_from: str = "", date_to: str = ""):
     return db.get_all_types()
 
 
+@app.get("/api/dashboard/variants-tree")
+def api_dashboard_variants_tree():
+    """Drzewo typ→wariant ze wszystkich setupów dla FilterTree."""
+    return db.get_all_variants_tree()
+
+
 @app.get("/api/dashboard/all-setups")
 def api_all_setups(
     statuses:      str = "",
@@ -3051,7 +3057,9 @@ def api_all_setups(
     limit:         int = 200,
     offset:        int = 0,
 ):
-    """Wszystkie setupy (aktywne + zamknięte) dla zunifikowanej zakładki Setups."""
+    """Wszystkie setupy (aktywne + zamknięte) dla zunifikowanej zakładki Setups.
+    statuses: pending, open, after_tp1, zamkniete, anulowane (przecinkami)
+    """
     shadow: bool | None = None
     if shadow_filter == "shadow":
         shadow = True
@@ -3074,6 +3082,18 @@ def api_all_setups(
 
     rows = []
     for s in data["rows"]:
+        status_db = s.get("status", "pending")
+        is_cancelled = (
+            status_db == "closed"
+            and (s.get("result") == "anulowany" or s.get("cancel_reason"))
+        )
+        if is_cancelled:
+            status_key   = "anulowane"
+            status_label = "anulowane"
+        else:
+            status_key   = status_db
+            status_label = _STATUS_PL.get(status_db, status_db)
+
         rows.append({
             "id":                       s["setup_id"],
             "model":                    s.get("model", ""),
@@ -3083,8 +3103,8 @@ def api_all_setups(
             "t_def":                    _dt(s.get("alert_time"), 16),
             "t_entry":                  _dt(s.get("entry_hit_at"), 16),
             "t_exit":                   _dt(s.get("exit_time"), 16),
-            "status_key":               s.get("status", "pending"),
-            "status":                   _STATUS_PL.get(s.get("status", "pending"), s.get("status", "")),
+            "status_key":               status_key,
+            "status":                   status_label,
             "resolved":                 s.get("resolved", False),
             "result":                   _map_result_display(s) if s.get("resolved") else None,
             "pnl_tp1":                  _f(s.get("tp1_only_pnl")),
