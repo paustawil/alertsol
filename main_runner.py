@@ -68,47 +68,13 @@ def run_breakout_scan():
 
 
 def run_sheets_export():
-    """Eksportuje nowo zamknięte setupy do Google Sheets."""
-    try:
-        import sol_alert
-        unexported = db.get_unexported_resolved()
-        if not unexported:
-            return
-        log.info(f"[sheets-export] Eksportuję {len(unexported)} setupów...")
-        for s in unexported:
-            entry_ts = s.get("entry_hit_at")
-            exit_dt  = s.get("exit_time")
-            exit_ts  = int(exit_dt.timestamp()) if exit_dt else None
-            result   = s.get("result", "")
-            avg_entry = float(s["avg_entry"]) if s.get("avg_entry") else None
-            avg_exit  = float(s["avg_exit"])  if s.get("avg_exit")  else None
-            move      = float(s["pnl_usd"])   if s.get("pnl_usd")   else 0.0
-
-            try:
-                if s.get("shadow") and s.get("model") == "Grok":
-                    ok = sol_alert.log_to_grok_shadow(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                elif s.get("shadow"):
-                    ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                else:
-                    ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-                if ok:
-                    db.mark_sheets_exported(s["setup_id"])
-                    log.info(f"[sheets-export] Setup #{s['setup_id']} wyeksportowany.")
-                else:
-                    log.warning(f"[sheets-export] Setup #{s['setup_id']} — eksport nieudany, spróbuję ponownie.")
-            except Exception:
-                log.exception(f"[sheets-export] Błąd eksportu setupu #{s['setup_id']}")
-    except Exception:
-        log.exception("[sheets-export] Błąd ogólny")
+    """Google Sheets export — wyłączony."""
+    pass
 
 
 def run_profit_calculator_export():
-    """Odświeża arkusz kalkulatora zysku/straty w Google Sheets."""
-    try:
-        import sol_alert
-        sol_alert.export_profit_calculator_to_sheets()
-    except Exception:
-        log.exception("[kalkulator] Błąd eksportu kalkulatora")
+    """Google Sheets profit calculator — wyłączony."""
+    pass
 
 
 def run_grok_shadow():
@@ -166,25 +132,6 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
 
-    # Sheets export — co 5 minut
-    scheduler.add_job(
-        run_sheets_export,
-        "interval",
-        minutes=5,
-        id="sheets_export",
-        max_instances=1,
-        coalesce=True,
-    )
-
-    # Kalkulator zysku/straty — co godzinę (nadpisuje arkusz aktualnymi danymi)
-    scheduler.add_job(
-        run_profit_calculator_export,
-        "interval",
-        hours=1,
-        id="profit_calculator",
-        max_instances=1,
-        coalesce=True,
-    )
 
     # Grok shadow — co 5 min (wewnętrznie throttled: detekcja co 60 min lub co 5 min podczas IMPULSE)
     scheduler.add_job(
@@ -1884,82 +1831,12 @@ def admin_init_sheets():
 
 @app.post("/admin/run-sheets-export")
 def admin_run_sheets_export():
-    """Uruchamia eksport do Sheets synchronicznie i zwraca szczegółowy raport."""
-    import sol_alert
-
-    # Sprawdź czy kolumna sheets_exported istnieje
-    try:
-        with db._conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM setups WHERE resolved = TRUE AND sheets_exported = FALSE"
-                )
-                pending_count = cur.fetchone()[0]
-    except Exception as e:
-        return {"ok": False, "stage": "db_check", "error": str(e)}
-
-    if pending_count == 0:
-        # Sprawdź ile jest w ogóle zamkniętych setupów
-        with db._conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM setups WHERE resolved = TRUE")
-                total_resolved = cur.fetchone()[0]
-        return {
-            "ok": True,
-            "pending_export": 0,
-            "total_resolved": total_resolved,
-            "message": "Brak setupów do wyeksportowania (wszystkie już wyeksportowane lub brak zamkniętych).",
-        }
-
-    unexported = db.get_unexported_resolved()
-    exported_ok, exported_fail, errors = 0, 0, []
-
-    # Otwórz arkusze raz dla całego batcha — unika rate limitingu Google Sheets API
-    try:
-        _, sh2 = sol_alert._get_sheets()
-    except Exception as e:
-        return {"ok": False, "stage": "open_sheets", "error": str(e)}
-
-    for s in unexported:
-        sid = s.get("setup_id")
-        try:
-            entry_ts  = s.get("entry_hit_at")
-            exit_dt   = s.get("exit_time")
-            exit_ts   = int(exit_dt.timestamp()) if exit_dt else None
-            result    = s.get("result", "")
-            avg_entry = float(s["avg_entry"]) if s.get("avg_entry") else None
-            avg_exit  = float(s["avg_exit"])  if s.get("avg_exit")  else None
-            move      = float(s["pnl_usd"])   if s.get("pnl_usd")   else 0.0
-
-            if s.get("shadow"):
-                ok = sol_alert.log_to_anulowane_grok(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move)
-            else:
-                ok = sol_alert.log_to_wyniki(s, result, entry_ts, exit_ts, avg_entry, avg_exit, move, _sh2=sh2)
-
-            if ok:
-                db.mark_sheets_exported(sid)
-                exported_ok += 1
-            else:
-                exported_fail += 1
-                errors.append({"setup_id": sid, "error": "eksport zwrócił False — sprawdź logi Railway"})
-        except Exception as e:
-            exported_fail += 1
-            errors.append({"setup_id": sid, "error": str(e)})
-
-    return {
-        "ok": exported_fail == 0,
-        "exported": exported_ok,
-        "failed": exported_fail,
-        "errors": errors,
-    }
+    return {"ok": False, "message": "Google Sheets integration wyłączona."}
 
 
 @app.post("/admin/run-profit-calculator")
 def admin_run_profit_calculator():
-    """Uruchamia kalkulator zysku/straty i eksportuje wyniki do Google Sheets."""
-    import sol_alert
-    ok = sol_alert.export_profit_calculator_to_sheets()
-    return {"ok": ok}
+    return {"ok": False, "message": "Google Sheets integration wyłączona."}
 
 
 @app.get("/admin/test-candles")
