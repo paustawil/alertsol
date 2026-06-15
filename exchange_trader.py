@@ -253,7 +253,8 @@ def transfer_futures_to_spot(amount: float) -> dict:
 
 
 def get_account_balance() -> float | None:
-    """Zwraca settled (available) balance konta futures USDT lub None przy błędzie."""
+    """Zwraca equity konta futures USDT (całkowita wartość konta, bez odjęcia marginu).
+    Używamy equity, nie available — bo committed_db już odejmuje zaangażowany kapitał."""
     client = _client()
     if client is None:
         return None
@@ -265,9 +266,9 @@ def get_account_balance() -> float | None:
         })
         if resp.get("code") == "00000":
             data = resp.get("data") or {}
-            available = data.get("available") or data.get("crossMaxAvailable")
-            if available is not None:
-                return float(available)
+            equity = data.get("equity") or data.get("usdtEquity") or data.get("available")
+            if equity is not None:
+                return float(equity)
     except Exception as e:
         log.warning(f"[exchange] get_account_balance: {e}")
     return None
@@ -946,10 +947,10 @@ def sync():
 
 
 def _calc_dynamic_trade_usdt(balance: float | None, fallback: float) -> float:
-    """Oblicza kwotę nowego zlecenia: 25% wolnego kapitału (saldo - zaangażowane).
-    Jednoczesne setupy w tym samym sync() używają tego samego snapshotu committed (z DB),
-    co daje im tę samą kwotę bazową — zamierzone zachowanie."""
+    """Oblicza kwotę nowego zlecenia: 25% wolnego kapitału (equity - committed_db).
+    Committed = suma trade_usdt aktywnych i pending setupów w DB."""
     if balance is None:
+        log.warning("[exchange] dynamic trade_usdt: brak balance z Bitget — fallback na ustawienia")
         return fallback
     committed = db.get_committed_trade_usdt()
     dynamic = round(max((balance - committed) * 0.25, 1.0), 2)
