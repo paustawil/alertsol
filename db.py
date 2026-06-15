@@ -1777,3 +1777,81 @@ def save_transfer_log(entry: dict) -> None:
     history = history[-52:]  # max rok historii
     settings["transfer_history"] = history
     save_app_settings(settings)
+
+
+def get_trade_analysis(date_from: str | None = None) -> list[dict]:
+    """Zestawienie setupów SHADOW do analizy symulacyjnej.
+    Zwraca posortowane wg entry_hit_at rekordy z czasami wejścia/wyjścia
+    oraz P&L% dla strategii TP1+TP2 (faktyczny wynik) i TP1-only (hipotetyczny).
+    Typy: range, impulse_aggressive (h1_atr), trend_pullback baseline.
+    """
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage = 20
+    _tu = f"COALESCE(trade_usdt, {trade_usdt})"
+
+    tp1_only_pct_calc = f"""
+        ROUND(
+            CASE
+                WHEN result = 'SL' THEN pnl_pct
+                WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
+                     AND (tps->>0) IS NOT NULL
+                     AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+                THEN (
+                    CASE direction
+                        WHEN 'long' THEN
+                            ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric))
+                        ELSE
+                            (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric)
+                    END
+                    * COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                               FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                ) / NULLIF({_tu}, 0) * 100
+            END
+        ::numeric, 2)"""
+
+    if date_from:
+        try:
+            dt = datetime.fromisoformat(date_from)
+        except ValueError:
+            dt = datetime.fromisoformat(date_from + "T00:00:00")
+        date_ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
+    else:
+        date_ts = 1778803200  # 2026-05-15 00:00:00 UTC
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    setup_id,
+                    alert_time,
+                    type,
+                    variant,
+                    direction,
+                    result,
+                    entry_hit_at                                           AS entry_ts,
+                    to_char(to_timestamp(entry_hit_at) AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD HH24:MI')                         AS entry_time,
+                    to_char(exit_time AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD HH24:MI')                         AS exit_time,
+                    EXTRACT(EPOCH FROM
+                        (exit_time - to_timestamp(entry_hit_at)))::int     AS duration_sec,
+                    ROUND(pnl_pct::numeric, 2)                             AS pnl_tp1tp2_pct,
+                    {tp1_only_pct_calc}                                    AS pnl_tp1only_pct
+                FROM setups
+                WHERE shadow = TRUE
+                  AND resolved = TRUE
+                  AND entry_hit_at IS NOT NULL
+                  AND entry_hit_at >= %(date_ts)s
+                  AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                  AND (
+                      type IN ('range_support_long', 'range_resistance_short')
+                      OR type IN ('impulse_aggressive_short', 'impulse_aggressive_long')
+                      OR (type IN ('trend_pullback_short','trend_pullback_long')
+                          AND variant = 'baseline')
+                  )
+                ORDER BY entry_hit_at ASC
+                """,
+                {"date_ts": date_ts},
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
