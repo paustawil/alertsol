@@ -1243,7 +1243,7 @@ def get_algo2_variant_stats(period_days: int | None = None) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
+def get_algo2_variant_summary(period_days: int | None = None, pairs: list[tuple[str, str]] | None = None) -> list[dict]:
     """Zestawienie wyników Algo2 per wariant (wszystkie typy setupów łącznie)."""
     time_sql, time_params = _algo2_time_filter(period_days)
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
@@ -1269,6 +1269,18 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                            FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
                  END
         END"""
+    pair_sql = ""
+    pair_params: dict = {}
+    if pairs:
+        conds = " OR ".join(
+            f"(type = %(pt{i})s AND COALESCE(variant,'baseline') = %(pv{i})s)"
+            for i in range(len(pairs))
+        )
+        pair_sql = f"AND ({conds})"
+        for i, (t, v) in enumerate(pairs):
+            pair_params[f"pt{i}"] = t
+            pair_params[f"pv{i}"] = v
+    params = {**time_params, **pair_params}
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -1299,10 +1311,11 @@ def get_algo2_variant_summary(period_days: int | None = None) -> list[dict]:
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
+                  {pair_sql}
                 GROUP BY type, variant
                 ORDER BY type, variant
                 """,
-                time_params,
+                params,
             )
             return [dict(r) for r in cur.fetchall()]
 
