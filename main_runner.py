@@ -895,6 +895,7 @@ def legacy_dashboard():
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="impulse_continuation_long" checked> imp_cont·L</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="h1_atr" checked> imp_agg·h1</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="m15_atr" checked> imp_agg·m15</label>
+  <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="trend_boost" checked> imp_agg·boost</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_resistance_short" checked> range·S</label>
   <label style="font-size:0.85em"><input type="checkbox" class="variant-filter" value="range_support_long" checked> range·L</label>
   <span style="width:1px;height:16px;background:#444;display:inline-block;margin:0 4px"></span>

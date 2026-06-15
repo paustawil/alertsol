@@ -1031,6 +1031,44 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     else:
                         log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
 
+        # impulse_aggressive_short (trend_boost) — lokalny impuls w TREND_DOWN bez vol_ratio
+        if regime_name == "TREND_DOWN":
+            _c1h  = (current_price - candles_m15[-4]["close"]) / candles_m15[-4]["close"] * 100 if len(candles_m15) >= 4 else 0
+            _c2h  = (current_price - candles_m15[-8]["close"]) / candles_m15[-8]["close"] * 100 if len(candles_m15) >= 8 else 0
+            _imp  = impulse_strength(candles_m15)
+            _last6_s = candles_m15[-6:]
+            _bearish_s = sum(1 for c in _last6_s if c["close"] < c["open"])
+            _last2_s = candles_m15[-2:]
+            _spike_s = sum(1 for c in _last2_s if (min(c["open"], c["close"]) - c["low"]) > abs(c["close"] - c["open"]) * 1.5)
+            log_lines.append(f"  → aggressive_trend_boost_short: c1h={_c1h:+.1f}% c2h={_c2h:+.1f}% imp={_imp} bearish={_bearish_s}/6 spike={_spike_s}")
+            if _c2h <= -2.0 and _imp >= 2 and _bearish_s >= 4 and _spike_s == 0:
+                w    = round(current_price, 2)
+                _sl  = round(current_price + atr * 1.2, 2)
+                _tp1 = round(current_price - atr * 2.0, 2)
+                _tp2 = round(current_price - atr * 3.0, 2)
+                _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
+                log_lines.append(f"    W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                if _rr_ok:
+                    log_lines.append(f"    ✓ ACCEPTED [trend_boost] (shadow — wariant testowy)")
+                    setups.append({
+                        "type": "impulse_aggressive_short", "direction": "short",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
+                        "score": strength, "variant": "trend_boost",
+                        "tp_strategy": "tp1_only",
+                        "reasoning": f"TREND_DOWN({strength}); c2h={_c2h:+.1f}% imp={_imp} aggressive [trend_boost]",
+                        "force_shadow": True,
+                    })
+                else:
+                    log_lines.append(f"    ✗ REJECTED [trend_boost]: RR<1.5")
+            else:
+                reasons = []
+                if _c2h > -2.0: reasons.append(f"c2h={_c2h:+.1f}%>-2%")
+                if _imp < 2: reasons.append(f"imp={_imp}<2")
+                if _bearish_s < 4: reasons.append(f"bearish={_bearish_s}/6<4")
+                if _spike_s > 0: reasons.append("spike dolny wick")
+                log_lines.append(f"    ✗ SKIP: {', '.join(reasons)}")
+
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
@@ -1142,6 +1180,44 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         })
                     else:
                         log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
+
+        # impulse_aggressive_long (trend_boost) — lokalny impuls w TREND_UP bez vol_ratio
+        if regime_name == "TREND_UP":
+            _c1h  = (current_price - candles_m15[-4]["close"]) / candles_m15[-4]["close"] * 100 if len(candles_m15) >= 4 else 0
+            _c2h  = (current_price - candles_m15[-8]["close"]) / candles_m15[-8]["close"] * 100 if len(candles_m15) >= 8 else 0
+            _imp  = impulse_strength(candles_m15)
+            _last6_l = candles_m15[-6:]
+            _bullish_l = sum(1 for c in _last6_l if c["close"] > c["open"])
+            _last2_l = candles_m15[-2:]
+            _spike_l = sum(1 for c in _last2_l if (c["high"] - max(c["open"], c["close"])) > abs(c["close"] - c["open"]) * 1.5)
+            log_lines.append(f"  → aggressive_trend_boost_long: c1h={_c1h:+.1f}% c2h={_c2h:+.1f}% imp={_imp} bullish={_bullish_l}/6 spike={_spike_l}")
+            if _c2h >= 2.0 and _imp >= 2 and _bullish_l >= 4 and _spike_l == 0:
+                w    = round(current_price, 2)
+                _sl  = round(current_price - atr * 1.2, 2)
+                _tp1 = round(current_price + atr * 2.0, 2)
+                _tp2 = round(current_price + atr * 3.0, 2)
+                _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
+                log_lines.append(f"    W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                if _rr_ok:
+                    log_lines.append(f"    ✓ ACCEPTED [trend_boost] (shadow — wariant testowy)")
+                    setups.append({
+                        "type": "impulse_aggressive_long", "direction": "long",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
+                        "score": strength, "variant": "trend_boost",
+                        "tp_strategy": "tp1_only",
+                        "reasoning": f"TREND_UP({strength}); c2h={_c2h:+.1f}% imp={_imp} aggressive [trend_boost]",
+                        "force_shadow": True,
+                    })
+                else:
+                    log_lines.append(f"    ✗ REJECTED [trend_boost]: RR<1.5")
+            else:
+                reasons = []
+                if _c2h < 2.0: reasons.append(f"c2h={_c2h:+.1f}%<2%")
+                if _imp < 2: reasons.append(f"imp={_imp}<2")
+                if _bullish_l < 4: reasons.append(f"bullish={_bullish_l}/6<4")
+                if _spike_l > 0: reasons.append("spike górny wick")
+                log_lines.append(f"    ✗ SKIP: {', '.join(reasons)}")
 
     # ── RANGE ─────────────────────────────────────────────────────────────
     elif regime_name == "RANGE":
