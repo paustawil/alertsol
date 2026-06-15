@@ -946,15 +946,15 @@ def sync():
         _sync_lock.release()
 
 
-def _calc_dynamic_trade_usdt(balance: float | None, fallback: float) -> float:
+def _calc_dynamic_trade_usdt(balance: float | None, fallback: float, exclude_setup_id: int | None = None) -> float:
     """Oblicza kwotę nowego zlecenia: 25% wolnego kapitału (equity - committed_db).
-    Committed = suma trade_usdt aktywnych i pending setupów w DB."""
+    exclude_setup_id: wyklucza bieżący setup z committed (unika self-counting przed db.update_setup)."""
     if balance is None:
         log.warning("[exchange] dynamic trade_usdt: brak balance z Bitget — fallback na ustawienia")
         return fallback
-    committed = db.get_committed_trade_usdt()
+    committed = db.get_committed_trade_usdt(exclude_setup_id=exclude_setup_id)
     dynamic = round(max((balance - committed) * 0.25, 1.0), 2)
-    log.info(f"[exchange] dynamic trade_usdt: ({balance:.2f} - {committed:.2f}) × 0.25 = {dynamic:.2f}")
+    log.info(f"[exchange] dynamic trade_usdt: ({balance:.2f} - {committed:.2f}) × 0.25 = {dynamic:.2f} (wyklucz setup_id={exclude_setup_id})")
     return dynamic
 
 
@@ -1055,7 +1055,8 @@ def _sync_inner():
                 s["tp_strategy"] = eff_tp_strat
 
             # Dynamiczny budżet: 25% wolnego salda (saldo - zaangażowane)
-            eff_usdt = _calc_dynamic_trade_usdt(account_balance, fallback=eff_usdt)
+            # Wyklucz bieżący setup z committed — przed update_setup ma jeszcze domyślne trade_usdt
+            eff_usdt = _calc_dynamic_trade_usdt(account_balance, fallback=eff_usdt, exclude_setup_id=s["setup_id"])
             db.update_setup(s["setup_id"], trade_usdt=eff_usdt)
 
             if "aggressive" in s.get("type", ""):
