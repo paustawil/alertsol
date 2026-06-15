@@ -220,7 +220,7 @@ const normalizeSetup = (s) => {
   };
 };
 /* ── Context ── */
-const DashCtx = React.createContext({price:null, stats:null, market:null, setups:SETUPS, alert:null, statsPeriod:'30d', setStatsPeriod:()=>{}, refreshSetups:()=>{}});
+const DashCtx = React.createContext({price:null, stats:null, market:null, setups:SETUPS, alert:null, statsPeriod:'30d', setStatsPeriod:()=>{}, refreshSetups:()=>{}, budget:null});
 const useDash = () => React.useContext(DashCtx);
 /* ── Modal: Zmień TP ── */
 function TPModal({ setup, onClose, onSaved }) {
@@ -347,12 +347,49 @@ const NAV_ICONS = {
   hist: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><rect x="4" y="3" width="14" height="16" rx="2"/><line x1="7" y1="8" x2="15" y2="8"/><line x1="7" y1="12" x2="15" y2="12"/><line x1="7" y1="16" x2="11" y2="16"/></svg>,
   settings: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><circle cx="11" cy="11" r="3"/><path d="M11 2v2M11 18v2M2 11h2M18 11h2M4.93 4.93l1.41 1.41M15.66 15.66l1.41 1.41M4.93 17.07l1.41-1.41M15.66 6.34l1.41-1.41"/></svg>,
 };
+/* ── Budget bar ── */
+function BudgetBar() {
+  const {budget:b} = useDash();
+  const fmt = (v) => v != null ? `$${Number(v).toFixed(2)}` : '—';
+  const pnlColor = b && b.weekly_pnl != null ? (b.weekly_pnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text1)';
+  const cell = {display:'flex',flexDirection:'column',gap:2};
+  const lbl = {fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)'};
+  const val = {fontFamily:'var(--mono)',fontSize:13,fontWeight:600,color:'var(--text1)'};
+  const sep = {width:1,background:'var(--border2)',alignSelf:'stretch',margin:'0 4px'};
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:20,padding:'8px 16px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,flexWrap:'wrap',flexShrink:0}}>
+      <span style={{fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em',color:'var(--text3)'}}>Budżet</span>
+      <div style={cell}><div style={lbl}>Saldo Bitget</div><div style={val}>{fmt(b&&b.balance)}</div></div>
+      <div style={cell}><div style={lbl}>Zaangażowane</div><div style={{...val,color:'var(--amber)'}}>{fmt(b&&b.committed)}</div></div>
+      <div style={cell}><div style={lbl}>Nast. zlecenie</div><div style={{...val,color:'var(--blue)'}}>{fmt(b&&b.next_trade)}</div></div>
+      <div style={sep}/>
+      <div style={cell}>
+        <div style={lbl}>PnL od {b&&b.period_since?b.period_since.slice(0,10):'—'}</div>
+        <div style={{...val,color:pnlColor}}>{b&&b.weekly_pnl!=null?(b.weekly_pnl>=0?'+':'')+`$${Number(b.weekly_pnl).toFixed(2)}`:'—'}</div>
+      </div>
+      <div style={cell}>
+        <div style={lbl}>Transfer w piątek</div>
+        <div style={{...val,color:b&&b.next_transfer>0?'var(--green)':'var(--text3)'}}>{b&&b.next_transfer>0?fmt(b.next_transfer):'—'}</div>
+      </div>
+      {b&&b.last_transfer&&<div style={cell}>
+        <div style={lbl}>Ostatni transfer</div>
+        <div style={{...val,fontSize:11,color:'var(--text3)'}}>
+          {b.last_transfer.date?b.last_transfer.date.slice(0,10):'—'}
+          {b.last_transfer.status==='ok'&&` ✓ $${b.last_transfer.transfer_amount}`}
+          {b.last_transfer.status==='skip_no_profit'&&' (brak zysku)'}
+          {b.last_transfer.status==='error'&&' ✗ błąd'}
+        </div>
+      </div>}
+    </div>
+  );
+}
 /* ── Desktop: ViewDashboard ── */
 function ViewDashboard() {
   const {setups, market} = useDash();
   const algo2 = (market && market.last_scans && market.last_scans['Algo2']) || null;
   return (
     <>
+      <BudgetBar/>
       <div className="panel" style={{minHeight:420,flexShrink:0}}>
         <div className="panel-head">
           <span className="panel-title">Wykres</span>
@@ -1185,6 +1222,7 @@ function TabDashboard() {
   const algo2 = (market && market.last_scans && market.last_scans['Algo2']) || null;
   return (
     <div>
+      <div style={{margin:'8px 12px 4px'}}><BudgetBar/></div>
       <MiniChart/>
       {algo2 && algo2.text && (
         <div style={{margin:'6px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px'}}>
@@ -1491,6 +1529,7 @@ function App() {
   const [setups,setSetups]=useState(SETUPS.map(normalizeSetup));
   const [alert,setAlert]=useState(null);
   const [statsPeriod,setStatsPeriod]=useState('30d');
+  const [budget,setBudget]=useState(null);
 
   useEffect(()=>{
     const onR=()=>setIsMobile(window.innerWidth < 768);
@@ -1527,8 +1566,13 @@ function App() {
     f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
   },[]);
 
+  useEffect(()=>{
+    const f=()=>fetch('/api/budget-info').then(r=>r.ok?r.json():null).then(d=>{if(d)setBudget(d);}).catch(()=>{});
+    f(); const id=setInterval(f,30000); return ()=>clearInterval(id);
+  },[]);
+
   return (
-    <DashCtx.Provider value={{price,stats,market,setups,alert,statsPeriod,setStatsPeriod,refreshSetups}}>
+    <DashCtx.Provider value={{price,stats,market,setups,alert,statsPeriod,setStatsPeriod,refreshSetups,budget}}>
       {isMobile ? <MobileApp/> : <DesktopApp/>}
     </DashCtx.Provider>
   );
