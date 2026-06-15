@@ -529,6 +529,26 @@ def get_resolved_with_open_orders() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+def get_committed_trade_usdt() -> float:
+    """Sumuje trade_usdt wszystkich aktywnych i pending setupów (exchange_done=FALSE, resolved=FALSE).
+    Używane do obliczenia dostępnego budżetu dla kolejnego zlecenia."""
+    default_tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(COALESCE(trade_usdt, %s)), 0)
+                FROM setups
+                WHERE exchange_done = FALSE
+                  AND resolved = FALSE
+                  AND shadow = FALSE
+                """,
+                (default_tu,),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else 0.0
+
+
 def mark_exchange_done(setup_id: int) -> None:
     """Oznacza setup jako zakończony po stronie exchange (order anulowany)."""
     with _conn() as conn:

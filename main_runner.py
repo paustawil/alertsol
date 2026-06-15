@@ -580,6 +580,24 @@ def legacy_dashboard():
   </div>
 </div>
 
+<!-- ── Budżet dynamiczny ────────────────────────────────────────────────── -->
+<div id="budget-panel" style="margin-bottom:14px;background:#1a1a1a;border:1px solid #444;border-radius:6px;padding:10px 16px;display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+  <span style="font-size:0.8em;color:#888;text-transform:uppercase;letter-spacing:.06em">Budżet</span>
+  <div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Saldo Bitget (settled)</div>
+    <div id="bi-balance" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#e0e0e0">—</div>
+  </div>
+  <div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Zaangażowane (aktywne+pending)</div>
+    <div id="bi-committed" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#f5a623">—</div>
+  </div>
+  <div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Następne zlecenie (25% wolnego)</div>
+    <div id="bi-next" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#80deea">—</div>
+  </div>
+  <span id="bi-loading" style="font-size:0.7em;color:#555;margin-left:auto"></span>
+</div>
+
 <!-- ── Wykres SOL/USDT ─────────────────────────────────────────────────── -->
 <div style="margin-bottom:18px;background:#222;border:1px solid #444;border-radius:8px;padding:12px 16px">
   <h3 style="margin:0 0 10px;font-size:1em;color:#80deea">📈 SOL/USDT — wykres live</h3>
@@ -1804,6 +1822,29 @@ async function loadMarketStatus() {{
 loadMarketStatus();
 setInterval(loadMarketStatus, 60000);
 
+// ── Budżet dynamiczny ────────────────────────────────────────────────────────
+async function loadBudgetInfo() {{
+  var el = document.getElementById('bi-loading');
+  if (el) el.textContent = 'odświeżanie...';
+  try {{
+    var resp = await fetch('/api/budget-info');
+    var d = await resp.json();
+    var fmt = function(v) {{ return v != null ? '$' + parseFloat(v).toFixed(2) : '—'; }};
+    var set = function(id, val) {{
+      var e = document.getElementById(id);
+      if (e) e.textContent = fmt(val);
+    }};
+    set('bi-balance',   d.balance);
+    set('bi-committed', d.committed);
+    set('bi-next',      d.next_trade);
+    if (el) el.textContent = '';
+  }} catch(e) {{
+    if (el) el.textContent = 'błąd';
+  }}
+}}
+loadBudgetInfo();
+setInterval(loadBudgetInfo, 30000);
+
 // ── Default filter: only setups with actual trade result ──────────────────────
 document.querySelectorAll('.res-filter').forEach(function(cb) {{
   cb.checked = ['TP1','TP2','TP1+BE','TP1+SL','SL'].indexOf(cb.value) >= 0;
@@ -2299,6 +2340,23 @@ def api_bitget_live():
         log.warning(f"[bitget-live] positions: {e}")
 
     return {"tpsl": tpsl_by_id, "plans": plan_by_id, "positions": positions}
+
+
+@app.get("/api/budget-info")
+def api_budget_info():
+    """Zwraca saldo Bitget (settled), zaangażowany kapitał z DB oraz planowaną kwotę kolejnego zlecenia."""
+    import exchange_trader as et
+    balance = et.get_account_balance()
+    committed = db.get_committed_trade_usdt()
+    if balance is not None:
+        next_trade = round(max((balance - committed) * 0.25, 0), 2)
+    else:
+        next_trade = None
+    return {
+        "balance":    round(balance, 2) if balance is not None else None,
+        "committed":  round(committed, 2),
+        "next_trade": next_trade,
+    }
 
 
 @app.get("/api/stats")
