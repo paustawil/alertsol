@@ -3330,6 +3330,8 @@ def api_all_setups(
             "entries":                  s.get("entries") or [],
             "tps":                      s.get("tps") or [],
             "sl":                       _f(s.get("sl")),
+            "avg_entry":                _f(s.get("avg_entry")),
+            "exchange_qty_full":        s.get("exchange_qty_full"),
         })
     return {"total": data["total"], "rows": rows}
 
