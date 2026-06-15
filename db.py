@@ -1606,15 +1606,15 @@ def get_all_setups_filtered(
 
     if date_from:
         where.append(
-            "(CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
-            " >= %(date_from)s::date"
+            "DATE((CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
+            " AT TIME ZONE 'Europe/Warsaw') >= %(date_from)s::date"
         )
         params["date_from"] = date_from
 
     if date_to:
         where.append(
-            "(CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
-            " < (%(date_to)s::date + interval '1 day')"
+            "DATE((CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
+            " AT TIME ZONE 'Europe/Warsaw') <= %(date_to)s::date"
         )
         params["date_to"] = date_to
 
