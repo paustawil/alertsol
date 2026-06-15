@@ -1605,11 +1605,17 @@ def get_all_setups_filtered(
         params["shadow"] = shadow
 
     if date_from:
-        where.append("alert_time >= %(date_from)s::date")
+        where.append(
+            "(CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
+            " >= %(date_from)s::date"
+        )
         params["date_from"] = date_from
 
     if date_to:
-        where.append("alert_time < (%(date_to)s::date + interval '1 day')")
+        where.append(
+            "(CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
+            " < (%(date_to)s::date + interval '1 day')"
+        )
         params["date_to"] = date_to
 
     where_sql = " AND ".join(where) if where else "TRUE"
