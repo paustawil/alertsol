@@ -1027,7 +1027,6 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "score": strength, "variant": _vname,
                             "tp_strategy": "tp1_only",
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
-                            "force_shadow": True,
                         })
                     else:
                         log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
@@ -1140,7 +1139,6 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "score": strength, "variant": _vname,
                             "tp_strategy": "tp1_only",
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
-                            "force_shadow": True,
                         })
                     else:
                         log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
