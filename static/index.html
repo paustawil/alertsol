@@ -410,6 +410,7 @@ function ViewSetups() {
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
   const [expandedRows,setExpandedRows]=useState(new Set());
+  const [tradeUsdt,setTradeUsdt]=useState(100);
   const [currentPrice,setCurrentPrice]=useState(null);
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
   const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'shadow',l:'Shadow'}];
@@ -417,6 +418,7 @@ function ViewSetups() {
   // Załaduj enabled types z ustawień przy montowaniu
   useEffect(()=>{
     fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
+      if(d.trade_usdt) setTradeUsdt(parseFloat(d.trade_usdt));
       const cfg=d.type_configs||{};
       const enabledKeys=Object.entries(cfg).filter(([,v])=>v.enabled===true).map(([k])=>k);
       if(enabledKeys.length===0){setSettingsFilter({types:[],variants:[]});return;}
@@ -496,17 +498,20 @@ function ViewSetups() {
   const calcLivePnl=(r)=>{if(!currentPrice||!r.avg_entry)return null;const sign=r.kier==='LONG'?1:-1;const qty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(100*20/r.avg_entry/0.1)*0.1;if(!qty||qty<=0)return null;return sign*qty*(currentPrice-r.avg_entry);};
   const calcPotential=(r)=>{
     const entry=r.avg_entry||(r.entries&&r.entries[0]!=null?Number(r.entries[0]):null);
-    if(!entry) return {tp1:null,tp12:null,sl:null};
+    if(!entry) return {tp1:null,tp12:null,sl:null,tp1Pct:null,tp12Pct:null};
     const tp1=r.tps&&r.tps[0]!=null?Number(r.tps[0]):null;
     const tp2=r.tps&&r.tps[1]!=null?Number(r.tps[1]):null;
     const sl=r.sl!=null?Number(r.sl):null;
     const sign=r.kier==='LONG'?1:-1;
-    const qty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(100*20/entry/0.1)*0.1;
-    if(!qty||qty<=0) return {tp1:null,tp12:null,sl:null};
+    const tu=tradeUsdt||100;
+    const qty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(tu*20/entry/0.1)*0.1;
+    if(!qty||qty<=0) return {tp1:null,tp12:null,sl:null,tp1Pct:null,tp12Pct:null};
     const tp1Pnl=tp1!=null?sign*qty*(tp1-entry):null;
     const tp12Pnl=tp1!=null&&tp2!=null?sign*(qty/2)*(tp1-entry)+sign*(qty/2)*(tp2-entry):tp1Pnl;
     const slPnl=sl!=null?sign*qty*(sl-entry):null;
-    return {tp1:tp1Pnl,tp12:tp12Pnl,sl:slPnl};
+    const tp1Pct=tp1Pnl!=null?Math.round(tp1Pnl/tu*10000)/100:null;
+    const tp12Pct=tp12Pnl!=null?Math.round(tp12Pnl/tu*10000)/100:null;
+    return {tp1:tp1Pnl,tp12:tp12Pnl,sl:slPnl,tp1Pct,tp12Pct};
   };
   const StatusPill=({sk,sl})=>{
     const cls={pending:'czeka',open:'pozycja',after_tp1:'po_tp1'}[sk]||'';
@@ -593,14 +598,14 @@ function ViewSetups() {
                 <td className="mono" style={{fontSize:10,color:'var(--text3)'}}>{r.rr?`1:${Number(r.rr).toFixed(1)}`:'—'}</td>
                 <td className="mono" style={{minWidth:64}}>
                   {isOpen&&livePnl!=null
-                    ? <><span style={{color:pC(livePnl),fontWeight:600}}>{fmtU(livePnl)}</span><span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>live</span><br/><span style={{...dimStyle,fontSize:9}}>{pot.tp1!=null?fmtU(pot.tp1):'—'}</span></>
+                    ? <><span style={{color:pC(livePnl),fontWeight:600}}>{fmtU(livePnl)}</span><span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>live</span><br/><span style={{...dimStyle,fontSize:9}}>{pot.tp1!=null?fmtU(pot.tp1):'—'}{pot.tp1Pct!=null&&<> / {fmtP(pot.tp1Pct)}</>}</span></>
                     : isActive
-                      ? <span style={dimStyle}>{pot.tp1!=null?fmtU(pot.tp1):'—'}</span>
+                      ? <span style={dimStyle}>{pot.tp1!=null?fmtU(pot.tp1):'—'}{pot.tp1Pct!=null&&<><br/><span style={{fontSize:9}}>{fmtP(pot.tp1Pct)}</span></>}</span>
                       : <><span style={{color:pC(r.pnl_tp1),fontWeight:600}}>{fmtU(r.pnl_tp1)}</span>{r.pnl_tp1_pct!=null&&<><br/><span style={{fontSize:9,color:pC(r.pnl_tp1_pct)}}>{fmtP(r.pnl_tp1_pct)}</span></>}</>}
                 </td>
                 <td className="mono" style={{minWidth:64}}>
                   {isActive
-                    ? <span style={dimStyle}>{pot.tp12!=null?fmtU(pot.tp12):'—'}</span>
+                    ? <span style={dimStyle}>{pot.tp12!=null?fmtU(pot.tp12):'—'}{pot.tp12Pct!=null&&<><br/><span style={{fontSize:9}}>{fmtP(pot.tp12Pct)}</span></>}</span>
                     : <><span style={{color:pC(r.pnl_tp12),fontWeight:600}}>{fmtU(r.pnl_tp12)}</span>{r.pnl_pct!=null&&<><br/><span style={{fontSize:9,color:pC(r.pnl_pct)}}>{fmtP(r.pnl_pct)}</span></>}</>}
                 </td>
                 <td className="mono" style={{minWidth:54}}>
