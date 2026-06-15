@@ -947,14 +947,11 @@ def sync():
 
 
 def _calc_dynamic_trade_usdt(balance: float | None, fallback: float) -> float:
-    """Oblicza kwotę nowego zlecenia: 25% wolnego kapitału (equity - committed_db).
-    Committed = suma trade_usdt aktywnych i pending setupów w DB."""
     if balance is None:
         log.warning("[exchange] dynamic trade_usdt: brak balance z Bitget — fallback na ustawienia")
         return fallback
-    committed = db.get_committed_trade_usdt()
-    dynamic = round(max((balance - committed) * 0.25, 1.0), 2)
-    log.info(f"[exchange] dynamic trade_usdt: ({balance:.2f} - {committed:.2f}) × 0.25 = {dynamic:.2f}")
+    dynamic = round(max(balance * 0.25, 1.0), 2)
+    log.info(f"[exchange] dynamic trade_usdt: {balance:.2f} × 0.25 = {dynamic:.2f}")
     return dynamic
 
 
