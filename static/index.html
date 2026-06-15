@@ -591,17 +591,17 @@ function ViewSetups() {
                 <td className="mono" style={{fontSize:10,color:'var(--green)',opacity:.7}}>{tp2!=null?fmtPrice(tp2):'—'}</td>
                 <td className="mono" style={{fontSize:10,color:'var(--red)'}}>{fmtPrice(r.sl)}</td>
                 <td className="mono" style={{fontSize:10,color:'var(--text3)'}}>{r.rr?`1:${Number(r.rr).toFixed(1)}`:'—'}</td>
-                <td className="mono" style={{minWidth:58}}>
+                <td className="mono" style={{minWidth:64}}>
                   {isOpen&&livePnl!=null
                     ? <><span style={{color:pC(livePnl),fontWeight:600}}>{fmtU(livePnl)}</span><span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>live</span><br/><span style={{...dimStyle,fontSize:9}}>{pot.tp1!=null?fmtU(pot.tp1):'—'}</span></>
                     : isActive
                       ? <span style={dimStyle}>{pot.tp1!=null?fmtU(pot.tp1):'—'}</span>
-                      : <span style={{color:pC(r.pnl_tp1),fontWeight:600}}>{fmtU(r.pnl_tp1)}</span>}
+                      : <><span style={{color:pC(r.pnl_tp1),fontWeight:600}}>{fmtU(r.pnl_tp1)}</span>{r.pnl_tp1_pct!=null&&<><br/><span style={{fontSize:9,color:pC(r.pnl_tp1_pct)}}>{fmtP(r.pnl_tp1_pct)}</span></>}</>}
                 </td>
-                <td className="mono" style={{minWidth:58}}>
+                <td className="mono" style={{minWidth:64}}>
                   {isActive
                     ? <span style={dimStyle}>{pot.tp12!=null?fmtU(pot.tp12):'—'}</span>
-                    : <span style={{color:pC(r.pnl_tp12),fontWeight:600}}>{fmtU(r.pnl_tp12)}</span>}
+                    : <><span style={{color:pC(r.pnl_tp12),fontWeight:600}}>{fmtU(r.pnl_tp12)}</span>{r.pnl_pct!=null&&<><br/><span style={{fontSize:9,color:pC(r.pnl_pct)}}>{fmtP(r.pnl_pct)}</span></>}</>}
                 </td>
                 <td className="mono" style={{minWidth:54}}>
                   {isActive
