@@ -552,7 +552,7 @@ function ViewSetups() {
       <div className="panel-body scroll-y">
         {rows===null&&<div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
         {rows!==null&&<table className="tbl">
-          <thead><tr><th>Status / Wynik</th><th>Data</th><th>Kier</th><th>Typ</th><th>Wejście</th><th>TP1 / TP2</th><th>SL</th><th>RR</th><th>P&L</th></tr></thead>
+          <thead><tr><th>Status / Wynik</th><th>Data</th><th>Kier</th><th>Typ / Wariant</th><th>Wejście</th><th>TP1 / TP2</th><th>SL</th><th>RR</th><th>P&L</th></tr></thead>
           <tbody>{rows.map((r,i)=>{
             const isExp=expandedRows.has(r.id);
             const isOpen=['open','after_tp1'].includes(r.status_key);
@@ -569,7 +569,7 @@ function ViewSetups() {
                 </td>
                 <td className="mono" style={{color:'var(--text3)',fontSize:10,whiteSpace:'nowrap'}}>{r.t_def?r.t_def.slice(5,16):'—'}</td>
                 <td><span className={`kier-badge ${(r.kier||'long').toLowerCase()}`}>{r.kier}</span></td>
-                <td style={{fontSize:10,color:'var(--text2)',maxWidth:120,wordBreak:'break-word'}}>{r.typ}</td>
+                <td style={{fontSize:10,color:'var(--text2)',maxWidth:160}}>{r.typ}<br/><span style={{color:'var(--text3)'}}>{r.variant}</span></td>
                 <td className="mono" style={{fontSize:10}}>{fmtPrice(entry)}</td>
                 <td className="mono" style={{fontSize:10}}>
                   <span style={{color:'var(--green)'}}>{fmtPrice(tp1)}</span>
