@@ -1366,7 +1366,7 @@ def get_algo2_daily_stats(
             cur.execute(
                 f"""
                 SELECT
-                    (alert_time AT TIME ZONE 'Europe/Warsaw')::date                        AS day,
+                    (COALESCE(exit_time, resolved_at, alert_time) AT TIME ZONE 'Europe/Warsaw')::date AS day,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
                     COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
@@ -1605,17 +1605,11 @@ def get_all_setups_filtered(
         params["shadow"] = shadow
 
     if date_from:
-        where.append(
-            "DATE((CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
-            " AT TIME ZONE 'Europe/Warsaw') >= %(date_from)s::date"
-        )
+        where.append("alert_time >= %(date_from)s::date")
         params["date_from"] = date_from
 
     if date_to:
-        where.append(
-            "DATE((CASE WHEN status = 'closed' THEN COALESCE(exit_time, resolved_at, alert_time) ELSE alert_time END)"
-            " AT TIME ZONE 'Europe/Warsaw') <= %(date_to)s::date"
-        )
+        where.append("alert_time < (%(date_to)s::date + interval '1 day')")
         params["date_to"] = date_to
 
     where_sql = " AND ".join(where) if where else "TRUE"
