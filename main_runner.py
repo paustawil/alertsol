@@ -98,6 +98,40 @@ def run_gemini2():
         log.exception("[gemini2] gemini2_main() BŁĄD")
 
 
+def run_weekly_transfer():
+    """Co piątek 8:00 Warsaw: oblicz netto PnL z ostatnich 7 dni, prześlij 50% na Spot."""
+    import exchange_trader as et
+    from datetime import datetime, timezone
+
+    weekly_pnl = db.get_weekly_pnl(days=7)
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    if weekly_pnl <= 0:
+        log.info(f"[weekly_transfer] {now_str} — PnL tygodniowy: {weekly_pnl:.2f} USDT (<=0, brak transferu)")
+        db.save_transfer_log({
+            "date": now_str, "weekly_pnl": round(weekly_pnl, 2),
+            "transfer_amount": 0, "status": "skip_no_profit",
+        })
+        return
+
+    transfer_amount = round(weekly_pnl * 0.5, 2)
+    log.info(f"[weekly_transfer] {now_str} — PnL tygodniowy: {weekly_pnl:.2f} USDT → transfer: {transfer_amount:.2f} USDT")
+
+    result = et.transfer_futures_to_spot(transfer_amount)
+    entry = {
+        "date": now_str,
+        "weekly_pnl": round(weekly_pnl, 2),
+        "transfer_amount": transfer_amount,
+        "status": "ok" if result["ok"] else "error",
+        "detail": result.get("transfer_id") or result.get("error"),
+    }
+    db.save_transfer_log(entry)
+    if result["ok"]:
+        log.info(f"[weekly_transfer] Transfer {transfer_amount:.2f} USDT zakończony sukcesem.")
+    else:
+        log.warning(f"[weekly_transfer] Transfer BŁĄD: {result.get('error')}")
+
+
 # ── FastAPI dashboard ──────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -149,6 +183,15 @@ async def lifespan(app: FastAPI):
 
     # Gemini2 — wyłączony: zarchiwizowany detektor, zastąpiony przez Algo2
     # scheduler.add_job(run_gemini2, "interval", hours=1, id="gemini2", ...)
+
+    # Tygodniowy transfer 50% zysku na Spot — każdy piątek 8:00 czasu warszawskiego
+    scheduler.add_job(
+        run_weekly_transfer,
+        CronTrigger(day_of_week="fri", hour=8, minute=0, timezone="Europe/Warsaw"),
+        id="weekly_transfer",
+        max_instances=1,
+        coalesce=True,
+    )
 
     scheduler.start()
     log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 5min (throttle Algo2: 15min RANGE/TREND, 5min IMPULSE) | grok_shadow: co 5min (throttle: 30min RANGE/TREND, 5min IMPULSE) | sheets: co 5min | kalkulator: co 1h")
@@ -594,6 +637,19 @@ def legacy_dashboard():
   <div>
     <div style="font-size:0.7em;color:#888;margin-bottom:1px">Następne zlecenie (25% wolnego)</div>
     <div id="bi-next" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#80deea">—</div>
+  </div>
+  <div style="width:1px;background:#333;align-self:stretch;margin:0 4px"></div>
+  <div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">PnL 7 dni (netto)</div>
+    <div id="bi-weekly-pnl" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#e0e0e0">—</div>
+  </div>
+  <div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Transfer w piątek (50%)</div>
+    <div id="bi-transfer" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#00d68f">—</div>
+  </div>
+  <div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Ostatni transfer</div>
+    <div id="bi-last-transfer" style="font-size:0.85em;font-family:monospace;color:#888">—</div>
   </div>
   <span id="bi-loading" style="font-size:0.7em;color:#555;margin-left:auto"></span>
 </div>
@@ -1834,9 +1890,29 @@ async function loadBudgetInfo() {{
       var e = document.getElementById(id);
       if (e) e.textContent = fmt(val);
     }};
+    var setColor = function(id, val) {{
+      var e = document.getElementById(id);
+      if (e && val != null) e.style.color = parseFloat(val) >= 0 ? '#00d68f' : '#ff4d6a';
+    }};
     set('bi-balance',   d.balance);
     set('bi-committed', d.committed);
     set('bi-next',      d.next_trade);
+    set('bi-weekly-pnl', d.weekly_pnl);
+    setColor('bi-weekly-pnl', d.weekly_pnl);
+    var trEl = document.getElementById('bi-transfer');
+    if (trEl) {{
+      trEl.textContent = d.next_transfer > 0 ? '$' + parseFloat(d.next_transfer).toFixed(2) : '—';
+      trEl.style.color = d.next_transfer > 0 ? '#00d68f' : '#888';
+    }}
+    var ltEl = document.getElementById('bi-last-transfer');
+    if (ltEl && d.last_transfer) {{
+      var lt = d.last_transfer;
+      var ltText = lt.date ? lt.date.slice(0, 10) : '—';
+      if (lt.status === 'ok') ltText += ' ✓ $' + lt.transfer_amount;
+      else if (lt.status === 'skip_no_profit') ltText += ' (brak zysku)';
+      else if (lt.status === 'error') ltText += ' ✗ błąd';
+      ltEl.textContent = ltText;
+    }}
     if (el) el.textContent = '';
   }} catch(e) {{
     if (el) el.textContent = 'błąd';
@@ -2352,11 +2428,38 @@ def api_budget_info():
         next_trade = round(max((balance - committed) * 0.25, 0), 2)
     else:
         next_trade = None
+    weekly_pnl = db.get_weekly_pnl(days=7)
+    settings = db.get_app_settings()
+    transfer_history = settings.get("transfer_history") or []
+    last_transfer = transfer_history[-1] if transfer_history else None
     return {
-        "balance":    round(balance, 2) if balance is not None else None,
-        "committed":  round(committed, 2),
-        "next_trade": next_trade,
+        "balance":       round(balance, 2) if balance is not None else None,
+        "committed":     round(committed, 2),
+        "next_trade":    next_trade,
+        "weekly_pnl":    round(weekly_pnl, 2),
+        "next_transfer": round(weekly_pnl * 0.5, 2) if weekly_pnl > 0 else 0,
+        "last_transfer": last_transfer,
     }
+
+
+@app.get("/api/weekly-transfer/preview")
+def api_weekly_transfer_preview():
+    """Podgląd: co zostałoby przelane gdyby transfer wykonał się teraz."""
+    weekly_pnl = db.get_weekly_pnl(days=7)
+    settings = db.get_app_settings()
+    return {
+        "weekly_pnl":    round(weekly_pnl, 2),
+        "transfer_amount": round(weekly_pnl * 0.5, 2) if weekly_pnl > 0 else 0,
+        "would_transfer": weekly_pnl > 0,
+        "history":       (settings.get("transfer_history") or [])[-10:],
+    }
+
+
+@app.post("/api/weekly-transfer/run-now")
+def api_weekly_transfer_run_now():
+    """Ręczne uruchomienie tygodniowego transferu (poza harmonogramem)."""
+    run_weekly_transfer()
+    return {"ok": True}
 
 
 @app.get("/api/stats")

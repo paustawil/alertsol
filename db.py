@@ -1735,3 +1735,32 @@ def save_app_settings(data: dict) -> None:
                 """,
                 (json.dumps(data),),
             )
+
+
+def get_weekly_pnl(days: int = 7) -> float:
+    """Suma pnl_usd setupów zamkniętych w ostatnich `days` dniach."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(pnl_usd), 0)
+                FROM setups
+                WHERE resolved = TRUE
+                  AND shadow = FALSE
+                  AND pnl_usd IS NOT NULL
+                  AND resolved_at >= NOW() - INTERVAL '%s days'
+                """,
+                (days,),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else 0.0
+
+
+def save_transfer_log(entry: dict) -> None:
+    """Dołącza wpis do historii tygodniowych transferów w app_settings."""
+    settings = get_app_settings()
+    history = settings.get("transfer_history") or []
+    history.append(entry)
+    history = history[-52:]  # max rok historii
+    settings["transfer_history"] = history
+    save_app_settings(settings)
