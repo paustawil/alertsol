@@ -224,6 +224,55 @@ def _set_leverage(client: BitgetClient):
             log.warning(f"[exchange] set_leverage {hold_side}: {e}")
 
 
+def transfer_futures_to_spot(amount: float) -> dict:
+    """Przelewa `amount` USDT z konta Futures (mix_usdt) na Spot.
+    Zwraca {'ok': True} lub {'ok': False, 'error': str}."""
+    client = _client()
+    if client is None:
+        return {"ok": False, "error": "brak klucza API"}
+    if amount <= 0:
+        return {"ok": False, "error": f"kwota musi być > 0 (otrzymano {amount})"}
+    try:
+        resp = client.post("/api/v2/spot/wallet/transfer", {
+            "fromType":  "mix_usdt",
+            "toType":    "spot",
+            "amount":    str(round(amount, 2)),
+            "coin":      MARGIN_COIN,
+            "clientOid": f"weekly_transfer_{int(time.time())}",
+        })
+        if resp.get("code") == "00000":
+            log.info(f"[transfer] Przelano {amount:.2f} USDT Futures→Spot. transferId={resp.get('data', {}).get('transferId')}")
+            return {"ok": True, "transfer_id": resp.get("data", {}).get("transferId")}
+        else:
+            msg = resp.get("msg") or str(resp)
+            log.warning(f"[transfer] Błąd Bitget: {msg}")
+            return {"ok": False, "error": msg}
+    except Exception as e:
+        log.exception(f"[transfer] Wyjątek: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def get_account_balance() -> float | None:
+    """Zwraca settled (available) balance konta futures USDT lub None przy błędzie."""
+    client = _client()
+    if client is None:
+        return None
+    try:
+        resp = client.get("/api/v2/mix/account/account", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "marginCoin":  MARGIN_COIN,
+        })
+        if resp.get("code") == "00000":
+            data = resp.get("data") or {}
+            available = data.get("available") or data.get("crossMaxAvailable")
+            if available is not None:
+                return float(available)
+    except Exception as e:
+        log.warning(f"[exchange] get_account_balance: {e}")
+    return None
+
+
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
 def _place_entry_plan_orders(

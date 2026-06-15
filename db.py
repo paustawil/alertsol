@@ -529,6 +529,26 @@ def get_resolved_with_open_orders() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+def get_committed_trade_usdt() -> float:
+    """Sumuje trade_usdt wszystkich aktywnych i pending setupów (exchange_done=FALSE, resolved=FALSE).
+    Używane do obliczenia dostępnego budżetu dla kolejnego zlecenia."""
+    default_tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(COALESCE(trade_usdt, %s)), 0)
+                FROM setups
+                WHERE exchange_done = FALSE
+                  AND resolved = FALSE
+                  AND shadow = FALSE
+                """,
+                (default_tu,),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else 0.0
+
+
 def mark_exchange_done(setup_id: int) -> None:
     """Oznacza setup jako zakończony po stronie exchange (order anulowany)."""
     with _conn() as conn:
@@ -1715,3 +1735,32 @@ def save_app_settings(data: dict) -> None:
                 """,
                 (json.dumps(data),),
             )
+
+
+def get_weekly_pnl(since_utc: "datetime") -> float:
+    """Suma pnl_usd setupów zamkniętych od `since_utc` do teraz."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(pnl_usd), 0)
+                FROM setups
+                WHERE resolved = TRUE
+                  AND shadow = FALSE
+                  AND pnl_usd IS NOT NULL
+                  AND resolved_at >= %s
+                """,
+                (since_utc,),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else 0.0
+
+
+def save_transfer_log(entry: dict) -> None:
+    """Dołącza wpis do historii tygodniowych transferów w app_settings."""
+    settings = get_app_settings()
+    history = settings.get("transfer_history") or []
+    history.append(entry)
+    history = history[-52:]  # max rok historii
+    settings["transfer_history"] = history
+    save_app_settings(settings)
