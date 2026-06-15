@@ -2560,6 +2560,51 @@ def api_resolved_csv(
     )
 
 
+@app.get("/api/trade-analysis")
+def api_trade_analysis(date_from: str | None = None):
+    """Zestawienie setupów SHADOW z timestampami wejścia/wyjścia i P&L% dla obu strategii TP.
+    Parametr date_from: ISO date, np. 2026-05-15 (domyślnie)."""
+    return db.get_trade_analysis(date_from)
+
+
+@app.get("/api/trade-analysis/csv")
+def api_trade_analysis_csv(date_from: str | None = None):
+    """CSV export zestawienia do analizy symulacyjnej."""
+    from fastapi.responses import Response
+    import csv
+    import io
+
+    rows = db.get_trade_analysis(date_from)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "ID", "Alert", "Typ", "Wariant", "Kierunek", "Wynik",
+        "Wejście (UTC)", "Wyjście (UTC)", "Czas trwania (min)",
+        "P&L% TP1+TP2", "P&L% TP1-only",
+    ])
+    for r in rows:
+        dur_sec = r.get("duration_sec")
+        writer.writerow([
+            r.get("setup_id"),
+            str(r.get("alert_time", ""))[:16],
+            r.get("type"),
+            r.get("variant"),
+            r.get("direction"),
+            r.get("result"),
+            r.get("entry_time"),
+            r.get("exit_time"),
+            round(dur_sec / 60) if dur_sec else "",
+            r.get("pnl_tp1tp2_pct"),
+            r.get("pnl_tp1only_pct"),
+        ])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=trade_analysis.csv"},
+    )
+
+
 class ResultUpdate(BaseModel):
     result: str
     avg_exit: float | None = None
