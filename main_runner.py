@@ -2443,7 +2443,7 @@ def api_budget_info():
     balance = et.get_account_balance()
     committed = db.get_committed_trade_usdt()
     if balance is not None:
-        next_trade = round(max((balance - committed) * 0.25, 0), 2)
+        next_trade = round(balance * 0.25, 2)
     else:
         next_trade = None
     since_utc = _last_friday_8_warsaw_utc()
