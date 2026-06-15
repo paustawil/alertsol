@@ -1737,8 +1737,8 @@ def save_app_settings(data: dict) -> None:
             )
 
 
-def get_weekly_pnl(days: int = 7) -> float:
-    """Suma pnl_usd setupów zamkniętych w ostatnich `days` dniach."""
+def get_weekly_pnl(since_utc: "datetime") -> float:
+    """Suma pnl_usd setupów zamkniętych od `since_utc` do teraz."""
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1748,9 +1748,9 @@ def get_weekly_pnl(days: int = 7) -> float:
                 WHERE resolved = TRUE
                   AND shadow = FALSE
                   AND pnl_usd IS NOT NULL
-                  AND resolved_at >= NOW() - INTERVAL '%s days'
+                  AND resolved_at >= %s
                 """,
-                (days,),
+                (since_utc,),
             )
             row = cur.fetchone()
             return float(row[0]) if row else 0.0

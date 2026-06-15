@@ -98,12 +98,28 @@ def run_gemini2():
         log.exception("[gemini2] gemini2_main() BŁĄD")
 
 
+def _last_friday_8_warsaw_utc():
+    """Zwraca datetime UTC odpowiadający ostatniemu piątkowi 8:00 czasu warszawskiego."""
+    from datetime import datetime, timedelta
+    import pytz
+    warsaw = pytz.timezone("Europe/Warsaw")
+    now_w = datetime.now(warsaw)
+    days_since_friday = (now_w.weekday() - 4) % 7
+    if days_since_friday == 0 and now_w.hour < 8:
+        days_since_friday = 7
+    last_friday = (now_w - timedelta(days=days_since_friday)).replace(
+        hour=8, minute=0, second=0, microsecond=0
+    )
+    return last_friday.astimezone(pytz.utc)
+
+
 def run_weekly_transfer():
-    """Co piątek 8:00 Warsaw: oblicz netto PnL z ostatnich 7 dni, prześlij 50% na Spot."""
+    """Co piątek 8:00 Warsaw: oblicz netto PnL od poprzedniego piątku 8:00, prześlij 50% na Spot."""
     import exchange_trader as et
     from datetime import datetime, timezone
 
-    weekly_pnl = db.get_weekly_pnl(days=7)
+    since_utc = _last_friday_8_warsaw_utc()
+    weekly_pnl = db.get_weekly_pnl(since_utc=since_utc)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     if weekly_pnl <= 0:
@@ -640,11 +656,11 @@ def legacy_dashboard():
   </div>
   <div style="width:1px;background:#333;align-self:stretch;margin:0 4px"></div>
   <div>
-    <div style="font-size:0.7em;color:#888;margin-bottom:1px">PnL 7 dni (netto)</div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">PnL od ostatniego transferu (<span id="bi-period-since" style="color:#666">—</span>)</div>
     <div id="bi-weekly-pnl" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#e0e0e0">—</div>
   </div>
   <div>
-    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Transfer w piątek (50%)</div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Transfer w piątek 8:00 (50%)</div>
     <div id="bi-transfer" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#00d68f">—</div>
   </div>
   <div>
@@ -1899,6 +1915,8 @@ async function loadBudgetInfo() {{
     set('bi-next',      d.next_trade);
     set('bi-weekly-pnl', d.weekly_pnl);
     setColor('bi-weekly-pnl', d.weekly_pnl);
+    var psEl = document.getElementById('bi-period-since');
+    if (psEl && d.period_since) psEl.textContent = d.period_since.slice(0, 10);
     var trEl = document.getElementById('bi-transfer');
     if (trEl) {{
       trEl.textContent = d.next_transfer > 0 ? '$' + parseFloat(d.next_transfer).toFixed(2) : '—';
@@ -2428,7 +2446,8 @@ def api_budget_info():
         next_trade = round(max((balance - committed) * 0.25, 0), 2)
     else:
         next_trade = None
-    weekly_pnl = db.get_weekly_pnl(days=7)
+    since_utc = _last_friday_8_warsaw_utc()
+    weekly_pnl = db.get_weekly_pnl(since_utc=since_utc)
     settings = db.get_app_settings()
     transfer_history = settings.get("transfer_history") or []
     last_transfer = transfer_history[-1] if transfer_history else None
@@ -2439,19 +2458,22 @@ def api_budget_info():
         "weekly_pnl":    round(weekly_pnl, 2),
         "next_transfer": round(weekly_pnl * 0.5, 2) if weekly_pnl > 0 else 0,
         "last_transfer": last_transfer,
+        "period_since":  since_utc.strftime("%Y-%m-%d %H:%M UTC"),
     }
 
 
 @app.get("/api/weekly-transfer/preview")
 def api_weekly_transfer_preview():
     """Podgląd: co zostałoby przelane gdyby transfer wykonał się teraz."""
-    weekly_pnl = db.get_weekly_pnl(days=7)
+    since_utc = _last_friday_8_warsaw_utc()
+    weekly_pnl = db.get_weekly_pnl(since_utc=since_utc)
     settings = db.get_app_settings()
     return {
-        "weekly_pnl":    round(weekly_pnl, 2),
+        "period_since":    since_utc.strftime("%Y-%m-%d %H:%M UTC"),
+        "weekly_pnl":      round(weekly_pnl, 2),
         "transfer_amount": round(weekly_pnl * 0.5, 2) if weekly_pnl > 0 else 0,
-        "would_transfer": weekly_pnl > 0,
-        "history":       (settings.get("transfer_history") or [])[-10:],
+        "would_transfer":  weekly_pnl > 0,
+        "history":         (settings.get("transfer_history") or [])[-10:],
     }
 
 
