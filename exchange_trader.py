@@ -253,7 +253,8 @@ def transfer_futures_to_spot(amount: float) -> dict:
 
 
 def get_account_balance() -> float | None:
-    """Zwraca settled (available) balance konta futures USDT lub None przy błędzie."""
+    """Zwraca equity konta futures USDT (całkowita wartość konta, bez odjęcia marginu).
+    Używamy equity, nie available — bo committed_db już odejmuje zaangażowany kapitał."""
     client = _client()
     if client is None:
         return None
@@ -265,9 +266,9 @@ def get_account_balance() -> float | None:
         })
         if resp.get("code") == "00000":
             data = resp.get("data") or {}
-            available = data.get("available") or data.get("crossMaxAvailable")
-            if available is not None:
-                return float(available)
+            equity = data.get("equity") or data.get("usdtEquity") or data.get("available")
+            if equity is not None:
+                return float(equity)
     except Exception as e:
         log.warning(f"[exchange] get_account_balance: {e}")
     return None
