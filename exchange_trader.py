@@ -945,6 +945,18 @@ def sync():
         _sync_lock.release()
 
 
+def _calc_dynamic_trade_usdt(balance: float | None, fallback: float) -> float:
+    """Oblicza kwotę nowego zlecenia: 25% wolnego kapitału (saldo - zaangażowane).
+    Jednoczesne setupy w tym samym sync() używają tego samego snapshotu committed (z DB),
+    co daje im tę samą kwotę bazową — zamierzone zachowanie."""
+    if balance is None:
+        return fallback
+    committed = db.get_committed_trade_usdt()
+    dynamic = round(max((balance - committed) * 0.25, 1.0), 2)
+    log.info(f"[exchange] dynamic trade_usdt: ({balance:.2f} - {committed:.2f}) × 0.25 = {dynamic:.2f}")
+    return dynamic
+
+
 def _sync_inner():
     client = _client()
     if client is None:
@@ -952,6 +964,9 @@ def _sync_inner():
 
     _set_hedge_mode(client)
     _set_leverage(client)
+
+    # Pobierz saldo raz na cały sync — używane przy obliczaniu dynamicznego trade_usdt
+    account_balance = get_account_balance()
 
     # Sprawdź pozycje po TP1 — wirtualna druga połowa
     _check_after_tp1_positions(client)
@@ -1037,6 +1052,10 @@ def _sync_inner():
                 continue
             if eff_tp_strat:
                 s["tp_strategy"] = eff_tp_strat
+
+            # Dynamiczny budżet: 25% wolnego salda (saldo - zaangażowane)
+            eff_usdt = _calc_dynamic_trade_usdt(account_balance, fallback=eff_usdt)
+            db.update_setup(s["setup_id"], trade_usdt=eff_usdt)
 
             if "aggressive" in s.get("type", ""):
                 # Aggressive: market order natychmiast, bez czekania na trigger W1
