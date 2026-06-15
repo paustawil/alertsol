@@ -2738,14 +2738,14 @@ def breakout_scan():
 
     # Vol-spike fast path — duży spike (>=5x) przed przebiciem szczytu (reżim TREND)
     # Pozwala zareagować na gwałtowny ruch zanim formalnie spełni warunki IMPULSE.
-    elif not is_impulse and vol_ratio >= 5.0:
+    elif not is_impulse and regime.get("vol_ratio", 1.0) >= 5.0:
         _bs_vol_should_run = False
         with _algo2_lock:
             if now - _last_algo2_ts >= 2 * 60:
                 _last_algo2_ts = now
                 _bs_vol_should_run = True
         if _bs_vol_should_run:
-            print(f"[algo2] Vol-spike {vol_ratio:.1f}x w breakout_scan (TREND) — uruchamiam detekcję Algo2.")
+            print(f"[algo2] Vol-spike {regime['vol_ratio']:.1f}x w breakout_scan (TREND) — uruchamiam detekcję Algo2.")
             _algo2_run(regime, candles_m15, candles_h1, current, is_impulse=False)
 
 
