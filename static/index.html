@@ -563,7 +563,10 @@ function ViewSetups() {
             const pnlVal=isOpen?livePnl:r.pnl_tp12;
             return <React.Fragment key={i}>
               <tr onClick={()=>toggleRow(r.id)} style={{cursor:'pointer'}}>
-                <td><StatusResultChip r={r}/></td>
+                <td>
+                  <StatusResultChip r={r}/>
+                  {r.model&&<div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text3)',marginTop:2}}>{r.model}{r.variant&&r.variant!=='baseline'?<span style={{color:'var(--border2)'}}> /{r.variant}</span>:''}</div>}
+                </td>
                 <td className="mono" style={{color:'var(--text3)',fontSize:10,whiteSpace:'nowrap'}}>{r.t_def?r.t_def.slice(5,16):'—'}</td>
                 <td><span className={`kier-badge ${(r.kier||'long').toLowerCase()}`}>{r.kier}</span></td>
                 <td style={{fontSize:10,color:'var(--text2)',maxWidth:120,wordBreak:'break-word'}}>{r.typ}</td>
@@ -583,10 +586,11 @@ function ViewSetups() {
                   <div style={{display:'flex',gap:16,fontSize:10,color:'var(--text2)',fontFamily:'var(--mono)',flexWrap:'wrap',alignItems:'center'}}>
                     <span style={{color:'var(--text3)'}}>#{r.id}</span>
                     <SrcBadge shadow={r.shadow} exch={r.exchange_position_opened}/>
-                    {r.model&&<span style={{color:'var(--text3)'}}>{r.model}{r.variant&&r.variant!=='baseline'?`/${r.variant}`:''}</span>}
                     <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{r.t_def||'—'}</span>
                     <span><span style={{color:'var(--text3)'}}>Wejście:&nbsp;</span>{fmtTs(r.t_entry)}</span>
                     <span><span style={{color:'var(--text3)'}}>Wyjście:&nbsp;</span>{r.t_exit||'—'}</span>
+                    {r.exchange_tp1_oid&&<span><span style={{color:'var(--text3)'}}>Bitget TP1:&nbsp;</span>{r.exchange_tp1_oid}</span>}
+                    {r.exchange_sl_oid&&<span><span style={{color:'var(--text3)'}}>Bitget SL:&nbsp;</span>{r.exchange_sl_oid}</span>}
                   </div>
                 </td>
               </tr>}

@@ -3332,6 +3332,8 @@ def api_all_setups(
             "sl":                       _f(s.get("sl")),
             "avg_entry":                _f(s.get("avg_entry")),
             "exchange_qty_full":        s.get("exchange_qty_full"),
+            "exchange_tp1_oid":         s.get("exchange_tp1_oid"),
+            "exchange_sl_oid":          s.get("exchange_sl_oid"),
         })
     return {"total": data["total"], "rows": rows}
 
