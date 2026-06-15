@@ -100,9 +100,9 @@ def run_gemini2():
 
 def _last_friday_8_warsaw_utc():
     """Zwraca datetime UTC odpowiadający ostatniemu piątkowi 8:00 czasu warszawskiego."""
-    from datetime import datetime, timedelta
-    import pytz
-    warsaw = pytz.timezone("Europe/Warsaw")
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+    warsaw = ZoneInfo("Europe/Warsaw")
     now_w = datetime.now(warsaw)
     days_since_friday = (now_w.weekday() - 4) % 7
     if days_since_friday == 0 and now_w.hour < 8:
@@ -110,7 +110,7 @@ def _last_friday_8_warsaw_utc():
     last_friday = (now_w - timedelta(days=days_since_friday)).replace(
         hour=8, minute=0, second=0, microsecond=0
     )
-    return last_friday.astimezone(pytz.utc)
+    return last_friday.astimezone(timezone.utc)
 
 
 def run_weekly_transfer():
