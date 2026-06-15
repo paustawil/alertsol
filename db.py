@@ -529,22 +529,35 @@ def get_resolved_with_open_orders() -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-def get_committed_trade_usdt() -> float:
+def get_committed_trade_usdt(exclude_setup_id: int | None = None) -> float:
     """Sumuje trade_usdt wszystkich aktywnych i pending setupów (exchange_done=FALSE, resolved=FALSE).
-    Używane do obliczenia dostępnego budżetu dla kolejnego zlecenia."""
+    exclude_setup_id: wyklucza setup który właśnie wylicza swój budżet (unika self-counting)."""
     default_tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
     with _conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COALESCE(SUM(COALESCE(trade_usdt, %s)), 0)
-                FROM setups
-                WHERE exchange_done = FALSE
-                  AND resolved = FALSE
-                  AND shadow = FALSE
-                """,
-                (default_tu,),
-            )
+            if exclude_setup_id is not None:
+                cur.execute(
+                    """
+                    SELECT COALESCE(SUM(COALESCE(trade_usdt, %s)), 0)
+                    FROM setups
+                    WHERE exchange_done = FALSE
+                      AND resolved = FALSE
+                      AND shadow = FALSE
+                      AND setup_id != %s
+                    """,
+                    (default_tu, exclude_setup_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT COALESCE(SUM(COALESCE(trade_usdt, %s)), 0)
+                    FROM setups
+                    WHERE exchange_done = FALSE
+                      AND resolved = FALSE
+                      AND shadow = FALSE
+                    """,
+                    (default_tu,),
+                )
             row = cur.fetchone()
             return float(row[0]) if row else 0.0
 
