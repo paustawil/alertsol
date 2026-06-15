@@ -747,22 +747,54 @@ function ViewAlgo() {
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
   const [filterTree,setFilterTree]=useState([]);
-  const [selectedPairs,setSelectedPairs]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState(null); // null = nie załadowano
+  const [settingsFilter,setSettingsFilter]=useState(null);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
+  // Załaduj enabled types z ustawień przy montowaniu
   useEffect(()=>{
-    if(subTab!=='per data') return;
+    fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
+      const cfg=d.type_configs||{};
+      const enabledKeys=Object.entries(cfg).filter(([,v])=>v.enabled===true).map(([k])=>k);
+      if(enabledKeys.length===0){setSettingsFilter({pairs:[]});return;}
+      const pairs=enabledKeys.map(k=>{const[t,v]=k.split('__');return`${t}:${v||'baseline'}`;});
+      setSettingsFilter({pairs});
+    }).catch(()=>setSettingsFilter({pairs:[]}));
+  },[]);
+  // Załaduj drzewo typów przy montowaniu
+  useEffect(()=>{
     fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[])
       .then(tree=>{
         setFilterTree(tree);
-        setSelectedPairs(tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
+        setSelectedPairs(prev=>{
+          if(prev!==null) return prev;
+          // Przy pierwszym załadowaniu: zainicjuj włączonymi ustawieniami lub aktywnymi
+          if(settingsFilter&&settingsFilter.pairs.length>0){
+            const treeSet=new Set(tree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)));
+            return settingsFilter.pairs.filter(p=>treeSet.has(p));
+          }
+          return tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`));
+        });
       }).catch(()=>{});
-  },[subTab]);
+  },[settingsFilter]);
+  // Gdy settingsFilter załaduje się po drzewie — zainicjuj selectedPairs
   useEffect(()=>{
+    if(settingsFilter===null||filterTree.length===0||selectedPairs!==null) return;
+    const treeSet=new Set(filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)));
+    if(settingsFilter.pairs.length>0)
+      setSelectedPairs(settingsFilter.pairs.filter(p=>treeSet.has(p)));
+    else
+      setSelectedPairs(filterTree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
+  },[settingsFilter,filterTree,selectedPairs]);
+  const allTreePairs=React.useMemo(()=>filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)),[filterTree]);
+  const pairsFiltered=selectedPairs!==null&&allTreePairs.length>0&&selectedPairs.length<allTreePairs.length;
+  useEffect(()=>{
+    if(selectedPairs===null) return;
     setRows(null);
     const p=new URLSearchParams({period,view:subTab});
-    if(subTab==='per data'&&selectedPairs.length>0) p.set('pairs',selectedPairs.join(','));
+    if(selectedPairs.length>0&&selectedPairs.length<allTreePairs.length) p.set('pairs',selectedPairs.join(','));
     fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab,selectedPairs]);
+  },[period,subTab,selectedPairs,allTreePairs.length]);
   const pC=(p)=>p==null?'var(--text3)':String(p).startsWith('+')?'var(--green)':String(p).startsWith('-')?'var(--red)':'var(--text3)';
   const wrC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
@@ -790,13 +822,30 @@ function ViewAlgo() {
   },[rows,subTab]);
   return (
     <>
-      <div style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 16px',marginBottom:4,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
-        <span className="panel-title" style={{marginRight:8}}>Analityka Algo</span>
-        <div className="seg-tabs">{['7d','30d','3m','6m','12m'].map(p=><div key={p} className={`seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
-        <div className="filter-chips" style={{marginLeft:12}}>{['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}</div>
+      <div style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 16px',marginBottom:4,display:'flex',flexDirection:'column',gap:8}}>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span className="panel-title" style={{marginRight:8}}>Analityka Algo</span>
+          <div className="seg-tabs">{['7d','30d','3m','6m','12m'].map(p=><div key={p} className={`seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
+          <div className="filter-chips" style={{marginLeft:12}}>{['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}</div>
+        </div>
+        {filterTree.length>0&&selectedPairs!==null&&<div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Filtr:</span>
+          <div className={`filter-chip ${showTypeFilter?'active':''}`} style={{fontFamily:'var(--mono)',fontSize:9}} onClick={()=>setShowTypeFilter(p=>!p)}>
+            Typ/Wariant{pairsFiltered?` (filtr)`:''} {showTypeFilter?'▴':'▾'}
+          </div>
+          {pairsFiltered&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>setSelectedPairs(allTreePairs)}>✕ wyczyść</span>}
+        </div>}
+        {showTypeFilter&&filterTree.length>0&&selectedPairs!==null&&<div style={{padding:'6px 0',borderTop:'1px solid var(--border)',maxHeight:280,overflowY:'auto'}}>
+          <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+            {settingsFilter&&settingsFilter.pairs.length>0&&<span className="filter-chip" style={{fontSize:10}} onClick={()=>{const s=new Set(settingsFilter.pairs);setSelectedPairs(allTreePairs.filter(p=>s.has(p)));}}>tylko włączone</span>}
+            <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>setSelectedPairs(allTreePairs)}>wszystkie</span>
+            <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>setSelectedPairs([])}>✕ wyczyść</span>
+          </div>
+          <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
+        </div>}
       </div>
-      {rows===null && <div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
-      {rows!==null && subTab==='wariant' && <div className="panel" style={{flex:1}}>
+      {(rows===null||selectedPairs===null) && <div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
+      {rows!==null && selectedPairs!==null && subTab==='wariant' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per scenariusz / wariant</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
           <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>P&L TP1$</th><th>P&L TP1+TP2$</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
@@ -821,41 +870,31 @@ function ViewAlgo() {
           ))}</tbody>
         </table></div>
       </div>}
-      {rows!==null && subTab==='per data' && <>
-        <div style={{display:'flex',gap:8,alignItems:'flex-start',flex:1,minHeight:0}}>
-          {filterTree.length>0 && <div style={{background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',minWidth:200,maxWidth:260,flexShrink:0}}>
-            <div style={{fontSize:10,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}}>Filtr setupów</div>
-            <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
-          </div>}
-          <div style={{flex:1,display:'flex',flexDirection:'column',gap:4,minWidth:0}}>
-          <div className="panel" style={{flex:1}}>
-            <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
-            <div className="panel-body scroll-y"><table className="tbl">
-              <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
-              <tbody>{rows.map((r,i)=>(
-                <tr key={i}>
-                  <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
-                  <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
-                  <td className="mono" style={{color:wrC(r.wr)}}>{r.wr}</td>
-                  <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
-                  <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
-                </tr>
-              ))}</tbody>
-              {periodSummary && <tfoot><tr style={{background:'var(--bg3)',borderTop:'2px solid var(--border)'}}>
-                <td className="mono" style={{fontWeight:700,color:'var(--text2)',fontSize:10,letterSpacing:'.04em'}}>Σ OKRES</td>
-                <td className="mono" style={{fontWeight:700}}>{periodSummary.n}</td>
-                <td className="mono green" style={{fontWeight:700}}>{periodSummary.w}</td>
-                <td className="mono red" style={{fontWeight:700}}>{periodSummary.l}</td>
-                <td className="mono" style={{fontWeight:700,color:wrC(periodSummary.wr)}}>{periodSummary.wr}</td>
-                <td className="mono" style={{fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</td>
-                <td className="mono" style={{color:pC(periodSummary.tp1)}}>{periodSummary.tp1}</td>
-              </tr></tfoot>}
-            </table></div>
-          </div>
-          </div>
-        </div>
-      </>}
-      {rows!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
+      {rows!==null && selectedPairs!==null && subTab==='per data' && <div className="panel" style={{flex:1}}>
+        <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
+        <div className="panel-body scroll-y"><table className="tbl">
+          <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
+          <tbody>{rows.map((r,i)=>(
+            <tr key={i}>
+              <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
+              <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
+              <td className="mono" style={{color:wrC(r.wr)}}>{r.wr}</td>
+              <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
+              <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
+            </tr>
+          ))}</tbody>
+          {periodSummary && <tfoot><tr style={{background:'var(--bg3)',borderTop:'2px solid var(--border)'}}>
+            <td className="mono" style={{fontWeight:700,color:'var(--text2)',fontSize:10,letterSpacing:'.04em'}}>Σ OKRES</td>
+            <td className="mono" style={{fontWeight:700}}>{periodSummary.n}</td>
+            <td className="mono green" style={{fontWeight:700}}>{periodSummary.w}</td>
+            <td className="mono red" style={{fontWeight:700}}>{periodSummary.l}</td>
+            <td className="mono" style={{fontWeight:700,color:wrC(periodSummary.wr)}}>{periodSummary.wr}</td>
+            <td className="mono" style={{fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</td>
+            <td className="mono" style={{color:pC(periodSummary.tp1)}}>{periodSummary.tp1}</td>
+          </tr></tfoot>}
+        </table></div>
+      </div>}
+      {rows!==null && selectedPairs!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per model</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
           <thead><tr><th>Model</th><th>S</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>

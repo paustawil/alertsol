@@ -3413,15 +3413,26 @@ def api_dashboard_algo(
     """Dane analityczne dla zakładki Analityka Algo.
     period: 7d | 30d | 3m | 6m | 12m
     view:   wariant | per data | per model
-    pairs:  lista par type:variant oddzielona przecinkami (dla view=per data)
+    pairs:  lista par type:variant oddzielona przecinkami
     """
     if period not in _DASHBOARD_PERIOD_DAYS:
         period = "30d"
     days = _DASHBOARD_PERIOD_DAYS[period]
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
 
+    pair_list: list[tuple[str, str]] | None = None
+    if pairs:
+        parsed = []
+        for p in pairs.split(","):
+            p = p.strip()
+            if ":" in p:
+                t, v = p.split(":", 1)
+                if t and v:
+                    parsed.append((t, v))
+        pair_list = parsed or None
+
     if view == "wariant":
-        rows = db.get_algo2_variant_summary(days)
+        rows = db.get_algo2_variant_summary(days, pairs=pair_list)
         def _pct(v):
             if v is None: return None
             return round(float(v) / trade_usdt * 100, 1)
@@ -3445,16 +3456,6 @@ def api_dashboard_algo(
         ]
 
     if view == "per data":
-        pair_list: list[tuple[str, str]] | None = None
-        if pairs:
-            parsed = []
-            for p in pairs.split(","):
-                p = p.strip()
-                if ":" in p:
-                    t, v = p.split(":", 1)
-                    if t and v:
-                        parsed.append((t, v))
-            pair_list = parsed or None
         rows = db.get_algo2_daily_stats(days, pairs=pair_list)
         return [
             {
