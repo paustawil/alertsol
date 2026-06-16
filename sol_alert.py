@@ -1966,7 +1966,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float, 
         return
     setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
 
-    if replaced_setup:
+    if replaced_setup and not shadow:
         try:
             di = "📉" if direction == "short" else "📈"
             tp1 = tps[0] if len(tps) > 0 else None
@@ -2149,31 +2149,31 @@ def check_pending(candles_m15: list[dict]):
                         print(f"[pending] {s['model']} {d}: nie weszlo")
                         db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
                         _calc_hypo_result(s, candles_m15)
-                        try:
-                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                            shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
-                            send_telegram(
-                                f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}{shd_txt}\n"
-                                f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
-                                f"W1: ${w1:.2f} | SL: ${sl:.2f}"
-                            )
-                        except Exception:
-                            pass
+                        if not s.get("shadow"):
+                            try:
+                                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                                send_telegram(
+                                    f"⏳ <b>Nie weszło</b> [{s['model']}]{sid_txt}\n"
+                                    f"Setup {s['type']} {d.upper()} wygasł bez entry\n"
+                                    f"W1: ${w1:.2f} | SL: ${sl:.2f}"
+                                )
+                            except Exception:
+                                pass
                     else:
                         still_pending.append(s)
                     continue
             s["entry_hit_at"] = hit
-            try:
-                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
-                send_telegram(
-                    f"✅ <b>ENTRY HIT</b> [{s['model']}]{sid_txt}{shd_txt}\n"
-                    f"Setup {s['type']} {d.upper()} aktywowany!\n"
-                    f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
-                    f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
-                )
-            except Exception:
-                pass
+            if not s.get("shadow"):
+                try:
+                    sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                    send_telegram(
+                        f"✅ <b>ENTRY HIT</b> [{s['model']}]{sid_txt}\n"
+                        f"Setup {s['type']} {d.upper()} aktywowany!\n"
+                        f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
+                        f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
+                    )
+                except Exception:
+                    pass
 
         result, move  = None, 0.0
         exit_ts       = None
@@ -2207,35 +2207,35 @@ def check_pending(candles_m15: list[dict]):
                 # Bez TP2 — cała pozycja zamykana na TP1
                 if not tp2:
                     result, exit_ts = "TP1", c["time"]
-                    try:
-                        sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                        shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
-                        send_telegram(
-                            f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}{shd_txt}\n"
-                            f"Setup {s['type']} {d.upper()}\n"
-                            f"TP1: ${tp1:.2f} osiągnięty ✅\n"
-                            f"Pozycja zamknięta na TP1."
-                        )
-                    except Exception:
-                        pass
+                    if not s.get("shadow"):
+                        try:
+                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                            send_telegram(
+                                f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}\n"
+                                f"Setup {s['type']} {d.upper()}\n"
+                                f"TP1: ${tp1:.2f} osiągnięty ✅\n"
+                                f"Pozycja zamknięta na TP1."
+                            )
+                        except Exception:
+                            pass
                     break
                 # Z TP2 — przestaw SL i kontynuuj monitorowanie
                 if sl_after_tp1 is not None and not s.get("sl_adjusted"):
                     effective_sl   = sl_after_tp1
                     s["sl_adjusted"] = True
-                    try:
-                        be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
-                        sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-                        shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
-                        send_telegram(
-                            f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}{shd_txt}\n"
-                            f"Setup {s['type']} {d.upper()}\n"
-                            f"TP1: ${tp1:.2f} osiągnięty ✅\n"
-                            f"<b>Przesuń SL na: ${sl_after_tp1:.2f}</b>  ({be_label})\n"
-                            f"Cel: TP2 ${tp2:.2f}"
-                        )
-                    except Exception:
-                        pass
+                    if not s.get("shadow"):
+                        try:
+                            be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
+                            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                            send_telegram(
+                                f"📌 <b>TP1 HIT</b> [{s['model']}]{sid_txt}\n"
+                                f"Setup {s['type']} {d.upper()}\n"
+                                f"TP1: ${tp1:.2f} osiągnięty ✅\n"
+                                f"<b>Przesuń SL na: ${sl_after_tp1:.2f}</b>  ({be_label})\n"
+                                f"Cel: TP2 ${tp2:.2f}"
+                            )
+                        except Exception:
+                            pass
                 continue
 
             if sl_hit:
@@ -2281,16 +2281,16 @@ def check_pending(candles_m15: list[dict]):
             print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
             db.resolve_setup(s["setup_id"], result, eff_entry, eff_exit, move, exit_ts)
             icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
-            sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
-            shd_txt = " <i>[shadow]</i>" if s.get("shadow") else ""
-            try:
-                send_telegram(
-                    f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}{shd_txt}\n"
-                    f"Setup {s['type']} {d.upper()} zamknięty\n"
-                    f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
-                )
-            except Exception:
-                pass
+            if not s.get("shadow"):
+                sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
+                try:
+                    send_telegram(
+                        f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}\n"
+                        f"Setup {s['type']} {d.upper()} zamknięty\n"
+                        f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
+                    )
+                except Exception:
+                    pass
         # elif not s.get("shadow") and age_h > TRADE_TIMEOUT_H:
         #     db.resolve_setup(s["setup_id"], "nieokreslone", s.get("avg_entry"), None, None, None)
         else:
@@ -2382,17 +2382,18 @@ def check_stale_setups(regime: dict, current_price: float):
             di = "📉" if d == "short" else "📈"
             tp1 = s["tps"][0] if s.get("tps") else None
             is_shadow = s.get("shadow", False)
-            try:
-                send_telegram(
-                    f"🚫 <b>Setup #{sid} anulowany</b>" + (" <i>[shadow]</i>" if is_shadow else "") + "\n"
-                    f"{di} {d.upper()}"
-                    + (f" | W1: ${w1:.2f}" if w1 else "")
-                    + (f" | TP1: ${tp1:.2f}" if tp1 else "") + "\n"
-                    f"<i>{reason}</i>\n"
-                    f"Cena: ${current_price:.2f}"
-                )
-            except Exception:
-                pass
+            if not is_shadow:
+                try:
+                    send_telegram(
+                        f"🚫 <b>Setup #{sid} anulowany</b>\n"
+                        f"{di} {d.upper()}"
+                        + (f" | W1: ${w1:.2f}" if w1 else "")
+                        + (f" | TP1: ${tp1:.2f}" if tp1 else "") + "\n"
+                        f"<i>{reason}</i>\n"
+                        f"Cena: ${current_price:.2f}"
+                    )
+                except Exception:
+                    pass
 
     if cancelled:
         print(f"[stale] Anulowano {cancelled} setupów.")
@@ -2423,17 +2424,18 @@ def _handle_open_invalidation(setup: dict, reason: str, action: str, current_pri
                         cancel_reason=reason,
                         cancel_time=now_iso,
                         cancel_price=round(current_price, 2))
-        try:
-            send_telegram(
-                f"⚠️ <b>Open setup #{setup_id} — BE</b>\n"
-                f"{di} {direction.upper()}"
-                + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
-                f"SL przesunięty → ${new_sl:.2f}\n"
-                f"<i>{reason}</i>\n"
-                f"Cena: ${current_price:.2f}"
-            )
-        except Exception:
-            pass
+        if not setup.get("shadow"):
+            try:
+                send_telegram(
+                    f"⚠️ <b>Open setup #{setup_id} — BE</b>\n"
+                    f"{di} {direction.upper()}"
+                    + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
+                    f"SL przesunięty → ${new_sl:.2f}\n"
+                    f"<i>{reason}</i>\n"
+                    f"Cena: ${current_price:.2f}"
+                )
+            except Exception:
+                pass
 
     elif action == "close":
         print(f"[open_inval] #{setup_id}: zamknięcie pozycji | {reason}")
@@ -2455,16 +2457,17 @@ def _handle_open_invalidation(setup: dict, reason: str, action: str, current_pri
                          int(time.time() * 1000))
 
         pnl_str = f"{move:+.2f} USD" if move is not None else "n/d"
-        try:
-            send_telegram(
-                f"🛑 <b>Open setup #{setup_id} zamknięty — inwalidacja</b>\n"
-                f"{di} {direction.upper()}"
-                + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
-                f"<i>{reason}</i>\n"
-                f"Cena zamknięcia: ${current_price:.2f} | P&L: {pnl_str}"
-            )
-        except Exception:
-            pass
+        if not setup.get("shadow"):
+            try:
+                send_telegram(
+                    f"🛑 <b>Open setup #{setup_id} zamknięty — inwalidacja</b>\n"
+                    f"{di} {direction.upper()}"
+                    + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
+                    f"<i>{reason}</i>\n"
+                    f"Cena zamknięcia: ${current_price:.2f} | P&L: {pnl_str}"
+                )
+            except Exception:
+                pass
 
 
 def check_open_setups_invalidation(regime: dict, current_price: float) -> None:
@@ -2663,18 +2666,6 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
             if s.get("setup_id"):
                 if shadow_s:
                     print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
-                    try:
-                        tps = s.get("tps", [])
-                        send_telegram(
-                            f"👁 <b>[Shadow] #{s['setup_id']}</b> {s['type']} {s['direction'].upper()}\n"
-                            f"W1: ${s['entries'][0]:.2f} | SL: ${s['sl']:.2f}"
-                            + (f" | TP1: ${tps[0]:.2f}" if len(tps) > 0 else "")
-                            + (f" | TP2: ${tps[1]:.2f}" if len(tps) > 1 else "")
-                            + f" | RR: {s['rr']}"
-                            + (f"\n<i>{s.get('variant', '')}</i>" if s.get('variant') else "")
-                        )
-                    except Exception:
-                        pass
                 else:
                     print(f"[algo2] Real order: {s['type']} #{s['setup_id']} RR={s['rr']}")
                     try:
@@ -2740,11 +2731,7 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     is_shadow = ALGO2_SHADOW_MODE and not _is_type_bitget_enabled(best.get("type", ""), best.get("variant"))
     save_pending(best, "Algo2", "", current, shadow=is_shadow)
     if best.get("setup_id"):
-        if is_shadow:
-            send_telegram(f"👁 <b>[Algo2-shadow]</b> {best['type']} {best['direction'].upper()}"
-                          f" | W=${best['entries'][0]:.2f} SL=${best['sl']:.2f}"
-                          f" TP1=${best['tps'][0]:.2f} RR={best['rr']}")
-        else:
+        if not is_shadow:
             send_telegram(format_alert("Algo2", best, current, True))
         if val_result and not is_shadow:
             db.update_setup(best["setup_id"], llm_scores={
