@@ -2370,12 +2370,19 @@ def api_market_status():
 
 
 def _get_last_scans() -> dict:
-    """Zwraca feedback z ostatniego uruchomienia Algo2 i Grok (z sol_alert._last_feedback)."""
+    """Zwraca feedback z ostatniego uruchomienia Algo2 i Grok (z sol_alert._last_feedback).
+    Fallback do DB gdy in-memory jest puste (np. po restarcie serwisu)."""
     try:
         import sol_alert as sa
-        return dict(sa._last_feedback)
+        scans = dict(sa._last_feedback)
+        if scans:
+            return scans
     except Exception as e:
-        log.warning(f"[market-status] last_scans: {e}")
+        log.warning(f"[market-status] last_scans in-memory: {e}")
+    try:
+        return db.get_algo_scans()
+    except Exception as e:
+        log.warning(f"[market-status] last_scans db fallback: {e}")
         return {}
 
 
@@ -3467,6 +3474,7 @@ def api_dashboard_setups():
             "exchange_tp1_done":        s.get("exchange_tp1_done", False),
             "entry_hit_at":             s.get("entry_hit_at") is not None,
             "tp1_hit_at":               s.get("tp1_hit_at")   is not None,
+            "shadow":                   s.get("shadow", False),
         })
     return result
 

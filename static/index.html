@@ -211,6 +211,7 @@ const normalizeSetup = (s) => {
   else if (s.entry_hit_at) status = 'pozycja';
   return {
     id: s.id, model: s.model, kier: s.kier, typ: s.typ, variant: s.variant||'', status,
+    shadow: s.shadow || false,
     w:   entries.length > 0 ? entries.map(e=>Number(e).toFixed(2)).join(' / ') : (s.w ?? '—'),
     tp1: tps[0] != null ? Number(tps[0]).toFixed(2) : '—',
     tp2: tps[1] != null ? Number(tps[1]).toFixed(2) : '—',
@@ -386,7 +387,9 @@ function BudgetBar() {
 /* ── Desktop: ViewDashboard ── */
 function ViewDashboard() {
   const {setups, market} = useDash();
-  const algo2 = (market && market.last_scans && market.last_scans['Algo2']) || null;
+  const liveSetups = setups.filter(s => !s.shadow);
+  const lastScans = (market && market.last_scans) || {};
+  const algo2 = lastScans['Algo2'] || null;
   return (
     <>
       <BudgetBar/>
@@ -401,21 +404,21 @@ function ViewDashboard() {
         </div>
         <div className="panel-body chart-wrap-d"><Chart height={340}/></div>
       </div>
-      {algo2 && algo2.text && (
-        <div className="panel" style={{flexShrink:0}}>
+      {Object.entries(lastScans).filter(([,v])=>v&&v.text).map(([name,scan])=>(
+        <div key={name} className="panel" style={{flexShrink:0}}>
           <div className="panel-head" style={{padding:'5px 14px'}}>
-            <span className="panel-title">Bieżąca analiza Algo2</span>
-            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{String(algo2.time||'').replace('T',' ').slice(0,16)}</span>
+            <span className="panel-title">Analiza {name}</span>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{String(scan.time||'').replace('T',' ').slice(0,16)}</span>
           </div>
-          <div style={{padding:'8px 14px',fontFamily:'var(--mono)',fontSize:10,color:'var(--text2)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>{algo2.text}</div>
+          <div style={{padding:'8px 14px',fontFamily:'var(--mono)',fontSize:10,color:'var(--text2)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>{scan.text}</div>
         </div>
-      )}
+      ))}
       <div className="panel">
-        <div className="panel-head"><span className="panel-title">Aktywne setups</span><span className="panel-badge">{setups.length}</span></div>
+        <div className="panel-head"><span className="panel-title">Aktywne setups (live)</span><span className="panel-badge">{liveSetups.length}</span></div>
         <div className="panel-body">
           <table className="tbl">
             <thead><tr><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TP1</th><th>TP2</th><th>SL</th><th>Akcja</th></tr></thead>
-            <tbody>{setups.map((s,i)=>(
+            <tbody>{liveSetups.map((s,i)=>(
               <tr key={i}>
                 <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
                 <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
@@ -1219,22 +1222,23 @@ function DesktopApp() {
 /* ── Mobile: TabDashboard ── */
 function TabDashboard() {
   const {alert, setups, market} = useDash();
-  const algo2 = (market && market.last_scans && market.last_scans['Algo2']) || null;
+  const liveSetups = setups.filter(s => !s.shadow);
+  const lastScans = (market && market.last_scans) || {};
   return (
     <div>
       <div style={{margin:'8px 12px 4px'}}><BudgetBar/></div>
       <MiniChart/>
-      {algo2 && algo2.text && (
-        <div style={{margin:'6px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px'}}>
+      {Object.entries(lastScans).filter(([,v])=>v&&v.text).map(([name,scan])=>(
+        <div key={name} style={{margin:'6px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
-            <span style={{fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)'}}>Analiza Algo2</span>
-            <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)'}}>{String(algo2.time||'').replace('T',' ').slice(0,16)}</span>
+            <span style={{fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)'}}>Analiza {name}</span>
+            <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)'}}>{String(scan.time||'').replace('T',' ').slice(0,16)}</span>
           </div>
-          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text2)',lineHeight:1.5,whiteSpace:'pre-wrap'}}>{algo2.text}</div>
+          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text2)',lineHeight:1.5,whiteSpace:'pre-wrap'}}>{scan.text}</div>
         </div>
-      )}
-      <div className="sec-header"><span className="sec-title">Aktywne setups</span><span className="sec-badge">{setups.length}</span></div>
-      {setups.slice(0,3).map((s,i)=>(
+      ))}
+      <div className="sec-header"><span className="sec-title">Aktywne setups (live)</span><span className="sec-badge">{liveSetups.length}</span></div>
+      {liveSetups.slice(0,3).map((s,i)=>(
         <div key={i} className="setup-card">
           <div className="setup-card-top">
             <div className="setup-card-row1">
@@ -1260,7 +1264,7 @@ function TabDashboard() {
         </div>
       ))}
       <div style={{padding:'0 16px 8px',textAlign:'right'}}>
-        <span style={{fontSize:11,color:'var(--blue)',cursor:'pointer',fontFamily:'var(--mono)'}}>→ pokaż wszystkie {setups.length}</span>
+        <span style={{fontSize:11,color:'var(--blue)',cursor:'pointer',fontFamily:'var(--mono)'}}>→ pokaż wszystkie {liveSetups.length}</span>
       </div>
     </div>
   );
@@ -1268,7 +1272,7 @@ function TabDashboard() {
 /* ── Mobile: TabSetups (unified — all statuses) ── */
 function TabSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
-  const [shadowFilter,setShadowFilter]=useState('all');
+  const [shadowFilter,setShadowFilter]=useState('real');
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
