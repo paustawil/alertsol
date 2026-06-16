@@ -2643,6 +2643,11 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         "count": n_total,
         "text":  _clean_log(algo2_log),
     }
+    try:
+        import db as _db
+        _db.save_algo_scans(dict(_last_feedback))
+    except Exception:
+        pass
 
     if not algo2_setups:
         return "no_setups"

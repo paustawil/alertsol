@@ -1750,6 +1750,26 @@ def save_app_settings(data: dict) -> None:
             )
 
 
+def save_algo_scans(scans: dict) -> None:
+    """Persystuje ostatnie wyniki skanów algo do DB (przeżywa restart serwisu)."""
+    try:
+        settings = get_app_settings()
+        settings["_last_algo_scans"] = scans
+        save_app_settings(settings)
+    except Exception as e:
+        log.warning(f"[algo] save_algo_scans błąd: {e}")
+
+
+def get_algo_scans() -> dict:
+    """Zwraca ostatnio zapisane wyniki skanów algo z DB."""
+    try:
+        settings = get_app_settings()
+        return settings.get("_last_algo_scans") or {}
+    except Exception as e:
+        log.warning(f"[algo] get_algo_scans błąd: {e}")
+        return {}
+
+
 def get_weekly_pnl(since_utc: "datetime") -> float:
     """Suma pnl_usd setupów zamkniętych od `since_utc` do teraz."""
     with _conn() as conn:
