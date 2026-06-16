@@ -2284,10 +2284,13 @@ def check_pending(candles_m15: list[dict]):
             if not s.get("shadow"):
                 sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                 try:
+                    equity = exchange_trader.get_account_balance()
+                    equity_txt = f"\nEquity: <b>${equity:.2f}</b>" if equity is not None else ""
                     send_telegram(
                         f"{icon} <b>{result}</b> [{s['model']}]{sid_txt}\n"
                         f"Setup {s['type']} {d.upper()} zamknięty\n"
                         f"Śr. entry: ${eff_entry:.2f} | PnL: {sign}${move:.2f}"
+                        + equity_txt
                     )
                 except Exception:
                     pass
@@ -2459,12 +2462,15 @@ def _handle_open_invalidation(setup: dict, reason: str, action: str, current_pri
         pnl_str = f"{move:+.2f} USD" if move is not None else "n/d"
         if not setup.get("shadow"):
             try:
+                equity = exchange_trader.get_account_balance()
+                equity_txt = f"\nEquity: <b>${equity:.2f}</b>" if equity is not None else ""
                 send_telegram(
                     f"🛑 <b>Open setup #{setup_id} zamknięty — inwalidacja</b>\n"
                     f"{di} {direction.upper()}"
                     + (f" | entry: ${avg_entry:.2f}" if avg_entry else "") + "\n"
                     f"<i>{reason}</i>\n"
                     f"Cena zamknięcia: ${current_price:.2f} | P&L: {pnl_str}"
+                    + equity_txt
                 )
             except Exception:
                 pass
@@ -2512,29 +2518,23 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
     entries = setup.get("entries", [])
     tps     = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
     tps     = [t for t in tps if t is not None]
-    score   = setup.get("total", setup.get("score", 0))
     sl      = setup.get("sl", 0)
     rr      = setup.get("rr", 0)
     d       = setup.get("direction", "")
     dist    = abs(current_price - entries[0]) if entries else 0
     icon    = "📈 Long" if d == "long" else "📉 Short"
     setup_type = setup.get("type", "")
-    entries_txt = "\n".join(f"  W{i+1}: ${e:.2f}" for i, e in enumerate(entries))
-    tps_txt     = "\n".join(f"  TP{i+1}: ${t:.2f}  (+${abs(t - entries[0]):.2f})" for i, t in enumerate(tps)) if entries else "-"
-    reasoning   = setup.get("reasoning", "")
+    reasoning  = setup.get("reasoning", "")
 
-    sl_after_tp1     = setup.get("sl_after_tp1")
-    sl_after_tp1_txt = ""
-    if sl_after_tp1 is not None and entries:
-        be_label = "BE" if abs(sl_after_tp1 - entries[0]) < 0.05 else f"+${abs(sl_after_tp1 - entries[0]):.2f}"
-        sl_after_tp1_txt = f"<b>SL po TP1:</b>  ${sl_after_tp1:.2f}  ({be_label})\n"
+    entries_txt = "\n".join(f"W{i+1}: ${e:.2f}" for i, e in enumerate(entries))
+    tps_txt = "\n".join(
+        f"  TP{i+1}: ${t:.2f}  (+{abs(t - entries[0]) / entries[0] * 100:.1f}%)" if entries and entries[0] else f"  TP{i+1}: ${t:.2f}"
+        for i, t in enumerate(tps)
+    ) if tps else "-"
 
     sid_txt = f" #{setup.get('setup_id')}" if setup.get("setup_id") else ""
-
-    # Typ setupu + skrócona diagnostyka (dla Algo2)
     type_line = f"<b>Typ:</b> {setup_type}\n" if setup_type else ""
 
-    # Wyciągnij kluczowe linie z loga (swing, consol, reżim) do Telegrama
     diag_lines = []
     if reasoning:
         for line in reasoning.split("\n"):
@@ -2543,18 +2543,19 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
                 diag_lines.append(line)
     diag_txt = "\n".join(diag_lines) if diag_lines else ""
 
+    trade_notional = round((setup.get("trade_usdt") or TRADE_USDT) * LEVERAGE)
+
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
         f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n\n"
         + type_line
         + (f"<pre>{diag_txt}</pre>\n" if diag_txt else "")
         + f"\nCena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejścia)\n\n"
-        f"<b>Ustaw zlecenia:</b>\n{entries_txt}\n\n"
+        + f"{entries_txt}\n"
         f"<b>SL:</b>  ${sl:.2f}\n"
-        + sl_after_tp1_txt
-        + f"\n<b>Cele:</b>\n{tps_txt}\n\n"
-        f"<b>RR:</b>  {rr:.1f}:1\n"
-        + f"\n⚠️ <i>Decyzja nalezy do Ciebie.</i>"
+        + f"\n{tps_txt}\n\n"
+        f"<b>RR:</b>  {rr:.1f}:1\n\n"
+        f"Składam zlecenie o wartości: <b>${trade_notional}</b>"
     )
 
 
