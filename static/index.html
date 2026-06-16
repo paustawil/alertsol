@@ -413,6 +413,12 @@ function ViewDashboard() {
           <div style={{padding:'8px 14px',fontFamily:'var(--mono)',fontSize:10,color:'var(--text2)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>{scan.text}</div>
         </div>
       ))}
+      {Object.keys(lastScans).length===0&&(
+        <div className="panel" style={{flexShrink:0}}>
+          <div className="panel-head" style={{padding:'5px 14px'}}><span className="panel-title">Analiza Algo2</span></div>
+          <div style={{padding:'8px 14px',fontFamily:'var(--mono)',fontSize:10,color:'var(--text3)',fontStyle:'italic'}}>Opis pojawi się automatycznie po następnym skanie Algo2.</div>
+        </div>
+      )}
       <div className="panel">
         <div className="panel-head"><span className="panel-title">Aktywne setups (live)</span><span className="panel-badge">{liveSetups.length}</span></div>
         <div className="panel-body">
@@ -1237,6 +1243,12 @@ function TabDashboard() {
           <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text2)',lineHeight:1.5,whiteSpace:'pre-wrap'}}>{scan.text}</div>
         </div>
       ))}
+      {Object.keys(lastScans).length===0&&(
+        <div style={{margin:'6px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px'}}>
+          <span style={{fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)'}}>Analiza Algo2</span>
+          <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text3)',marginTop:4,fontStyle:'italic'}}>Opis pojawi się po następnym skanie Algo2.</div>
+        </div>
+      )}
       <div className="sec-header"><span className="sec-title">Aktywne setups (live)</span><span className="sec-badge">{liveSetups.length}</span></div>
       {liveSetups.slice(0,3).map((s,i)=>(
         <div key={i} className="setup-card">
@@ -1272,21 +1284,36 @@ function TabDashboard() {
 /* ── Mobile: TabSetups (unified — all statuses) ── */
 function TabSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
-  const [shadowFilter,setShadowFilter]=useState('real');
+  const [shadowFilter,setShadowFilter]=useState('all');
+  const [settingsFilter,setSettingsFilter]=useState(null); // null = ładowanie
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  // Załaduj enabled types z ustawień — tak samo jak desktop ViewSetups
   useEffect(()=>{
+    fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
+      const cfg=d.type_configs||{};
+      const enabledKeys=Object.entries(cfg).filter(([,v])=>v.enabled===true).map(([k])=>k);
+      if(enabledKeys.length===0){setSettingsFilter({types:[],variants:[]});return;}
+      const types=[...new Set(enabledKeys.map(k=>k.split('__')[0]))];
+      const variants=[...new Set(enabledKeys.map(k=>k.split('__')[1]))];
+      setSettingsFilter({types,variants});
+    }).catch(()=>setSettingsFilter({types:[],variants:[]}));
+  },[]);
+  useEffect(()=>{
+    if(settingsFilter===null) return; // czekaj na settings
     setRows(null);
     const p=new URLSearchParams({limit:100,shadow_filter:shadowFilter});
     if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
+    if(settingsFilter.types.length>0) p.set('types',settingsFilter.types.join(','));
+    if(settingsFilter.variants.length>0) p.set('variants',settingsFilter.variants.join(','));
     const d=new Date();d.setDate(d.getDate()-30);
     p.set('date_from',d.toISOString().split('T')[0]);
     fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
-  },[statusFilters,shadowFilter]);
+  },[statusFilters,shadowFilter,settingsFilter]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
