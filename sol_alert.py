@@ -2167,7 +2167,7 @@ def check_pending(candles_m15: list[dict]):
                 try:
                     sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                     send_telegram(
-                        f"✅ <b>ENTRY HIT</b> [{s['model']}]{sid_txt}\n"
+                        f"🔔 <b>ENTRY HIT</b> [{s['model']}]{sid_txt}\n"
                         f"Setup {s['type']} {d.upper()} aktywowany!\n"
                         f"W1: ${w1:.2f} | SL: ${sl:.2f} | "
                         f"TP1: ${tp1:.2f}" + (f" | TP2: ${tp2:.2f}" if tp2 else "")
