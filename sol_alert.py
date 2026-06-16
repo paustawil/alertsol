@@ -2547,14 +2547,14 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
 
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
-        f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n\n"
+        f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n"
         + type_line
         + (f"<pre>{diag_txt}</pre>\n" if diag_txt else "")
-        + f"\nCena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejścia)\n\n"
+        + f"Cena teraz: <b>${current_price:.2f}</b>  (~${dist:.2f} do wejścia)\n"
         + f"{entries_txt}\n"
         f"<b>SL:</b>  ${sl:.2f}\n"
-        + f"\n{tps_txt}\n\n"
-        f"<b>RR:</b>  {rr:.1f}:1\n\n"
+        + f"{tps_txt}\n"
+        f"<b>RR:</b>  {rr:.1f}:1\n"
         f"Składam zlecenie o wartości: <b>${trade_notional}</b>"
     )
 
