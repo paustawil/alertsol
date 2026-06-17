@@ -2543,7 +2543,21 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
                 diag_lines.append(line)
     diag_txt = "\n".join(diag_lines) if diag_lines else ""
 
-    trade_notional = round((setup.get("trade_usdt") or TRADE_USDT) * LEVERAGE)
+    dynamic_usdt = setup.get("trade_usdt") or TRADE_USDT
+    try:
+        balance = exchange_trader.get_account_balance()
+        if balance is not None:
+            committed = db.get_committed_trade_usdt(exclude_setup_id=setup.get("setup_id"))
+            dynamic_usdt = round(max((balance - committed) * 0.95, 1.0), 2)
+    except Exception:
+        pass
+    eff_lev = LEVERAGE
+    try:
+        settings = db.get_app_settings()
+        eff_lev = int(settings.get("leverage") or LEVERAGE)
+    except Exception:
+        pass
+    trade_notional = round(dynamic_usdt * eff_lev)
 
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"

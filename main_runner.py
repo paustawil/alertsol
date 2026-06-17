@@ -200,14 +200,14 @@ async def lifespan(app: FastAPI):
     # Gemini2 — wyłączony: zarchiwizowany detektor, zastąpiony przez Algo2
     # scheduler.add_job(run_gemini2, "interval", hours=1, id="gemini2", ...)
 
-    # Tygodniowy transfer 50% zysku na Spot — wyłączony, do włączenia w przyszłości
-    # scheduler.add_job(
-    #     run_weekly_transfer,
-    #     CronTrigger(day_of_week="fri", hour=8, minute=0, timezone="Europe/Warsaw"),
-    #     id="weekly_transfer",
-    #     max_instances=1,
-    #     coalesce=True,
-    # )
+    # Tygodniowy transfer 50% zysku na Spot — co piątek 8:00 Warsaw
+    scheduler.add_job(
+        run_weekly_transfer,
+        CronTrigger(day_of_week="fri", hour=8, minute=0, timezone="Europe/Warsaw"),
+        id="weekly_transfer",
+        max_instances=1,
+        coalesce=True,
+    )
 
     scheduler.start()
     log.info("Scheduler uruchomiony. exchange: co 15s | sol_alert: co 5min (throttle Algo2: 15min RANGE/TREND, 5min IMPULSE) | grok_shadow: co 5min (throttle: 30min RANGE/TREND, 5min IMPULSE) | sheets: co 5min | kalkulator: co 1h")
@@ -651,7 +651,7 @@ def legacy_dashboard():
     <div id="bi-committed" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#f5a623">—</div>
   </div>
   <div>
-    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Następne zlecenie (25% wolnego)</div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Następne zlecenie (95% wolnego)</div>
     <div id="bi-next" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#80deea">—</div>
   </div>
   <div style="width:1px;background:#333;align-self:stretch;margin:0 4px"></div>
@@ -2451,7 +2451,7 @@ def api_budget_info():
     balance = et.get_account_balance()
     committed = db.get_committed_trade_usdt()
     if balance is not None:
-        next_trade = round(max((balance - committed) * 0.25, 0), 2)
+        next_trade = round(max((balance - committed) * 0.95, 0), 2)
     else:
         next_trade = None
     since_utc = _last_friday_8_warsaw_utc()
