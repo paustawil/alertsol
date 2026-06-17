@@ -266,7 +266,7 @@ def get_account_balance() -> float | None:
         })
         if resp.get("code") == "00000":
             data = resp.get("data") or {}
-            equity = data.get("usdtEquity") or data.get("equity") or data.get("available")
+            equity = data.get("equity") or data.get("usdtEquity") or data.get("available")
             if equity is not None:
                 return float(equity)
     except Exception as e:

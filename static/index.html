@@ -807,11 +807,12 @@ function ViewSetups() {
     const rowTu=r.trade_usdt!=null?parseFloat(r.trade_usdt):tu;
     const qty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(rowTu*20/entry/0.1)*0.1;
     if(!qty||qty<=0) return {tp1:null,tp12:null,sl:null,tp1Pct:null,tp12Pct:null};
+    const margin=qty*entry/20;
     const tp1Pnl=tp1!=null?sign*qty*(tp1-entry):null;
     const tp12Pnl=tp1!=null&&tp2!=null?sign*(qty/2)*(tp1-entry)+sign*(qty/2)*(tp2-entry):tp1Pnl;
     const slPnl=sl!=null?sign*qty*(sl-entry):null;
-    const tp1Pct=tp1Pnl!=null?Math.round(tp1Pnl/rowTu*10000)/100:null;
-    const tp12Pct=tp12Pnl!=null?Math.round(tp12Pnl/rowTu*10000)/100:null;
+    const tp1Pct=tp1Pnl!=null?Math.round(tp1Pnl/margin*10000)/100:null;
+    const tp12Pct=tp12Pnl!=null?Math.round(tp12Pnl/margin*10000)/100:null;
     return {tp1:tp1Pnl,tp12:tp12Pnl,sl:slPnl,tp1Pct,tp12Pct};
   };
   const StatusPill=({sk,sl})=>{
