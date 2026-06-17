@@ -3475,6 +3475,16 @@ def api_dashboard_setups():
             "entry_hit_at":             s.get("entry_hit_at") is not None,
             "tp1_hit_at":               s.get("tp1_hit_at")   is not None,
             "shadow":                   s.get("shadow", False),
+            "avg_entry":                float(s["avg_entry"]) if s.get("avg_entry") is not None else None,
+            "exchange_qty_full":        s.get("exchange_qty_full"),
+            "exchange_qty_half":        s.get("exchange_qty_half"),
+            "exchange_tp1_oid":         s.get("exchange_tp1_oid"),
+            "exchange_tp2_oid":         s.get("exchange_tp2_oid"),
+            "exchange_sl_oid":          s.get("exchange_sl_oid"),
+            "exchange_sl2_oid":         s.get("exchange_sl2_oid"),
+            "exchange_plan_oid":        s.get("exchange_plan_oid"),
+            "exchange_plan2_oid":       s.get("exchange_plan2_oid"),
+            "trade_usdt":               float(s["trade_usdt"]) if s.get("trade_usdt") is not None else None,
         })
     return result
 
