@@ -662,6 +662,76 @@ def _cancel_order(client: BitgetClient, order_id: str, plan_type: str):
         log.warning(f"[exchange] cancel {order_id}: {e}")
 
 
+def _modify_plan_order_size(client: BitgetClient, order_id: str, new_qty: float) -> bool:
+    """Modyfikuje rozmiar istniejącego plan order (przed aktywacją)."""
+    try:
+        resp = client.post("/api/v2/mix/order/modify-plan-order", {
+            "symbol":       SYMBOL,
+            "productType":  PRODUCT_TYPE,
+            "orderId":      order_id,
+            "newSize":      _fmt_qty(new_qty),
+        })
+        if resp.get("code") == "00000":
+            print(f"[exchange] Plan order {order_id} resized → {_fmt_qty(new_qty)} SOL")
+            return True
+        log.warning(f"[exchange] modify plan {order_id}: code={resp.get('code')} msg={resp.get('msg')}")
+        return False
+    except Exception as e:
+        log.warning(f"[exchange] modify plan {order_id}: {e}")
+        return False
+
+
+def _resize_pending_plan_orders(client: BitgetClient, pending: list[dict], account_balance: float | None) -> bool:
+    """Po zamknięciu pozycji: przelicza i aktualizuje rozmiar wszystkich oczekujących plan orderów."""
+    if account_balance is None:
+        return False
+    modified = False
+    for s in pending:
+        if s.get("exchange_done", False) or s.get("shadow", False):
+            continue
+        plan_oid = s.get("exchange_plan_oid")
+        if not plan_oid or plan_oid == "PENDING":
+            continue
+        if s.get("exchange_position_opened", False):
+            continue
+        sid = s.get("setup_id", "?")
+        entries = s.get("entries", [])
+        if not entries:
+            continue
+        w1 = entries[0]
+        committed = db.get_committed_trade_usdt(exclude_setup_id=s.get("setup_id"))
+        new_usdt = round(max(account_balance - committed, 1.0), 2)
+        settings = db.get_app_settings()
+        key = f"{s.get('type', '')}__{ s.get('variant') or 'baseline'}"
+        cfg = (settings.get("type_configs") or {}).get(key, {})
+        eff_lev = int(cfg["leverage"]) if cfg.get("leverage") else int(settings.get("leverage") or LEVERAGE)
+
+        new_full = _round_qty((new_usdt * eff_lev) / w1)
+        new_half = _round_qty(new_full / 2)
+
+        old_half_str = s.get("exchange_qty_half", "0").replace(",", ".")
+        old_half = float(old_half_str) if old_half_str else 0
+        if abs(new_half - old_half) < QTY_STEP:
+            continue
+
+        label = f"#{sid} [{s.get('model','?')}] {s.get('direction','?').upper()}"
+        print(f"[exchange] {label}: resize plan orders {old_half} → {_fmt_qty(new_half)} SOL (trade_usdt {s.get('trade_usdt')} → {new_usdt})")
+
+        ok1 = _modify_plan_order_size(client, plan_oid, new_half)
+        plan2_oid = s.get("exchange_plan2_oid")
+        ok2 = True
+        if plan2_oid:
+            ok2 = _modify_plan_order_size(client, plan2_oid, new_half)
+
+        if ok1 and ok2:
+            s["exchange_qty_full"] = _fmt_qty(new_full)
+            s["exchange_qty_half"] = _fmt_qty(new_half)
+            s["trade_usdt"] = new_usdt
+            db.update_setup(s["setup_id"], trade_usdt=new_usdt)
+            modified = True
+    return modified
+
+
 def _find_preset_tpsl_pair(
     client: BitgetClient,
     hold_side: str,
@@ -947,14 +1017,14 @@ def sync():
 
 
 def _calc_dynamic_trade_usdt(balance: float | None, fallback: float, exclude_setup_id: int | None = None) -> float:
-    """Oblicza kwotę nowego zlecenia: 95% wolnego kapitału (equity - committed_db).
+    """Oblicza kwotę nowego zlecenia: 100% wolnego kapitału (equity - committed_db).
     exclude_setup_id: wyklucza bieżący setup z committed (unika self-counting przed db.update_setup)."""
     if balance is None:
         log.warning("[exchange] dynamic trade_usdt: brak balance z Bitget — fallback na ustawienia")
         return fallback
     committed = db.get_committed_trade_usdt(exclude_setup_id=exclude_setup_id)
-    dynamic = round(max((balance - committed) * 0.95, 1.0), 2)
-    log.info(f"[exchange] dynamic trade_usdt: ({balance:.2f} - {committed:.2f}) × 0.95 = {dynamic:.2f} (wyklucz setup_id={exclude_setup_id})")
+    dynamic = round(max(balance - committed, 1.0), 2)
+    log.info(f"[exchange] dynamic trade_usdt: ({balance:.2f} - {committed:.2f}) × 1.0 = {dynamic:.2f} (wyklucz setup_id={exclude_setup_id})")
     return dynamic
 
 
@@ -1054,7 +1124,7 @@ def _sync_inner():
             if eff_tp_strat:
                 s["tp_strategy"] = eff_tp_strat
 
-            # Dynamiczny budżet: 95% wolnego salda (saldo - zaangażowane)
+            # Dynamiczny budżet: 100% wolnego salda (saldo - zaangażowane)
             # Wyklucz bieżący setup z committed — przed update_setup ma jeszcze domyślne trade_usdt
             eff_usdt = _calc_dynamic_trade_usdt(account_balance, fallback=eff_usdt, exclude_setup_id=s["setup_id"])
             db.update_setup(s["setup_id"], trade_usdt=eff_usdt)
@@ -1387,6 +1457,11 @@ def _sync_inner():
                 modified = True
                 if sid and sid != "?":
                     db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
+
+    # Po zamknięciu pozycji (lub zmianie salda): aktualizuj rozmiar oczekujących plan orderów
+    fresh_balance = get_account_balance()
+    if _resize_pending_plan_orders(client, pending, fresh_balance):
+        modified = True
 
     if modified:
         _save_pending(pending)
