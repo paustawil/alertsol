@@ -1340,7 +1340,8 @@ def get_algo2_variant_summary(period_days: int | None = None, pairs: list[tuple[
                           * 100, 1)                                                        AS tp1_be_rate,
                     ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
-                          * 100, 1)                                                        AS sl_rate
+                          * 100, 1)                                                        AS sl_rate,
+                    ROUND(AVG({_tu}) FILTER (WHERE {trading_filter})::numeric, 2)          AS avg_trade_usdt
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
