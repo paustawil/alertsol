@@ -699,8 +699,7 @@ def _resize_pending_plan_orders(client: BitgetClient, pending: list[dict], accou
         if not entries:
             continue
         w1 = entries[0]
-        committed = db.get_committed_trade_usdt(exclude_setup_id=s.get("setup_id"))
-        new_usdt = round(max(account_balance - committed, 1.0), 2)
+        new_usdt = round(max(account_balance, 1.0), 2)
         settings = db.get_app_settings()
         key = f"{s.get('type', '')}__{ s.get('variant') or 'baseline'}"
         cfg = (settings.get("type_configs") or {}).get(key, {})
@@ -1016,15 +1015,13 @@ def sync():
         _sync_lock.release()
 
 
-def _calc_dynamic_trade_usdt(balance: float | None, fallback: float, exclude_setup_id: int | None = None) -> float:
-    """Oblicza kwotę nowego zlecenia: 100% wolnego kapitału (equity - committed_db).
-    exclude_setup_id: wyklucza bieżący setup z committed (unika self-counting przed db.update_setup)."""
+def _calc_dynamic_trade_usdt(balance: float | None, fallback: float) -> float:
+    """Oblicza kwotę nowego zlecenia: 100% equity."""
     if balance is None:
         log.warning("[exchange] dynamic trade_usdt: brak balance z Bitget — fallback na ustawienia")
         return fallback
-    committed = db.get_committed_trade_usdt(exclude_setup_id=exclude_setup_id)
-    dynamic = round(max(balance - committed, 1.0), 2)
-    log.info(f"[exchange] dynamic trade_usdt: ({balance:.2f} - {committed:.2f}) × 1.0 = {dynamic:.2f} (wyklucz setup_id={exclude_setup_id})")
+    dynamic = round(max(balance, 1.0), 2)
+    log.info(f"[exchange] dynamic trade_usdt: equity={balance:.2f} → {dynamic:.2f}")
     return dynamic
 
 
@@ -1124,9 +1121,8 @@ def _sync_inner():
             if eff_tp_strat:
                 s["tp_strategy"] = eff_tp_strat
 
-            # Dynamiczny budżet: 100% wolnego salda (saldo - zaangażowane)
-            # Wyklucz bieżący setup z committed — przed update_setup ma jeszcze domyślne trade_usdt
-            eff_usdt = _calc_dynamic_trade_usdt(account_balance, fallback=eff_usdt, exclude_setup_id=s["setup_id"])
+            # Dynamiczny budżet: 100% equity
+            eff_usdt = _calc_dynamic_trade_usdt(account_balance, fallback=eff_usdt)
             db.update_setup(s["setup_id"], trade_usdt=eff_usdt)
 
             if "aggressive" in s.get("type", ""):
