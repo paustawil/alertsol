@@ -2543,13 +2543,6 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
                 diag_lines.append(line)
     diag_txt = "\n".join(diag_lines) if diag_lines else ""
 
-    try:
-        balance   = exchange_trader.get_account_balance()
-        committed = db.get_committed_trade_usdt(exclude_setup_id=setup.get("setup_id"))
-        trade_usdt = round(max((balance - committed) * 0.25, 1.0), 2) if balance is not None else TRADE_USDT
-    except Exception:
-        trade_usdt = TRADE_USDT
-
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
         f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n"
@@ -2559,8 +2552,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         + f"{entries_txt}\n"
         f"<b>SL:</b>  ${sl:.2f}\n"
         + f"{tps_txt}\n"
-        f"<b>RR:</b>  {rr:.1f}:1\n"
-        f"Składam zlecenie o wartości: <b>${trade_usdt:.2f}</b>"
+        f"<b>RR:</b>  {rr:.1f}:1"
     )
 
 
