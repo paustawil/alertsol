@@ -209,7 +209,7 @@ def insert_setup(row: dict) -> int | None:
         "entries_hit":     row.get("entries_hit", 1),
         "sl_adjusted":     row.get("sl_adjusted", False),
         "shadow":          row.get("shadow", False),
-        "trade_usdt":      float(os.getenv("BITGET_TRADE_USDT", "100")),
+        "trade_usdt":      row.get("trade_usdt"),
         "variant":         row.get("variant", "baseline"),
         "status":          row.get("status", "pending"),
     }
