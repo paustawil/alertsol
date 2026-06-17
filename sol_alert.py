@@ -2543,8 +2543,6 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
                 diag_lines.append(line)
     diag_txt = "\n".join(diag_lines) if diag_lines else ""
 
-    trade_notional = round((setup.get("trade_usdt") or TRADE_USDT) * LEVERAGE)
-
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
         f"{icon}  |  {datetime.now(TZ).strftime('%d.%m  %H:%M')}\n"
@@ -2554,8 +2552,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         + f"{entries_txt}\n"
         f"<b>SL:</b>  ${sl:.2f}\n"
         + f"{tps_txt}\n"
-        f"<b>RR:</b>  {rr:.1f}:1\n"
-        f"Składam zlecenie o wartości: <b>${trade_notional}</b>"
+        f"<b>RR:</b>  {rr:.1f}:1"
     )
 
 
