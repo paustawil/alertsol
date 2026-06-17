@@ -2549,7 +2549,6 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         trade_usdt = round(max((balance - committed) * 0.25, 1.0), 2) if balance is not None else TRADE_USDT
     except Exception:
         trade_usdt = TRADE_USDT
-    trade_notional = round(trade_usdt * LEVERAGE)
 
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
@@ -2561,7 +2560,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         f"<b>SL:</b>  ${sl:.2f}\n"
         + f"{tps_txt}\n"
         f"<b>RR:</b>  {rr:.1f}:1\n"
-        f"Składam zlecenie o wartości: <b>${trade_notional}</b>"
+        f"Składam zlecenie o wartości: <b>${trade_usdt:.2f}</b>"
     )
 
 
