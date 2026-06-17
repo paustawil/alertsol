@@ -3680,9 +3680,10 @@ def api_dashboard_algo(
 
     if view == "wariant":
         rows = db.get_algo2_variant_summary(days, pairs=pair_list)
-        def _pct(v):
+        def _pct(v, tu):
             if v is None: return None
-            return round(float(v) / trade_usdt * 100, 1)
+            if not tu: return None
+            return round(float(v) / float(tu) * 100, 1)
         def _r(v): return f"{v}%" if v is not None else "—"
         return [
             {
@@ -3696,8 +3697,8 @@ def api_dashboard_algo(
                 "sl_rate":      _r(r.get("sl_rate")),
                 "tp1_pnl":      r.get("total_tp1only_usd"),
                 "tp12_pnl":     r.get("total_pnl_usd"),
-                "avg_pct_tp1":  _pct(r.get("avg_tp1only_usd")),
-                "avg_pct_tp12": _pct(r.get("avg_pnl_usd")),
+                "avg_pct_tp1":  _pct(r.get("avg_tp1only_usd"), r.get("avg_trade_usdt") or trade_usdt),
+                "avg_pct_tp12": _pct(r.get("avg_pnl_usd"), r.get("avg_trade_usdt") or trade_usdt),
             }
             for r in rows
         ]

@@ -2556,7 +2556,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         eff_lev = int(settings.get("leverage") or LEVERAGE)
     except Exception:
         pass
-    trade_notional = round(dynamic_usdt * eff_lev)
+    trade_margin = round(dynamic_usdt, 2)
 
     return (
         f"🎯 <b>SOL/USDT — {model}{sid_txt}</b>\n"
@@ -2568,7 +2568,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         f"<b>SL:</b>  ${sl:.2f}\n"
         + f"{tps_txt}\n"
         f"<b>RR:</b>  {rr:.1f}:1\n"
-        f"Składam zlecenie o wartości: <b>${trade_notional}</b>"
+        f"Składam zlecenie o wartości: <b>${trade_margin}</b>"
     )
 
 

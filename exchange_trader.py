@@ -55,19 +55,19 @@ BASE_URL     = "https://api.bitget.com"
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _get_effective_trade_params(setup_type: str, variant: str | None) -> tuple[float, int, bool, str | None]:
-    """Zwraca (trade_usdt, leverage, enabled, tp_strategy) dla danego type+variant.
+    """Zwraca (trade_usdt_fallback, leverage, enabled, tp_strategy) dla danego type+variant.
+    trade_usdt_fallback używany tylko gdy nie udało się pobrać equity z Bitget.
     tp_strategy=None oznacza 'użyj wartości z setupu (domyślna algorytmu)'."""
     try:
         settings = db.get_app_settings()
-        base_usdt = float(settings.get("trade_usdt") or TRADE_USDT)
+        fallback_usdt = float(settings.get("trade_usdt") or TRADE_USDT)
         base_lev  = int(settings.get("leverage") or LEVERAGE)
         key = f"{setup_type}__{variant or 'baseline'}"
         cfg = (settings.get("type_configs") or {}).get(key, {})
         enabled     = cfg.get("enabled", False)
-        eff_usdt    = float(cfg["trade_usdt"]) if cfg.get("trade_usdt") else base_usdt
         eff_lev     = int(cfg["leverage"])     if cfg.get("leverage")   else base_lev
         tp_strategy = cfg.get("tp_strategy") or None
-        return eff_usdt, eff_lev, bool(enabled), tp_strategy
+        return fallback_usdt, eff_lev, bool(enabled), tp_strategy
     except Exception as e:
         log.warning(f"[exchange] _get_effective_trade_params błąd: {e}")
         return TRADE_USDT, LEVERAGE, True, None
@@ -700,10 +700,7 @@ def _resize_pending_plan_orders(client: BitgetClient, pending: list[dict], accou
             continue
         w1 = entries[0]
         new_usdt = round(max(account_balance, 1.0), 2)
-        settings = db.get_app_settings()
-        key = f"{s.get('type', '')}__{ s.get('variant') or 'baseline'}"
-        cfg = (settings.get("type_configs") or {}).get(key, {})
-        eff_lev = int(cfg["leverage"]) if cfg.get("leverage") else int(settings.get("leverage") or LEVERAGE)
+        _, eff_lev, _, _ = _get_effective_trade_params(s.get("type", ""), s.get("variant"))
 
         new_full = _round_qty((new_usdt * eff_lev) / w1)
         new_half = _round_qty(new_full / 2)
