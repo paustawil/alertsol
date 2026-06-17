@@ -287,6 +287,281 @@ function SetupActions({ setup }) {
     </>
   );
 }
+/* ── ActiveSetupsPanel — rich table with P&L and Bitget verification ── */
+function ActiveSetupsPanel({ mobile = false }) {
+  const { setups, price, refreshSetups } = useDash();
+  const liveSetups = setups.filter(s => !s.shadow);
+  const currentPrice = price ? price.price : null;
+  const [bitgetData, setBitgetData] = useState(null);
+  const [bitgetLoading, setBitgetLoading] = useState(false);
+  const [bitgetError, setBitgetError] = useState(null);
+  const [expanded, setExpanded] = useState(new Set());
+
+  const fetchBitget = () => {
+    setBitgetLoading(true);
+    setBitgetError(null);
+    fetch('/api/bitget-live').then(r => r.ok ? r.json() : null).then(d => {
+      if (d && !d.error) setBitgetData(d);
+      else setBitgetError(d?.error || 'Błąd');
+      setBitgetLoading(false);
+    }).catch(() => { setBitgetError('Brak połączenia'); setBitgetLoading(false); });
+  };
+
+  const toggleExp = (id) => setExpanded(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+
+  const calcLivePnl = (s) => {
+    if (!currentPrice) return null;
+    const raw = s._raw || s;
+    const avgEntry = raw.avg_entry || (raw.entries && raw.entries[0] != null ? Number(raw.entries[0]) : null);
+    if (!avgEntry) return null;
+    const sign = (raw.kier || s.kier || '').toUpperCase() === 'LONG' ? 1 : -1;
+    const qty = raw.exchange_qty_full ? parseFloat(raw.exchange_qty_full) : Math.floor(100 * 20 / avgEntry / 0.1) * 0.1;
+    if (!qty || qty <= 0) return null;
+    return sign * qty * (currentPrice - avgEntry);
+  };
+
+  const calcPotentialPnl = (s) => {
+    const raw = s._raw || s;
+    const entry = raw.avg_entry || (raw.entries && raw.entries[0] != null ? Number(raw.entries[0]) : null);
+    if (!entry) return { tp1: null, sl: null };
+    const tp1 = raw.tps && raw.tps[0] != null ? Number(raw.tps[0]) : null;
+    const sl = raw.sl != null ? Number(raw.sl) : null;
+    const sign = (raw.kier || s.kier || '').toUpperCase() === 'LONG' ? 1 : -1;
+    const tu = raw.trade_usdt || 100;
+    const qty = raw.exchange_qty_full ? parseFloat(raw.exchange_qty_full) : Math.floor(tu * 20 / entry / 0.1) * 0.1;
+    if (!qty || qty <= 0) return { tp1: null, sl: null };
+    return {
+      tp1: tp1 != null ? sign * qty * (tp1 - entry) : null,
+      sl: sl != null ? sign * qty * (sl - entry) : null,
+    };
+  };
+
+  const verifyOrder = (oid, bitget) => {
+    if (!oid) return { status: 'missing', label: 'Brak OID' };
+    if (!bitget) return { status: 'unknown', label: '?' };
+    const tpsl = bitget.tpsl || {};
+    const plans = bitget.plans || {};
+    if (tpsl[oid]) return { status: 'ok', label: 'OK', data: tpsl[oid] };
+    if (plans[oid]) return { status: 'ok', label: 'OK', data: plans[oid] };
+    return { status: 'missing_on_bitget', label: 'Brak na Bitget!' };
+  };
+
+  const vColor = (v) => v.status === 'ok' ? 'var(--green)' : v.status === 'missing' ? 'var(--text3)' : 'var(--red)';
+  const fU = (v) => v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}$`;
+  const pC = (v) => v == null ? 'var(--text3)' : v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
+  const fP = (p) => p == null ? '—' : Number(p).toFixed(2);
+
+  if (liveSetups.length === 0) return null;
+
+  if (mobile) {
+    return (
+      <div style={{margin:'0 12px 8px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0 6px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text2)'}}>Aktywne setupy</span>
+            <span className="sec-badge">{liveSetups.length}</span>
+          </div>
+          <button className="action-btn gray" style={{fontSize:9,padding:'3px 8px'}} onClick={fetchBitget} disabled={bitgetLoading}>
+            {bitgetLoading ? '…' : bitgetData ? '↻ Bitget' : '⚡ Sprawdź Bitget'}
+          </button>
+        </div>
+        {liveSetups.map((s, i) => {
+          const raw = s._raw || s;
+          const isOpen = raw.entry_hit_at || raw.exchange_position_opened;
+          const livePnl = isOpen ? calcLivePnl(s) : null;
+          const pot = calcPotentialPnl(s);
+          const entry = raw.avg_entry || (raw.entries && raw.entries[0] != null ? Number(raw.entries[0]) : null);
+          const tp1 = raw.tps && raw.tps[0] != null ? Number(raw.tps[0]) : null;
+          const tp2 = raw.tps && raw.tps[1] != null ? Number(raw.tps[1]) : null;
+          const sl = raw.sl;
+          const isExp = expanded.has(s.id);
+          const vTP1 = bitgetData ? verifyOrder(raw.exchange_tp1_oid, bitgetData) : null;
+          const vTP2 = bitgetData ? verifyOrder(raw.exchange_tp2_oid, bitgetData) : null;
+          const vSL = bitgetData ? verifyOrder(raw.exchange_sl_oid, bitgetData) : null;
+          const allOk = vTP1 && vSL && vTP1.status === 'ok' && vSL.status === 'ok';
+          const hasIssue = vTP1 && vSL && (vTP1.status === 'missing_on_bitget' || vSL.status === 'missing_on_bitget');
+          return (
+            <div key={i} className="setup-card" onClick={() => toggleExp(s.id)} style={{cursor:'pointer'}}>
+              <div className="setup-card-top">
+                <div className="setup-card-row1">
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span className="setup-id">{s.id}</span>
+                    <span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span>
+                    {bitgetData && <span style={{fontSize:9,fontFamily:'var(--mono)',color:hasIssue?'var(--red)':allOk?'var(--green)':'var(--text3)'}}>{hasIssue?'⚠':'✓'}</span>}
+                  </div>
+                  <div style={{textAlign:'right'}}>
+                    {isOpen && livePnl != null
+                      ? <div style={{fontFamily:'var(--mono)',fontSize:16,fontWeight:700,color:pC(livePnl)}}>{fU(livePnl)}</div>
+                      : <div style={{fontFamily:'var(--mono)',fontSize:13,color:'var(--text3)',fontStyle:'italic'}}>{pot.tp1 != null ? fU(pot.tp1) : '—'}<span style={{fontSize:9,marginLeft:2}}>pot.</span></div>
+                    }
+                    {isOpen && livePnl != null && <div style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)'}}>live</div>}
+                  </div>
+                </div>
+                <div className="setup-typ">{s.typ}{s.variant && <span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span>}</div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',padding:'8px 12px',gap:0}}>
+                <div className="setup-stat"><div className="setup-stat-val" style={{fontSize:11}}>{fP(entry)}</div><div className="setup-stat-lbl">Wejście</div></div>
+                <div className="setup-stat"><div className="setup-stat-val" style={{fontSize:11,color:'var(--green)'}}>{fP(tp1)}</div><div className="setup-stat-lbl">TP1</div></div>
+                <div className="setup-stat"><div className="setup-stat-val" style={{fontSize:11,color:'var(--green)',opacity:.7}}>{tp2 != null ? fP(tp2) : '—'}</div><div className="setup-stat-lbl">TP2</div></div>
+                <div className="setup-stat" style={{borderRight:'none'}}><div className="setup-stat-val red" style={{fontSize:11}}>{fP(sl)}</div><div className="setup-stat-lbl">SL</div></div>
+              </div>
+              {isExp && <div style={{padding:'6px 12px 10px',borderTop:'1px solid var(--border)',fontSize:10,fontFamily:'var(--mono)',color:'var(--text2)'}}>
+                <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:4}}>
+                  <span style={{color:'var(--text3)'}}>Model: <span style={{color:'var(--text2)'}}>{raw.model||s.model}</span></span>
+                  {raw.rr && <span style={{color:'var(--text3)'}}>RR: <span style={{color:'var(--text2)'}}>1:{Number(raw.rr).toFixed(1)}</span></span>}
+                  {raw.score && <span style={{color:'var(--text3)'}}>Score: <span style={{color:'var(--text2)'}}>{Number(raw.score).toFixed(1)}</span></span>}
+                  {raw.exchange_qty_full && <span style={{color:'var(--text3)'}}>Qty: <span style={{color:'var(--text2)'}}>{raw.exchange_qty_full} SOL</span></span>}
+                </div>
+                {pot.sl != null && <div style={{marginBottom:4}}>
+                  <span style={{color:'var(--text3)'}}>Ryzyko SL: </span>
+                  <span style={{color:'var(--red)'}}>{fU(pot.sl)}</span>
+                  {pot.tp1 != null && <><span style={{color:'var(--text3)',marginLeft:8}}>Potencjał TP1: </span><span style={{color:'var(--green)'}}>{fU(pot.tp1)}</span></>}
+                </div>}
+                {bitgetData && <div style={{marginTop:4,padding:'4px 0',borderTop:'1px solid var(--border)'}}>
+                  <div style={{fontWeight:600,color:'var(--text3)',fontSize:9,marginBottom:3,textTransform:'uppercase',letterSpacing:'.06em'}}>Weryfikacja Bitget</div>
+                  <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                    {raw.exchange_tp1_oid && <span>TP1: <span style={{color:vColor(vTP1)}}>{vTP1.label}</span>
+                      {vTP1.data && <span style={{color:'var(--text3)'}}> @{vTP1.data.triggerPrice} qty:{vTP1.data.size}</span>}
+                    </span>}
+                    {raw.exchange_tp2_oid && <span>TP2: <span style={{color:vColor(vTP2)}}>{vTP2.label}</span>
+                      {vTP2.data && <span style={{color:'var(--text3)'}}> @{vTP2.data.triggerPrice} qty:{vTP2.data.size}</span>}
+                    </span>}
+                    {raw.exchange_sl_oid && <span>SL: <span style={{color:vColor(vSL)}}>{vSL.label}</span>
+                      {vSL.data && <span style={{color:'var(--text3)'}}> @{vSL.data.triggerPrice} qty:{vSL.data.size}</span>}
+                    </span>}
+                    {!raw.exchange_tp1_oid && !raw.exchange_sl_oid && <span style={{color:'var(--text3)',fontStyle:'italic'}}>Brak zleceń na Bitget</span>}
+                  </div>
+                  {/* Compare trigger prices with our levels */}
+                  {vTP1 && vTP1.data && tp1 != null && Math.abs(Number(vTP1.data.triggerPrice) - tp1) > 0.01 &&
+                    <div style={{color:'var(--amber)',marginTop:2}}>⚠ TP1 Bitget ({vTP1.data.triggerPrice}) ≠ nasz ({fP(tp1)})</div>}
+                  {vSL && vSL.data && sl != null && Math.abs(Number(vSL.data.triggerPrice) - sl) > 0.01 &&
+                    <div style={{color:'var(--amber)',marginTop:2}}>⚠ SL Bitget ({vSL.data.triggerPrice}) ≠ nasz ({fP(sl)})</div>}
+                </div>}
+                <div style={{marginTop:6,display:'flex',gap:4}}>
+                  <SetupActions setup={s}/>
+                </div>
+              </div>}
+            </div>
+          );
+        })}
+        {bitgetError && <div style={{padding:'6px 12px',fontSize:10,color:'var(--red)',fontFamily:'var(--mono)'}}>{bitgetError}</div>}
+      </div>
+    );
+  }
+
+  /* Desktop */
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <span className="panel-title">Aktywne setupy</span>
+        <div className="panel-right">
+          <span className="panel-badge">{liveSetups.length}</span>
+          <button className="action-btn gray" style={{fontSize:9,padding:'3px 10px'}} onClick={fetchBitget} disabled={bitgetLoading}>
+            {bitgetLoading ? '…' : bitgetData ? '↻ Odśwież Bitget' : '⚡ Sprawdź Bitget'}
+          </button>
+        </div>
+      </div>
+      <div className="panel-body">
+        <table className="tbl">
+          <thead><tr>
+            <th>ID</th><th>Kierunek</th><th>Typ</th><th>Wejście</th><th>TP1</th><th>TP2</th><th>SL</th><th>RR</th>
+            <th>P&L</th>
+            {bitgetData && <th>Bitget</th>}
+            <th>Akcja</th>
+          </tr></thead>
+          <tbody>{liveSetups.map((s, i) => {
+            const raw = s._raw || s;
+            const isOpen = raw.entry_hit_at || raw.exchange_position_opened;
+            const livePnl = isOpen ? calcLivePnl(s) : null;
+            const pot = calcPotentialPnl(s);
+            const entry = raw.avg_entry || (raw.entries && raw.entries[0] != null ? Number(raw.entries[0]) : null);
+            const tp1 = raw.tps && raw.tps[0] != null ? Number(raw.tps[0]) : null;
+            const tp2 = raw.tps && raw.tps[1] != null ? Number(raw.tps[1]) : null;
+            const sl = raw.sl;
+            const isExp = expanded.has(s.id);
+            const vTP1 = bitgetData ? verifyOrder(raw.exchange_tp1_oid, bitgetData) : null;
+            const vTP2 = bitgetData ? verifyOrder(raw.exchange_tp2_oid, bitgetData) : null;
+            const vSL = bitgetData ? verifyOrder(raw.exchange_sl_oid, bitgetData) : null;
+            const allOk = vTP1 && vSL && vTP1.status === 'ok' && vSL.status === 'ok';
+            const hasIssue = (vTP1 && vTP1.status === 'missing_on_bitget') || (vSL && vSL.status === 'missing_on_bitget');
+            return <React.Fragment key={i}>
+              <tr onClick={() => toggleExp(s.id)} style={{cursor:'pointer'}}>
+                <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
+                <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
+                <td style={{color:'var(--text2)',fontSize:11,maxWidth:180}}>
+                  {s.typ}
+                  {s.variant && <div style={{color:'var(--text3)',fontSize:10}}>{s.variant}</div>}
+                  <div style={{color:'var(--text3)',fontSize:9}}>{raw.model || s.model}</div>
+                </td>
+                <td className="mono" style={{fontSize:11}}>{fP(entry)}</td>
+                <td className="mono" style={{fontSize:11,color:'var(--green)'}}>{fP(tp1)}</td>
+                <td className="mono" style={{fontSize:11,color:'var(--green)',opacity:.7}}>{tp2 != null ? fP(tp2) : '—'}</td>
+                <td className="mono" style={{fontSize:11,color:'var(--red)'}}>{fP(sl)}</td>
+                <td className="mono" style={{fontSize:11,color:'var(--text3)'}}>{raw.rr ? `1:${Number(raw.rr).toFixed(1)}` : '—'}</td>
+                <td className="mono" style={{minWidth:80}}>
+                  {isOpen && livePnl != null
+                    ? <><span style={{color:pC(livePnl),fontWeight:700,fontSize:13}}>{fU(livePnl)}</span><span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>live</span>
+                        <br/><span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{pot.tp1 != null ? fU(pot.tp1) : '—'} pot.</span></>
+                    : <><span style={{color:'var(--text3)',fontStyle:'italic'}}>{pot.tp1 != null ? fU(pot.tp1) : '—'}</span>
+                        <span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>pot.</span>
+                        {pot.sl != null && <><br/><span style={{fontSize:9,color:'#ff6b6b88'}}>{fU(pot.sl)} risk</span></>}</>
+                  }
+                </td>
+                {bitgetData && <td style={{fontSize:10,fontFamily:'var(--mono)'}}>
+                  {hasIssue
+                    ? <span style={{color:'var(--red)',fontWeight:600}}>⚠ Problem</span>
+                    : allOk
+                      ? <span style={{color:'var(--green)'}}>✓ OK</span>
+                      : <span style={{color:'var(--text3)'}}>—</span>}
+                </td>}
+                <td onClick={e => e.stopPropagation()}><SetupActions setup={s}/></td>
+              </tr>
+              {isExp && <tr>
+                <td colSpan={bitgetData ? 11 : 10} style={{background:'var(--bg2)',padding:'8px 14px',borderTop:'none'}}>
+                  <div style={{display:'flex',gap:16,fontSize:10,color:'var(--text2)',fontFamily:'var(--mono)',flexWrap:'wrap',alignItems:'center',marginBottom:bitgetData?6:0}}>
+                    <span style={{color:'var(--text3)'}}>#{s.id}</span>
+                    <span><span style={{color:'var(--text3)'}}>Status:&nbsp;</span><span className={`status-pill ${s.status==='pozycja'?'pozycja':s.status==='po_tp1'?'po_tp1':'czeka'}`}><span className="status-dot"></span>{s.status}</span></span>
+                    {raw.score && <span><span style={{color:'var(--text3)'}}>Score:&nbsp;</span>{Number(raw.score).toFixed(1)}</span>}
+                    {raw.exchange_qty_full && <span><span style={{color:'var(--text3)'}}>Qty:&nbsp;</span>{raw.exchange_qty_full} SOL</span>}
+                    {raw.alert_time && <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{raw.alert_time}</span>}
+                    {pot.sl != null && <span><span style={{color:'var(--text3)'}}>Ryzyko SL:&nbsp;</span><span style={{color:'var(--red)'}}>{fU(pot.sl)}</span></span>}
+                    {pot.tp1 != null && <span><span style={{color:'var(--text3)'}}>Potencjał TP1:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.tp1)}</span></span>}
+                  </div>
+                  {bitgetData && <div style={{padding:'6px 0 2px',borderTop:'1px solid var(--border)'}}>
+                    <div style={{fontWeight:600,color:'var(--text3)',fontSize:9,marginBottom:4,textTransform:'uppercase',letterSpacing:'.06em'}}>Weryfikacja zleceń Bitget</div>
+                    <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                      {raw.exchange_tp1_oid
+                        ? <span>TP1 <span style={{color:'var(--text3)',fontSize:9}}>[{raw.exchange_tp1_oid.slice(-8)}]</span>: <span style={{color:vColor(vTP1),fontWeight:600}}>{vTP1.label}</span>
+                            {vTP1.data && <span style={{color:'var(--text3)'}}> trigger:{vTP1.data.triggerPrice} qty:{vTP1.data.size}</span>}
+                            {vTP1.data && tp1 != null && Math.abs(Number(vTP1.data.triggerPrice) - tp1) > 0.01 && <span style={{color:'var(--amber)'}}> ⚠ ≠{fP(tp1)}</span>}
+                          </span>
+                        : <span style={{color:'var(--text3)'}}>TP1: brak OID</span>}
+                      {raw.exchange_tp2_oid
+                        ? <span>TP2 <span style={{color:'var(--text3)',fontSize:9}}>[{raw.exchange_tp2_oid.slice(-8)}]</span>: <span style={{color:vColor(vTP2),fontWeight:600}}>{vTP2.label}</span>
+                            {vTP2.data && <span style={{color:'var(--text3)'}}> trigger:{vTP2.data.triggerPrice} qty:{vTP2.data.size}</span>}
+                          </span>
+                        : null}
+                      {raw.exchange_sl_oid
+                        ? <span>SL <span style={{color:'var(--text3)',fontSize:9}}>[{raw.exchange_sl_oid.slice(-8)}]</span>: <span style={{color:vColor(vSL),fontWeight:600}}>{vSL.label}</span>
+                            {vSL.data && <span style={{color:'var(--text3)'}}> trigger:{vSL.data.triggerPrice} qty:{vSL.data.size}</span>}
+                            {vSL.data && sl != null && Math.abs(Number(vSL.data.triggerPrice) - sl) > 0.01 && <span style={{color:'var(--amber)'}}> ⚠ ≠{fP(sl)}</span>}
+                          </span>
+                        : <span style={{color:'var(--text3)'}}>SL: brak OID</span>}
+                      {raw.exchange_plan_oid && <span style={{color:'var(--text3)'}}>Plan: [{raw.exchange_plan_oid.slice(-8)}]</span>}
+                    </div>
+                  </div>}
+                </td>
+              </tr>}
+            </React.Fragment>;
+          })}</tbody>
+        </table>
+      </div>
+      {bitgetError && <div style={{padding:'6px 14px',fontSize:10,color:'var(--red)',fontFamily:'var(--mono)',borderTop:'1px solid var(--border)'}}>{bitgetError}</div>}
+    </div>
+  );
+}
 /* ── TradingView chart (desktop + mobile) ── */
 let _tvLibPromise = null;
 function loadTVLib() {
@@ -386,13 +661,12 @@ function BudgetBar() {
 }
 /* ── Desktop: ViewDashboard ── */
 function ViewDashboard() {
-  const {setups, market} = useDash();
-  const liveSetups = setups.filter(s => !s.shadow);
+  const {market} = useDash();
   const lastScans = (market && market.last_scans) || {};
-  const algo2 = lastScans['Algo2'] || null;
   return (
     <>
       <BudgetBar/>
+      <ActiveSetupsPanel/>
       <div className="panel" style={{minHeight:420,flexShrink:0}}>
         <div className="panel-head">
           <span className="panel-title">Wykres</span>
@@ -419,26 +693,6 @@ function ViewDashboard() {
           <div style={{padding:'8px 14px',fontFamily:'var(--mono)',fontSize:10,color:'var(--text3)',fontStyle:'italic'}}>Opis pojawi się automatycznie po następnym skanie Algo2.</div>
         </div>
       )}
-      <div className="panel">
-        <div className="panel-head"><span className="panel-title">Aktywne setups (live)</span><span className="panel-badge">{liveSetups.length}</span></div>
-        <div className="panel-body">
-          <table className="tbl">
-            <thead><tr><th>ID</th><th>Model</th><th>Kierunek</th><th>Typ</th><th>Status</th><th>W</th><th>TP1</th><th>TP2</th><th>SL</th><th>Akcja</th></tr></thead>
-            <tbody>{liveSetups.map((s,i)=>(
-              <tr key={i}>
-                <td className="mono" style={{color:'var(--text1)',fontWeight:600}}>{s.id}</td>
-                <td style={{color:'var(--text3)',fontSize:11}}>{s.model}</td>
-                <td><span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span></td>
-                <td style={{color:'var(--text2)',fontSize:11,maxWidth:180}}>{s.typ}{s.variant&&<div style={{color:'var(--text3)',fontSize:10}}>{s.variant}</div>}</td>
-                <td><span className={`status-pill ${s.status}`}><span className="status-dot"></span>{s.status}</span></td>
-                <td className="mono dim">{s.w}</td><td className="mono dim">{s.tp1}</td><td className="mono dim">{s.tp2}</td>
-                <td className="mono red">{s.sl}</td>
-                <td><SetupActions setup={s}/></td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
-      </div>
     </>
   );
 }
@@ -1227,12 +1481,12 @@ function DesktopApp() {
 }
 /* ── Mobile: TabDashboard ── */
 function TabDashboard() {
-  const {alert, setups, market} = useDash();
-  const liveSetups = setups.filter(s => !s.shadow);
+  const {market} = useDash();
   const lastScans = (market && market.last_scans) || {};
   return (
     <div>
       <div style={{margin:'8px 12px 4px'}}><BudgetBar/></div>
+      <ActiveSetupsPanel mobile={true}/>
       <MiniChart/>
       {Object.entries(lastScans).filter(([,v])=>v&&v.text).map(([name,scan])=>(
         <div key={name} style={{margin:'6px 12px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px'}}>
@@ -1249,35 +1503,6 @@ function TabDashboard() {
           <div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text3)',marginTop:4,fontStyle:'italic'}}>Opis pojawi się po następnym skanie Algo2.</div>
         </div>
       )}
-      <div className="sec-header"><span className="sec-title">Aktywne setups (live)</span><span className="sec-badge">{liveSetups.length}</span></div>
-      {liveSetups.slice(0,3).map((s,i)=>(
-        <div key={i} className="setup-card">
-          <div className="setup-card-top">
-            <div className="setup-card-row1">
-              <div style={{display:'flex',alignItems:'center',gap:8}}>
-                <span className="setup-id">{s.id}</span>
-                <span className={`kier-badge ${s.kier.toLowerCase()}`}>{s.kier}</span>
-              </div>
-              <span style={{fontSize:10,color:s.status==='short'?'var(--red)':'var(--amber)',fontFamily:'var(--mono)'}}>
-                <span className="status-dot" style={{background:s.status==='short'?'var(--red)':'var(--amber)'}}></span>
-                {s.status}
-              </span>
-            </div>
-            <div className="setup-typ">{s.typ}{s.variant&&<span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span>}</div>
-          </div>
-          <div className="setup-card-bottom">
-            <div className="setup-stat"><div className="setup-stat-val">{s.w}</div><div className="setup-stat-lbl">W</div></div>
-            <div className="setup-stat"><div className="setup-stat-val">{s.tp1}</div><div className="setup-stat-lbl">TP1</div></div>
-            <div className="setup-stat"><div className="setup-stat-val red">{s.sl}</div><div className="setup-stat-lbl">SL</div></div>
-            <div className="setup-stat" style={{display:'flex',alignItems:'center',justifyContent:'flex-end'}}>
-              <SetupActions setup={s}/>
-            </div>
-          </div>
-        </div>
-      ))}
-      <div style={{padding:'0 16px 8px',textAlign:'right'}}>
-        <span style={{fontSize:11,color:'var(--blue)',cursor:'pointer',fontFamily:'var(--mono)'}}>→ pokaż wszystkie {liveSetups.length}</span>
-      </div>
     </div>
   );
 }
