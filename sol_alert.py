@@ -2548,7 +2548,7 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         balance = exchange_trader.get_account_balance()
         if balance is not None:
             committed = db.get_committed_trade_usdt(exclude_setup_id=setup.get("setup_id"))
-            dynamic_usdt = round(max((balance - committed) * 0.95, 1.0), 2)
+            dynamic_usdt = round(max(balance - committed, 1.0), 2)
     except Exception:
         pass
     eff_lev = LEVERAGE
