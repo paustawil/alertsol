@@ -803,9 +803,8 @@ function ViewSetups() {
     const tp2=r.tps&&r.tps[1]!=null?Number(r.tps[1]):null;
     const sl=r.sl!=null?Number(r.sl):null;
     const sign=r.kier==='LONG'?1:-1;
-    const tu=tradeUsdt||100;
-    const rowTu=r.trade_usdt!=null?parseFloat(r.trade_usdt):tu;
-    const qty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(rowTu*20/entry/0.1)*0.1;
+    const tu=r.trade_usdt!=null?parseFloat(r.trade_usdt):(tradeUsdt||100);
+    const qty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(tu*20/entry/0.1)*0.1;
     if(!qty||qty<=0) return {tp1:null,tp12:null,sl:null,tp1Pct:null,tp12Pct:null};
     const margin=qty*entry/20;
     const tp1Pnl=tp1!=null?sign*qty*(tp1-entry):null;
