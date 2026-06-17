@@ -2855,24 +2855,7 @@ def main():
     check_stale_setups(regime, current)
     check_open_setups_invalidation(regime, current)
 
-    # ── 1. Algorytm (stary, range-based) — WYŁĄCZONY, zastąpiony przez Algo2 ──
-    # algo_setups  = algo_detect(candles_m15, candles_h1, rng)
-    # filter_passed = bool(algo_setups)
-    # best_algo    = max(algo_setups, key=lambda x: x["total"]) if algo_setups else None
-    print("[algo] Pominięty (zastąpiony przez Algo2).")
-
-    # ── 2. Claude (wyłączony — ENABLE_CLAUDE = False) ─────────────────────────
-    print("[claude] Wyłączony (ENABLE_CLAUDE=False).")
-
-    # ── 3. GPT (wyłączony — ENABLE_GPT = False) ───────────────────────────────
-    print("[gpt] Wyłączony (ENABLE_GPT=False).")
-
-    # ── 4. Grok (wyłączony — zastąpiony przez Algo2) ────────────────────────
-    print("[grok] Wyłączony (ENABLE_GROK=False).")
-
-    # ── 4b. Algo2 — algorytmiczne setupy trend/impulse/range ─────────────
-    # Internal throttle: 3 min w IMPULSE (bez GPT3 Validator), 15 min w pozostałych reżimach.
-    # Lock chroni _last_algo2_ts przed race condition z breakout_scan().
+    # ── Algo2 — algorytmiczne setupy trend/impulse/range ───────────────────
     _a2_now      = time.time()
     _a2_impulse  = regime["regime"] in ("IMPULSE_UP", "IMPULSE_DOWN")
     _a2_threshold = 3 * 60 if _a2_impulse else 15 * 60
@@ -2888,12 +2871,6 @@ def main():
         _a2_result = _algo2_run(regime, candles_m15, candles_h1, current, _a2_impulse)
         if _a2_result == "rejected":
             return
-
-    # ── 5. GPT Relaxed (live search — sam pobiera BTC/ETH/F&G) ──────────────
-    print("[gpt-r] Wyłączony (ENABLE_GPT_RELAXED=False).")
-
-    # ── 6. GPT3 — regime-aware, trend_consolidation_long włączony ───────────────
-    print("[gpt3] Wyłączony (ENABLE_GPT3=False).")
 
     # Składa plan order dla nowo zapisanych setupów (natychmiast po wygenerowaniu alertu)
     exchange_trader.sync()
