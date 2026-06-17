@@ -651,7 +651,7 @@ def legacy_dashboard():
     <div id="bi-committed" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#f5a623">—</div>
   </div>
   <div>
-    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Następne zlecenie (95% wolnego)</div>
+    <div style="font-size:0.7em;color:#888;margin-bottom:1px">Następne zlecenie (100% wolnego)</div>
     <div id="bi-next" style="font-size:1.1em;font-weight:bold;font-family:monospace;color:#80deea">—</div>
   </div>
   <div style="width:1px;background:#333;align-self:stretch;margin:0 4px"></div>
@@ -2451,7 +2451,7 @@ def api_budget_info():
     balance = et.get_account_balance()
     committed = db.get_committed_trade_usdt()
     if balance is not None:
-        next_trade = round(max((balance - committed) * 0.95, 0), 2)
+        next_trade = round(max(balance - committed, 0), 2)
     else:
         next_trade = None
     since_utc = _last_friday_8_warsaw_utc()
