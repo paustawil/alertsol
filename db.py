@@ -258,6 +258,7 @@ def insert_setup(row: dict) -> int | None:
                     WHERE resolved = FALSE
                       AND direction = %(direction)s
                       AND model = %(model)s
+                      AND variant = %(variant)s
                       AND ABS((entries->0)::numeric - (%(entries)s::jsonb->0)::numeric) < 0.5
                 ) OR %(shadow)s = TRUE
                 RETURNING setup_id
