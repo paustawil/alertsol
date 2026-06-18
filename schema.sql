@@ -166,3 +166,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
     CONSTRAINT single_row CHECK (id = 1)
 );
 INSERT INTO app_settings (id, data) VALUES (1, '{}'::jsonb) ON CONFLICT DO NOTHING;
+
+-- Log zdarzeń exchange (modyfikacje SL, fallbacki, błędy)
+CREATE TABLE IF NOT EXISTS exchange_events (
+    id         SERIAL PRIMARY KEY,
+    setup_id   INT,
+    event      TEXT NOT NULL,
+    detail     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_exchange_events_setup ON exchange_events (setup_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_exchange_events_recent ON exchange_events (created_at DESC);

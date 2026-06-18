@@ -1897,3 +1897,16 @@ def get_trade_analysis(date_from: str | None = None) -> list[dict]:
                 {"date_ts": date_ts},
             )
             return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def log_exchange_event(setup_id: int | None, event: str, detail: dict | None = None) -> None:
+    """Zapisuje zdarzenie exchange do tabeli exchange_events."""
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO exchange_events (setup_id, event, detail) VALUES (%s, %s, %s)",
+                    (setup_id, event, json.dumps(detail or {})),
+                )
+    except Exception as e:
+        logging.getLogger("db").warning(f"log_exchange_event: {e}")
