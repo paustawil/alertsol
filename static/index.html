@@ -356,7 +356,7 @@ function ActiveSetupsPanel({ mobile = false }) {
   if (liveSetups.length === 0) {
     if (mobile) return null;
     return (
-      <div className="panel">
+      <div className="panel" style={{flexShrink:0}}>
         <div className="panel-head">
           <span className="panel-title">Aktywne setupy</span>
           <span className="panel-badge">0</span>
@@ -464,7 +464,7 @@ function ActiveSetupsPanel({ mobile = false }) {
 
   /* Desktop */
   return (
-    <div className="panel">
+    <div className="panel" style={{flexShrink:0}}>
       <div className="panel-head">
         <span className="panel-title">Aktywne setupy</span>
         <div className="panel-right">
