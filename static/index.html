@@ -1821,7 +1821,7 @@ function App() {
   },[]);
 
   const refreshSetups=React.useCallback(()=>{
-    fetch('/api/dashboard/setups').then(r=>r.ok?r.json():[]).then(d=>setSetups(d.map(normalizeSetup))).catch(()=>{});
+    fetch('/api/dashboard/setups').then(r=>{if(!r.ok)throw new Error(r.status);return r.json();}).then(d=>setSetups(d.map(normalizeSetup))).catch(()=>{});
   },[]);
 
   useEffect(()=>{
