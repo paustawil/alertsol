@@ -1967,6 +1967,24 @@ def admin_resolve_setup(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "nieokreslone"}
 
 
+@app.get("/admin/restore-after-tp1/{setup_id}")
+def admin_restore_after_tp1(setup_id: int):
+    """Przywraca zamknięty setup do stanu after_tp1 (monitoring po cenie mark)."""
+    db.update_setup(
+        setup_id,
+        resolved=False,
+        status="after_tp1",
+        result=None,
+        exit_time=None,
+        exchange_done=True,
+        exchange_tp1_oid=None,
+        exchange_tp2_oid=None,
+        exchange_sl_oid=None,
+        exchange_sl2_oid=None,
+    )
+    return {"ok": True, "setup_id": setup_id, "result": "przywrócony do after_tp1"}
+
+
 @app.get("/admin/reset-entry/{setup_id}")
 def admin_reset_entry(setup_id: int):
     """Resetuje entry_hit_at do NULL — cofa setup do statusu 'oczekujący'."""
