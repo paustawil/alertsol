@@ -1176,7 +1176,8 @@ def _sync_inner():
                 full_qty = _round_qty((eff_usdt * eff_lev) / w1)
                 half_qty = _round_qty(full_qty / 2)
                 plan1_oid, plan2_oid = _place_entry_plan_orders(client, s, half_qty)
-                if plan1_oid and plan2_oid:
+                tp1_only = s.get("tp_strategy") == "tp1_only"
+                if plan1_oid and (plan2_oid or tp1_only):
                     s["exchange_plan_oid"]        = plan1_oid
                     s["exchange_plan2_oid"]       = plan2_oid
                     s["exchange_qty_full"]        = _fmt_qty(full_qty)
