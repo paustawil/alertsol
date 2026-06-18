@@ -1977,6 +1977,7 @@ def admin_restore_after_tp1(setup_id: int):
         result=None,
         exit_time=None,
         exchange_done=True,
+        exchange_tp1_done=True,
         exchange_tp1_oid=None,
         exchange_tp2_oid=None,
         exchange_sl_oid=None,
