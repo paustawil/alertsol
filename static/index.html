@@ -492,7 +492,7 @@ function ActiveSetupsPanel({ mobile = false }) {
       <div className="panel-body">
         <table className="tbl">
           <thead><tr>
-            <th>ID</th><th>Kierunek</th><th>Typ</th><th>Wejście</th><th>TP1</th><th>TP2</th><th>SL</th><th>RR</th>
+            <th>ID</th><th>Kierunek</th><th>Typ</th><th>Wejście</th><th>TP1</th><th>TP2</th><th>SL</th><th>RR</th><th>Kwota</th>
             <th>P&L</th>
             {bitgetData && <th>Bitget</th>}
             <th>Akcja</th>
@@ -526,6 +526,7 @@ function ActiveSetupsPanel({ mobile = false }) {
                 <td className="mono" style={{fontSize:11,color:'var(--green)',opacity:.7}}>{tp2 != null ? fP(tp2) : '—'}</td>
                 <td className="mono" style={{fontSize:11,color:'var(--red)'}}>{fP(sl)}</td>
                 <td className="mono" style={{fontSize:11,color:'var(--text3)'}}>{raw.rr ? `1:${Number(raw.rr).toFixed(1)}` : '—'}</td>
+                <td className="mono" style={{fontSize:11,color:'var(--text2)'}}>{raw.trade_usdt!=null ? `$${Number(raw.trade_usdt).toFixed(0)}` : '—'}</td>
                 <td className="mono" style={{minWidth:80}}>
                   {isOpen && livePnl != null
                     ? <><span style={{color:pC(livePnl),fontWeight:700,fontSize:13}}>{fU(livePnl)}</span><span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>live</span>
@@ -549,7 +550,7 @@ function ActiveSetupsPanel({ mobile = false }) {
                 <td onClick={e => e.stopPropagation()}><SetupActions setup={s}/></td>
               </tr>
               {isExp && <tr>
-                <td colSpan={bitgetData ? 11 : 10} style={{background:'var(--bg2)',padding:'8px 14px',borderTop:'none'}}>
+                <td colSpan={bitgetData ? 12 : 11} style={{background:'var(--bg2)',padding:'8px 14px',borderTop:'none'}}>
                   <div style={{display:'flex',gap:16,fontSize:10,color:'var(--text2)',fontFamily:'var(--mono)',flexWrap:'wrap',alignItems:'center',marginBottom:bitgetData?6:0}}>
                     <span style={{color:'var(--text3)'}}>#{s.id}</span>
                     <span><span style={{color:'var(--text3)'}}>Status:&nbsp;</span><span className={`status-pill ${s.status==='pozycja'?'pozycja':s.status==='po_tp1'?'po_tp1':'czeka'}`}><span className="status-dot"></span>{s.status}</span></span>
