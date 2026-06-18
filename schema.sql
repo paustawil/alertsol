@@ -131,7 +131,7 @@ CREATE INDEX IF NOT EXISTS idx_setups_status ON setups (status);
 
 -- Backfill statusu dla istniejących rekordów
 UPDATE setups SET status = 'closed'    WHERE resolved = TRUE AND status = 'pending';
-UPDATE setups SET status = 'after_tp1' WHERE resolved = FALSE AND exchange_tp1_done = TRUE AND status = 'pending';
+UPDATE setups SET status = 'after_tp1' WHERE resolved = FALSE AND exchange_tp1_done = TRUE AND status IN ('pending', 'open');
 UPDATE setups SET status = 'open'      WHERE resolved = FALSE AND exchange_position_opened = TRUE AND exchange_tp1_done = FALSE AND status = 'pending';
 
 -- Kwota zlecenia (USDT) użyta przy otwieraniu pozycji — do poprawnego liczenia %
