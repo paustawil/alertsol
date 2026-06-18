@@ -1398,7 +1398,11 @@ def get_algo2_variant_summary(period_days: int | None = None, pairs: list[tuple[
                     ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS sl_rate,
-                    ROUND(AVG({_tu}) FILTER (WHERE {trading_filter})::numeric, 2)          AS avg_trade_usdt
+                    ROUND(AVG({_tu}) FILTER (WHERE {trading_filter})::numeric, 2)          AS avg_trade_usdt,
+                    ROUND(SUM(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS sum_pct_tp1,
+                    ROUND(SUM(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS sum_pct_tp12,
+                    COUNT(DISTINCT (COALESCE(exit_time, resolved_at, alert_time) AT TIME ZONE 'Europe/Warsaw')::date)
+                        FILTER (WHERE {trading_filter})                                    AS trading_days
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
@@ -1798,7 +1802,8 @@ def get_all_setups_filtered(
                        ROUND(({tp1_only_calc_f})::numeric, 2)     AS tp1_only_pnl,
                        ROUND(({tp1_only_pct_calc_f})::numeric, 2) AS tp1_only_pnl_pct,
                        entries, tps, sl,
-                       exchange_qty_full, exchange_tp1_oid, exchange_sl_oid
+                       trade_usdt, exchange_qty_full, exchange_qty_half,
+                       exchange_tp1_oid, exchange_sl_oid
                 FROM setups
                 WHERE {where_sql}
                 ORDER BY alert_time DESC

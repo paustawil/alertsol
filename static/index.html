@@ -433,6 +433,7 @@ function ActiveSetupsPanel({ mobile = false }) {
                   <span style={{color:'var(--text3)'}}>Model: <span style={{color:'var(--text2)'}}>{raw.model||s.model}</span></span>
                   {raw.rr && <span style={{color:'var(--text3)'}}>RR: <span style={{color:'var(--text2)'}}>1:{Number(raw.rr).toFixed(1)}</span></span>}
                   {raw.score && <span style={{color:'var(--text3)'}}>Score: <span style={{color:'var(--text2)'}}>{Number(raw.score).toFixed(1)}</span></span>}
+                  {raw.trade_usdt!=null && <span style={{color:'var(--text3)'}}>Kwota: <span style={{color:'var(--text2)'}}>${Number(raw.trade_usdt).toFixed(0)}</span></span>}
                   {raw.exchange_qty_full && <span style={{color:'var(--text3)'}}>Qty: <span style={{color:'var(--text2)'}}>{raw.exchange_qty_full} SOL</span></span>}
                 </div>
                 {pot.afterTp1 ? <div style={{marginBottom:4}}>
@@ -553,6 +554,7 @@ function ActiveSetupsPanel({ mobile = false }) {
                     <span style={{color:'var(--text3)'}}>#{s.id}</span>
                     <span><span style={{color:'var(--text3)'}}>Status:&nbsp;</span><span className={`status-pill ${s.status==='pozycja'?'pozycja':s.status==='po_tp1'?'po_tp1':'czeka'}`}><span className="status-dot"></span>{s.status}</span></span>
                     {raw.score && <span><span style={{color:'var(--text3)'}}>Score:&nbsp;</span>{Number(raw.score).toFixed(1)}</span>}
+                    {raw.trade_usdt!=null && <span><span style={{color:'var(--text3)'}}>Kwota:&nbsp;</span>${Number(raw.trade_usdt).toFixed(0)}</span>}
                     {raw.exchange_qty_full && <span><span style={{color:'var(--text3)'}}>Qty:&nbsp;</span>{raw.exchange_qty_full} SOL</span>}
                     {raw.alert_time && <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{raw.alert_time}</span>}
                     {pot.afterTp1
@@ -1190,10 +1192,10 @@ function ViewAlgo() {
       {rows!==null && selectedPairs!==null && subTab==='wariant' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per scenariusz / wariant</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
+          <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>Avg%/poz TP1</th><th>Avg%/poz TP1+TP2</th><th>Avg%/dzień TP1</th><th>Avg%/dzień TP1+TP2</th></tr></thead>
           <tbody>{Object.entries(groups||{}).map(([sc,variants])=>(
             <React.Fragment key={sc}>
-              <tr><td colSpan={8} style={{background:'var(--bg3)',color:'var(--text2)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'.08em',padding:'5px 12px'}}>{sc}</td></tr>
+              <tr><td colSpan={10} style={{background:'var(--bg3)',color:'var(--text2)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'.08em',padding:'5px 12px'}}>{sc}</td></tr>
               {variants.map((r,i)=>(
                 <tr key={i}>
                   <td style={{paddingLeft:24,color:'var(--text1)'}}>{r.variant}</td>
@@ -1204,6 +1206,8 @@ function ViewAlgo() {
                   <td className="mono" style={{color:r.sl_rate==='0%'?'var(--green)':r.sl_rate==='100%'?'var(--red)':'var(--text2)'}}>{r.sl_rate}</td>
                   <td className="mono" style={{color:pnlC(r.avg_pct_tp1)}}>{fmtP(r.avg_pct_tp1)}</td>
                   <td className="mono" style={{fontWeight:600,color:pnlC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</td>
+                  <td className="mono" style={{color:pnlC(r.daily_pct_tp1)}}>{fmtP(r.daily_pct_tp1)}</td>
+                  <td className="mono" style={{fontWeight:600,color:pnlC(r.daily_pct_tp12)}}>{fmtP(r.daily_pct_tp12)}</td>
                 </tr>
               ))}
             </React.Fragment>
@@ -1628,22 +1632,23 @@ function TabAlgo() {
   const [subTab,setSubTab]=useState('wariant');
   const [rows,setRows]=useState(null);
   const [filterTree,setFilterTree]=useState([]);
-  const [selectedPairs,setSelectedPairs]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState(null);
   useEffect(()=>{
-    if(subTab!=='per data') return;
     fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[])
       .then(tree=>{
         setFilterTree(tree);
-        setSelectedPairs(tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
+        setSelectedPairs(prev=>prev!==null?prev:tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
       }).catch(()=>{});
-  },[subTab]);
+  },[]);
   useEffect(()=>{
+    if(selectedPairs===null) return;
     setRows(null);
     const p=new URLSearchParams({period,view:subTab});
-    if(subTab==='per data'&&selectedPairs.length>0) p.set('pairs',selectedPairs.join(','));
+    const allPairs=filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`));
+    if(selectedPairs.length>0&&selectedPairs.length<allPairs.length) p.set('pairs',selectedPairs.join(','));
     fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab,selectedPairs]);
+  },[period,subTab,selectedPairs,filterTree]);
   const pC=(v)=>v==null?'var(--text3)':String(v).startsWith('+')?'var(--green)':String(v).startsWith('-')?'var(--red)':'var(--text3)';
   const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${v}%`;
@@ -1678,16 +1683,18 @@ function TabAlgo() {
           <div style={{padding:'6px 16px',background:'var(--bg2)',fontSize:10,fontWeight:700,color:'var(--text2)',textTransform:'uppercase',letterSpacing:'.08em'}}>{sc}</div>
           <div style={{display:'flex',padding:'6px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
             <div style={{flex:1,fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase'}}>Wariant</div>
-            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1</div>
-            <div style={{width:70,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1+TP2</div>
+            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>%/poz</div>
+            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>%/dzień</div>
           </div>
-          {variants.map((r,i)=>(
-            <div key={i} className="algo-row">
-              <div style={{flex:1}}><div className="algo-name" style={{fontSize:11}}>{r.variant}</div><div className="algo-sub">Entry: {r.entry_rate} · SL: {r.sl_rate}</div></div>
-              <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:r.avg_pct_tp1==null?'var(--text3)':r.avg_pct_tp1>0?'var(--green)':r.avg_pct_tp1<0?'var(--red)':'var(--text3)'}}>{fmtP(r.avg_pct_tp1)}</div>
-              <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:r.avg_pct_tp12==null?'var(--text3)':r.avg_pct_tp12>0?'var(--green)':r.avg_pct_tp12<0?'var(--red)':'var(--text3)'}}>{fmtP(r.avg_pct_tp12)}</div>
+          {variants.map((r,i)=>{const nC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';return(
+            <div key={i} className="algo-row" style={{flexDirection:'column',gap:2}}>
+              <div style={{display:'flex',alignItems:'center'}}>
+                <div style={{flex:1}}><div className="algo-name" style={{fontSize:11}}>{r.variant}</div><div className="algo-sub">Entry: {r.entry_rate} · SL: {r.sl_rate}</div></div>
+                <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:nC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</div>
+                <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:nC(r.daily_pct_tp12)}}>{fmtP(r.daily_pct_tp12)}</div>
+              </div>
             </div>
-          ))}
+          );})}
         </div>
       ))}
       {rows!==null && subTab==='per data' && <>

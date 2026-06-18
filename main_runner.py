@@ -3579,6 +3579,7 @@ def api_all_setups(
             "sl":                       _f(s.get("sl")),
             "avg_entry":                _f(s.get("avg_entry")),
             "exchange_qty_full":        s.get("exchange_qty_full"),
+            "exchange_qty_half":        s.get("exchange_qty_half"),
             "exchange_tp1_oid":         s.get("exchange_tp1_oid"),
             "exchange_sl_oid":          s.get("exchange_sl_oid"),
             "trade_usdt":               _f(s.get("trade_usdt")),
@@ -3698,6 +3699,8 @@ def api_dashboard_algo(
                 "sl_rate":      _r(r.get("sl_rate")),
                 "avg_pct_tp1":  _pct(r.get("avg_tp1only_usd"), r.get("avg_trade_usdt") or trade_usdt),
                 "avg_pct_tp12": _pct(r.get("avg_tp1tp2_usd"), r.get("avg_trade_usdt") or trade_usdt),
+                "daily_pct_tp1":  round(float(r["sum_pct_tp1"]) / int(r["trading_days"]), 1) if r.get("sum_pct_tp1") is not None and (r.get("trading_days") or 0) > 0 else None,
+                "daily_pct_tp12": round(float(r["sum_pct_tp12"]) / int(r["trading_days"]), 1) if r.get("sum_pct_tp12") is not None and (r.get("trading_days") or 0) > 0 else None,
             }
             for r in rows
         ]
