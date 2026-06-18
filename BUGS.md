@@ -129,16 +129,7 @@ Dla setupów TP1-only cała pozycja zamyka się na TP1, ale kalkulacja używa `h
 
 ---
 
-### 12. `move_sl_to_entry` używa `full_qty` po TP1
-**Plik:** `exchange_trader.py:881`
-
-Funkcja zawsze pobiera `exchange_qty_full`, ale po TP1 pozycja ma tylko połowę rozmiaru. Nowy SL z pełną ilością nie zadziała poprawnie.
-
-**Naprawa:** Sprawdzić status TP1 i użyć `exchange_qty_half` po TP1.
-
----
-
-### 13. Race condition przy inicjalizacji puli połączeń
+### 12. Race condition przy inicjalizacji puli połączeń
 **Plik:** `db.py:46-58`
 
 `get_pool()` sprawdza `_pool is None` bez locka. Dwa równoległe wątki mogą utworzyć dwie pule; jedna wycieknie.
@@ -147,7 +138,7 @@ Funkcja zawsze pobiera `exchange_qty_full`, ale po TP1 pozycja ma tylko połowę
 
 ---
 
-### 14. Cancel setup rozlicza setup mimo nieudanego zamknięcia na giełdzie
+### 13. Cancel setup rozlicza setup mimo nieudanego zamknięcia na giełdzie
 **Plik:** `main_runner.py:2928-2929`
 
 `api_cancel_setup` wywołuje `db.resolve_setup()` nawet gdy `failed_on_bitget` nie jest puste (market close się nie powiódł). Setup jest oznaczony jako "anulowany" w DB, a pozycja może wciąż być otwarta na Bitget.
@@ -156,7 +147,7 @@ Funkcja zawsze pobiera `exchange_qty_full`, ale po TP1 pozycja ma tylko połowę
 
 ---
 
-### 15. `send_telegram` bez try/except w `breakout_scan`
+### 14. `send_telegram` bez try/except w `breakout_scan`
 **Plik:** `sol_alert.py:2806`
 
 Wywołanie `send_telegram(msg)` nie jest opakowane w `try/except` (w przeciwieństwie do innych miejsc). Błąd sieci przerwie job schedulera.
@@ -165,7 +156,7 @@ Wywołanie `send_telegram(msg)` nie jest opakowane w `try/except` (w przeciwień
 
 ---
 
-### 16. Thread-local baseline snapshot — ciche gubienie zmian
+### 15. Thread-local baseline snapshot — ciche gubienie zmian
 **Plik:** `db.py:506-519`
 
 `save_pending_list()` czyta `_thread_local.baseline` ustawiony przez `load_pending()`. Jeśli funkcje są wywołane z różnych wątków, zmiany są cicho ignorowane.
@@ -176,22 +167,22 @@ Wywołanie `send_telegram(msg)` nie jest opakowane w `try/except` (w przeciwień
 
 ## NISKIE
 
-### 17. Martwy kod — `_migrate_setup_ids()`
+### 16. Martwy kod — `_migrate_setup_ids()`
 **Plik:** `sol_alert.py:2630-2632, 2837`
 
 Funkcja jest no-op (`pass`), ale wywoływana przy każdym cyklu `main()`.
 
-### 18. Zbędne importy wewnątrz funkcji
+### 17. Zbędne importy wewnątrz funkcji
 **Plik:** `sol_alert.py:389`
 
 `from datetime import datetime, timezone as _tz` reimportowane wewnątrz `fetch_klines` co wywołanie.
 
-### 19. Niepotrzebne wywołania API co 15 sekund
+### 18. Niepotrzebne wywołania API co 15 sekund
 **Plik:** `exchange_trader.py:1000-1001`
 
 `_set_hedge_mode()` i `_set_leverage()` wywoływane w każdym `sync()` (co 15s = 5760 wywołań/dzień). Powinny być cached/jednorazowe.
 
-### 20. Potencjalne wycieknięcie detali DB w błędzie
+### 19. Potencjalne wycieknięcie detali DB w błędzie
 **Plik:** `main_runner.py:437`
 
 Surowy wyjątek bazy danych wyświetlany użytkownikowi — może zawierać fragmenty zapytań lub connection string.
@@ -203,7 +194,7 @@ Surowy wyjątek bazy danych wyświetlany użytkownikowi — może zawierać frag
 | Ważność | Liczba | Przykłady |
 |---------|--------|-----------|
 | Krytyczne | 7 | Wyciek tokenów, NameError crash, pozycje bez SL/TP, słaba auth |
-| Średnie | 9 | ZeroDivisionError, błędny PnL, race conditions, stale OIDs |
+| Średnie | 8 | ZeroDivisionError, błędny PnL, race conditions, stale OIDs |
 | Niskie | 4 | Martwy kod, zbędne API calls, info leak |
 
 Najważniejsze do natychmiastowej naprawy:
