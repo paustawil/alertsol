@@ -151,21 +151,31 @@ def _migrate_tp1_pnl() -> None:
 
 
 def _migrate_variant_from_type() -> None:
-    """Jednorazowa migracja: dla setupów które nie są trend_pullback
-    ustaw variant = type (zamiast domyślnego 'baseline')."""
+    """Jednorazowa naprawa: przywraca oryginalne warianty dla setupów,
+    którym variant został błędnie ustawiony na type."""
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE setups
-                SET variant = type
-                WHERE variant = 'baseline'
-                  AND type NOT IN ('trend_pullback_long', 'trend_pullback_short')
+                UPDATE setups SET variant = 'baseline'
+                WHERE variant = type
+                  AND type IN (
+                    'range_support_long', 'range_resistance_short',
+                    'impulse_continuation_long', 'impulse_continuation_short'
+                  )
                 """,
             )
-            updated = cur.rowcount
-    if updated:
-        log.info(f"[migrate] Naprawiono variant dla {updated} setupów (variant=type).")
+            b = cur.rowcount
+            cur.execute(
+                """
+                UPDATE setups SET variant = 'h1_atr'
+                WHERE variant = type
+                  AND type IN ('impulse_aggressive_long', 'impulse_aggressive_short')
+                """,
+            )
+            h = cur.rowcount
+    if b + h:
+        log.info(f"[migrate] Przywrócono variant: baseline={b}, h1_atr={h}.")
 
 
 # ── Setups ────────────────────────────────────────────────────────────────────
