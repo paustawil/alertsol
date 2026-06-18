@@ -2304,7 +2304,7 @@ def check_pending(candles_m15: list[dict]):
                 sl_adjusted=s.get("sl_adjusted", False),
                 entries_hit=s.get("entries_hit", 1),
             )
-            if s.get("entry_hit_at") is not None:
+            if s.get("entry_hit_at") is not None and s.get("status") != "after_tp1":
                 _upd["status"] = "open"
             db.update_setup(s["setup_id"], **_upd)
 
