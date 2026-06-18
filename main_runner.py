@@ -3696,16 +3696,18 @@ def api_dashboard_algo(
                 "tp1_be_rate":  _r(r.get("tp1_be_rate")),
                 "tp2_rate":     _r(r.get("tp2_rate")),
                 "sl_rate":      _r(r.get("sl_rate")),
-                "tp1_pnl":      r.get("total_tp1only_usd"),
-                "tp12_pnl":     r.get("total_pnl_usd"),
                 "avg_pct_tp1":  _pct(r.get("avg_tp1only_usd"), r.get("avg_trade_usdt") or trade_usdt),
-                "avg_pct_tp12": _pct(r.get("avg_pnl_usd"), r.get("avg_trade_usdt") or trade_usdt),
+                "avg_pct_tp12": _pct(r.get("avg_tp1tp2_usd"), r.get("avg_trade_usdt") or trade_usdt),
             }
             for r in rows
         ]
 
     if view == "per data":
         rows = db.get_algo2_daily_stats(days, pairs=pair_list)
+        def _rp(v):
+            if v is None: return "—"
+            v = float(v)
+            return f"{v:+.1f}%" if v != 0 else "0%"
         return [
             {
                 "date":    str(r.get("day", "")),
@@ -3713,14 +3715,18 @@ def api_dashboard_algo(
                 "w":       r.get("wins")   or 0,
                 "l":       r.get("losses") or 0,
                 "wr":      f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
-                "pnl":     _fmt_pnl(r.get("total_pnl_usd")),
-                "tpsOnly": _fmt_pnl(r.get("total_tp1only_usd")),
+                "avg_pct_tp1":  _rp(r.get("avg_pct_tp1")),
+                "avg_pct_tp12": _rp(r.get("avg_pct_tp12")),
             }
             for r in rows
         ]
 
     if view == "per model":
         stats = db.get_summary_stats(days)
+        def _rp(v):
+            if v is None: return "—"
+            v = float(v)
+            return f"{v:+.1f}%" if v != 0 else "0%"
         return [
             {
                 "name":    m.get("model", ""),
@@ -3729,8 +3735,8 @@ def api_dashboard_algo(
                     f"{round(int(m['wins']) / int(m['entered']) * 100, 1)}%"
                     if (m.get("entered") or 0) > 0 else "—"
                 ),
-                "pnl":     f"{float(m['pnl_usd']):+.2f}"         if m.get("pnl_usd")         is not None else "—",
-                "tpsOnly": f"{float(m['tp1_only_pnl_usd']):+.2f}" if m.get("tp1_only_pnl_usd") is not None else "—",
+                "avg_pct_tp1":  _rp(m.get("avg_tp1only_pct")),
+                "avg_pct_tp12": _rp(m.get("avg_pnl_pct")),
             }
             for m in (stats.get("by_model") or [])
         ]

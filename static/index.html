@@ -1150,17 +1150,17 @@ function ViewAlgo() {
   },[rows,subTab]);
   const periodSummary=React.useMemo(()=>{
     if(!rows||subTab!=='per data') return null;
-    let n=0,w=0,l=0,pnl=0,tp1=0,hasPnl=false,hasTp1=false;
+    let n=0,w=0,l=0,tp1Sum=0,tp12Sum=0,tp1Cnt=0,tp12Cnt=0;
     rows.forEach(r=>{
       n+=r.n||0; w+=r.w||0; l+=r.l||0;
-      const p=parseFloat(String(r.pnl).replace(/[^0-9.\-]/g,''));
-      const t=parseFloat(String(r.tpsOnly).replace(/[^0-9.\-]/g,''));
-      if(!isNaN(p)){pnl+=p;hasPnl=true;}
-      if(!isNaN(t)){tp1+=t;hasTp1=true;}
+      const t1=parseFloat(String(r.avg_pct_tp1).replace(/[^0-9.\-]/g,''));
+      const t12=parseFloat(String(r.avg_pct_tp12).replace(/[^0-9.\-]/g,''));
+      if(!isNaN(t1)){tp1Sum+=t1;tp1Cnt++;}
+      if(!isNaN(t12)){tp12Sum+=t12;tp12Cnt++;}
     });
     const wr=w+l>0?`${(w/(w+l)*100).toFixed(1)}%`:'—';
-    const fmt=(v,has)=>has?(v>=0?`+${v.toFixed(2)}`:`${v.toFixed(2)}`):'—';
-    return {n,w,l,wr,pnl:fmt(pnl,hasPnl),tp1:fmt(tp1,hasTp1),pnlV:hasPnl?pnl:null,tp1V:hasTp1?tp1:null};
+    const fmtAvg=(sum,cnt)=>cnt>0?`${(sum/cnt)>=0?'+':''}${(sum/cnt).toFixed(1)}%`:'—';
+    return {n,w,l,wr,avg_pct_tp1:fmtAvg(tp1Sum,tp1Cnt),avg_pct_tp12:fmtAvg(tp12Sum,tp12Cnt),tp1V:tp1Cnt>0?tp1Sum/tp1Cnt:null,tp12V:tp12Cnt>0?tp12Sum/tp12Cnt:null};
   },[rows,subTab]);
   return (
     <>
@@ -1190,10 +1190,10 @@ function ViewAlgo() {
       {rows!==null && selectedPairs!==null && subTab==='wariant' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per scenariusz / wariant</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>P&L TP1$</th><th>P&L TP1+TP2$</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
+          <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
           <tbody>{Object.entries(groups||{}).map(([sc,variants])=>(
             <React.Fragment key={sc}>
-              <tr><td colSpan={10} style={{background:'var(--bg3)',color:'var(--text2)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'.08em',padding:'5px 12px'}}>{sc}</td></tr>
+              <tr><td colSpan={8} style={{background:'var(--bg3)',color:'var(--text2)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'.08em',padding:'5px 12px'}}>{sc}</td></tr>
               {variants.map((r,i)=>(
                 <tr key={i}>
                   <td style={{paddingLeft:24,color:'var(--text1)'}}>{r.variant}</td>
@@ -1202,10 +1202,8 @@ function ViewAlgo() {
                   <td className="mono dim">{r.tp1_be_rate}</td>
                   <td className="mono dim">{r.tp2_rate}</td>
                   <td className="mono" style={{color:r.sl_rate==='0%'?'var(--green)':r.sl_rate==='100%'?'var(--red)':'var(--text2)'}}>{r.sl_rate}</td>
-                  <td className="mono" style={{color:pnlC(r.tp1_pnl)}}>{fmtU(r.tp1_pnl)}</td>
-                  <td className="mono" style={{fontWeight:600,color:pnlC(r.tp12_pnl)}}>{fmtU(r.tp12_pnl)}</td>
                   <td className="mono" style={{color:pnlC(r.avg_pct_tp1)}}>{fmtP(r.avg_pct_tp1)}</td>
-                  <td className="mono" style={{color:pnlC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</td>
+                  <td className="mono" style={{fontWeight:600,color:pnlC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</td>
                 </tr>
               ))}
             </React.Fragment>
@@ -1215,38 +1213,38 @@ function ViewAlgo() {
       {rows!==null && selectedPairs!==null && subTab==='per data' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per data — Algo2</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
+          <thead><tr><th>Data</th><th>N</th><th>W</th><th>L</th><th>WR</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
           <tbody>{rows.map((r,i)=>(
             <tr key={i}>
               <td className="mono" style={{color:'var(--text2)'}}>{r.date}</td>
               <td className="mono dim">{r.n}</td><td className="mono green">{r.w}</td><td className="mono red">{r.l}</td>
               <td className="mono" style={{color:wrC(r.wr)}}>{r.wr}</td>
-              <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
-              <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
+              <td className="mono" style={{color:pC(r.avg_pct_tp1)}}>{r.avg_pct_tp1}</td>
+              <td className="mono" style={{fontWeight:600,color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</td>
             </tr>
           ))}</tbody>
           {periodSummary && <tfoot><tr style={{background:'var(--bg3)',borderTop:'2px solid var(--border)'}}>
-            <td className="mono" style={{fontWeight:700,color:'var(--text2)',fontSize:10,letterSpacing:'.04em'}}>Σ OKRES</td>
+            <td className="mono" style={{fontWeight:700,color:'var(--text2)',fontSize:10,letterSpacing:'.04em'}}>Ø OKRES</td>
             <td className="mono" style={{fontWeight:700}}>{periodSummary.n}</td>
             <td className="mono green" style={{fontWeight:700}}>{periodSummary.w}</td>
             <td className="mono red" style={{fontWeight:700}}>{periodSummary.l}</td>
             <td className="mono" style={{fontWeight:700,color:wrC(periodSummary.wr)}}>{periodSummary.wr}</td>
-            <td className="mono" style={{fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</td>
-            <td className="mono" style={{color:pC(periodSummary.tp1)}}>{periodSummary.tp1}</td>
+            <td className="mono" style={{color:pC(periodSummary.avg_pct_tp1)}}>{periodSummary.avg_pct_tp1}</td>
+            <td className="mono" style={{fontWeight:700,color:pC(periodSummary.avg_pct_tp12)}}>{periodSummary.avg_pct_tp12}</td>
           </tr></tfoot>}
         </table></div>
       </div>}
       {rows!==null && selectedPairs!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per model</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Model</th><th>S</th><th>WR</th><th>P&L $</th><th>TP1 only $</th></tr></thead>
+          <thead><tr><th>Model</th><th>S</th><th>WR</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
           <tbody>{rows.map((r,i)=>(
             <tr key={i}>
               <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
               <td className="mono dim">{r.s}</td>
               <td className="mono dim">{r.wr}</td>
-              <td className="mono" style={{fontWeight:600,color:pC(r.pnl)}}>{r.pnl}</td>
-              <td className="mono" style={{color:pC(r.tpsOnly)}}>{r.tpsOnly}</td>
+              <td className="mono" style={{color:pC(r.avg_pct_tp1)}}>{r.avg_pct_tp1}</td>
+              <td className="mono" style={{fontWeight:600,color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</td>
             </tr>
           ))}</tbody>
         </table></div>
@@ -1648,7 +1646,7 @@ function TabAlgo() {
   },[period,subTab,selectedPairs]);
   const pC=(v)=>v==null?'var(--text3)':String(v).startsWith('+')?'var(--green)':String(v).startsWith('-')?'var(--red)':'var(--text3)';
   const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
-  const fmtU=(v)=>v==null?'—':v>0?`+${v}$`:v<0?`${v}$`:'0';
+  const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${v}%`;
   const groups=React.useMemo(()=>{
     if(!rows||subTab!=='wariant') return null;
     const g={};
@@ -1657,17 +1655,17 @@ function TabAlgo() {
   },[rows,subTab]);
   const periodSummary=React.useMemo(()=>{
     if(!rows||subTab!=='per data') return null;
-    let n=0,w=0,l=0,pnl=0,tp1=0,hasPnl=false,hasTp1=false;
+    let n=0,w=0,l=0,tp1Sum=0,tp12Sum=0,tp1Cnt=0,tp12Cnt=0;
     rows.forEach(r=>{
       n+=r.n||0; w+=r.w||0; l+=r.l||0;
-      const p=parseFloat(String(r.pnl).replace(/[^0-9.\-]/g,''));
-      const t=parseFloat(String(r.tpsOnly).replace(/[^0-9.\-]/g,''));
-      if(!isNaN(p)){pnl+=p;hasPnl=true;}
-      if(!isNaN(t)){tp1+=t;hasTp1=true;}
+      const t1=parseFloat(String(r.avg_pct_tp1).replace(/[^0-9.\-]/g,''));
+      const t12=parseFloat(String(r.avg_pct_tp12).replace(/[^0-9.\-]/g,''));
+      if(!isNaN(t1)){tp1Sum+=t1;tp1Cnt++;}
+      if(!isNaN(t12)){tp12Sum+=t12;tp12Cnt++;}
     });
     const wr=w+l>0?`${(w/(w+l)*100).toFixed(1)}%`:'—';
-    const fmt=(v,has)=>has?(v>=0?`+${v.toFixed(2)}`:`${v.toFixed(2)}`):'—';
-    return {n,w,l,wr,pnl:fmt(pnl,hasPnl),tp1:fmt(tp1,hasTp1)};
+    const fmtAvg=(sum,cnt)=>cnt>0?`${(sum/cnt)>=0?'+':''}${(sum/cnt).toFixed(1)}%`:'—';
+    return {n,w,l,wr,avg_pct_tp1:fmtAvg(tp1Sum,tp1Cnt),avg_pct_tp12:fmtAvg(tp12Sum,tp12Cnt)};
   },[rows,subTab]);
   return (
     <div>
@@ -1680,14 +1678,14 @@ function TabAlgo() {
           <div style={{padding:'6px 16px',background:'var(--bg2)',fontSize:10,fontWeight:700,color:'var(--text2)',textTransform:'uppercase',letterSpacing:'.08em'}}>{sc}</div>
           <div style={{display:'flex',padding:'6px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
             <div style={{flex:1,fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase'}}>Wariant</div>
-            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1</div>
-            <div style={{width:70,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1+TP2</div>
+            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1</div>
+            <div style={{width:70,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1+TP2</div>
           </div>
           {variants.map((r,i)=>(
             <div key={i} className="algo-row">
               <div style={{flex:1}}><div className="algo-name" style={{fontSize:11}}>{r.variant}</div><div className="algo-sub">Entry: {r.entry_rate} · SL: {r.sl_rate}</div></div>
-              <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.tp1_pnl)}}>{fmtU(r.tp1_pnl)}</div>
-              <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.tp12_pnl)}}>{fmtU(r.tp12_pnl)}</div>
+              <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:r.avg_pct_tp1==null?'var(--text3)':r.avg_pct_tp1>0?'var(--green)':r.avg_pct_tp1<0?'var(--red)':'var(--text3)'}}>{fmtP(r.avg_pct_tp1)}</div>
+              <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:r.avg_pct_tp12==null?'var(--text3)':r.avg_pct_tp12>0?'var(--green)':r.avg_pct_tp12<0?'var(--red)':'var(--text3)'}}>{fmtP(r.avg_pct_tp12)}</div>
             </div>
           ))}
         </div>
@@ -1704,7 +1702,7 @@ function TabAlgo() {
             <div style={{width:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>W</div>
             <div style={{width:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>L</div>
             <div style={{flex:1,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
-            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L</div>
+            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg%</div>
           </div>
           {rows.map((r,i)=>(
             <div key={i} className="data-row">
@@ -1713,30 +1711,30 @@ function TabAlgo() {
               <div style={{width:24,textAlign:'center',color:'var(--green)',fontSize:11}}>{r.w}</div>
               <div style={{width:24,textAlign:'center',color:'var(--red)',fontSize:11}}>{r.l}</div>
               <div style={{flex:1,textAlign:'center',color:wC(r.wr),fontSize:11}}>{r.wr}</div>
-              <div className="data-pnl" style={{color:pC(r.pnl)}}>{r.pnl}</div>
+              <div className="data-pnl" style={{color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</div>
             </div>
           ))}
           {periodSummary && <div style={{display:'flex',padding:'8px 16px',borderTop:'2px solid var(--border)',background:'var(--bg3)'}}>
-            <div style={{width:52,fontFamily:'var(--mono)',fontSize:10,fontWeight:700,color:'var(--text2)',letterSpacing:'.04em'}}>Σ OKRES</div>
+            <div style={{width:52,fontFamily:'var(--mono)',fontSize:10,fontWeight:700,color:'var(--text2)',letterSpacing:'.04em'}}>Ø OKRES</div>
             <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700}}>{periodSummary.n}</div>
             <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--green)'}}>{periodSummary.w}</div>
             <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--red)'}}>{periodSummary.l}</div>
             <div style={{flex:1,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:wC(periodSummary.wr)}}>{periodSummary.wr}</div>
-            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(periodSummary.pnl)}}>{periodSummary.pnl}</div>
+            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(periodSummary.avg_pct_tp12)}}>{periodSummary.avg_pct_tp12}</div>
           </div>}
         </div>
       </>}
       {rows!==null && subTab==='per model' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
           <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Model</div>
-          <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1</div>
-          <div style={{width:70,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>P&L TP1+TP2</div>
+          <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1</div>
+          <div style={{width:70,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1+TP2</div>
         </div>
         {rows.map((r,i)=>(
           <div key={i} className="algo-row">
             <div style={{flex:1}}><div className="algo-name">{r.name}</div></div>
-            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.pnl)}}>{r.pnl}</div>
-            <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.tpsOnly)}}>{r.tpsOnly}</div>
+            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.avg_pct_tp1)}}>{r.avg_pct_tp1}</div>
+            <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</div>
           </div>
         ))}
       </div>}
