@@ -224,7 +224,10 @@ app = FastAPI(title="AlertSol Dashboard", lifespan=lifespan)
 # ── Google OAuth ──────────────────────────────────────────────────────────────
 _GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
 _GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-_SESSION_SECRET       = os.getenv("SESSION_SECRET", "change-me-set-SESSION_SECRET-env-var")
+_SESSION_SECRET       = os.getenv("SESSION_SECRET") or "change-me-set-SESSION_SECRET-env-var"
+if _SESSION_SECRET == "change-me-set-SESSION_SECRET-env-var":
+    import warnings
+    warnings.warn("SESSION_SECRET nie jest ustawiony — używam domyślnego (niebezpieczne w produkcji!)", stacklevel=1)
 _ALLOWED_EMAIL        = "paulina@lerta.pl"
 # Ustaw dokładnie ten sam URI co w Google Cloud Console → Credentials → Authorized redirect URIs
 _GOOGLE_REDIRECT_URI  = os.getenv("GOOGLE_REDIRECT_URI", "")
@@ -321,7 +324,7 @@ class _AuthMiddleware(BaseHTTPMiddleware):
 # Kolejność add_middleware: SessionMiddleware musi być dodany PO AuthMiddleware
 # (Starlette owija od końca, więc Session będzie na zewnątrz i wykona się pierwsza)
 app.add_middleware(_AuthMiddleware)
-app.add_middleware(SessionMiddleware, secret_key=_SESSION_SECRET, same_site="lax", https_only=False)
+app.add_middleware(SessionMiddleware, secret_key=_SESSION_SECRET, same_site="lax", https_only=True)
 
 
 @app.get("/auth/login", response_class=HTMLResponse, include_in_schema=False)
@@ -434,7 +437,8 @@ def legacy_dashboard():
         active = db.get_active_setups()
         stats  = db.get_summary_stats()
     except Exception as e:
-        return HTMLResponse(f"<pre>Błąd DB: {e}</pre>", status_code=500)
+        log.error(f"Błąd DB w legacy dashboard: {e}")
+        return HTMLResponse("<pre>Błąd połączenia z bazą danych</pre>", status_code=500)
 
     win_rate = f"{stats.get('win_rate_pct', 0) or 0:.1f}%" if stats.get("win_rate_pct") is not None else "—"
     total_pnl = f"{stats.get('total_pnl_usd') or 0:+.2f}" if stats.get("total_pnl_usd") is not None else "—"
@@ -1960,14 +1964,14 @@ def health():
 
 
 
-@app.get("/admin/resolve-setup/{setup_id}")
+@app.post("/admin/resolve-setup/{setup_id}")
 def admin_resolve_setup(setup_id: int):
     """Tymczasowy endpoint do ręcznego zamknięcia setupu w bazie."""
     db.resolve_setup(setup_id, "nieokreslone", None, None, 0, None)
     return {"ok": True, "setup_id": setup_id, "result": "nieokreslone"}
 
 
-@app.get("/admin/restore-after-tp1/{setup_id}")
+@app.post("/admin/restore-after-tp1/{setup_id}")
 def admin_restore_after_tp1(setup_id: int):
     """Przywraca zamknięty setup do stanu after_tp1 (monitoring po cenie mark)."""
     db.update_setup(
@@ -1986,7 +1990,7 @@ def admin_restore_after_tp1(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "przywrócony do after_tp1"}
 
 
-@app.get("/admin/reset-entry/{setup_id}")
+@app.post("/admin/reset-entry/{setup_id}")
 def admin_reset_entry(setup_id: int):
     """Resetuje entry_hit_at do NULL — cofa setup do statusu 'oczekujący'."""
     db.update_setup(
@@ -1997,7 +2001,7 @@ def admin_reset_entry(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "entry zresetowane — setup wrócił do oczekujących"}
 
 
-@app.get("/admin/force-position-open/{setup_id}")
+@app.post("/admin/force-position-open/{setup_id}")
 def admin_force_position_open(setup_id: int):
     """Oznacza pozycję jako otwartą — gdy Bitget ma otwartą pozycję ale system tego nie wie.
     Exchange_trader złoży TP/SL automatycznie w ciągu 15 sekund."""
@@ -2015,7 +2019,7 @@ def admin_force_position_open(setup_id: int):
     return {"ok": True, "setup_id": setup_id, "result": "pozycja oznaczona jako otwarta — exchange_trader złoży TP/SL za ~15s"}
 
 
-@app.get("/admin/fix-position-qty/{setup_id}")
+@app.post("/admin/fix-position-qty/{setup_id}")
 def admin_fix_position_qty(setup_id: int, full_qty: float):
     """Jednorazowa korekta rozmiaru TPSL dla setupu z błędnie dużą pozycją.
     MODYFIKUJE (nie anuluje) istniejące zlecenia TPSL na Bitget — zmienia tylko size.
@@ -2098,7 +2102,7 @@ def admin_fix_position_qty(setup_id: int, full_qty: float):
     }
 
 
-@app.get("/admin/reopen-setup/{setup_id}")
+@app.post("/admin/reopen-setup/{setup_id}")
 def admin_reopen_setup(setup_id: int):
     """Przywraca błędnie zamknięty setup jako aktywny z otwartą pozycją.
     Używaj gdy pozycja jest nadal otwarta na Bitget ale setup został zamknięty przez błąd (np. race condition).
@@ -2129,7 +2133,7 @@ def admin_reopen_setup(setup_id: int):
     }
 
 
-@app.get("/admin/replace-tps/{setup_id}")
+@app.post("/admin/replace-tps/{setup_id}")
 def admin_replace_tps(setup_id: int):
     """Resetuje exchange_tp1_done → False i czyści TP OID.
     Na następnym sync exchange_trader automatycznie złoży TP1 i TP2 (bez ruszania SL)."""
@@ -2925,6 +2929,18 @@ def api_cancel_setup(setup_id: int):
         sign    = 1 if direction == "long" else -1
         pnl_usd = round(sign * close_qty * (close_price - avg_entry), 2)
 
+    if failed_on_bitget:
+        return {
+            "ok":                  False,
+            "setup_id":            setup_id,
+            "close_qty":           close_qty,
+            "close_price":         close_price,
+            "pnl_usd":             pnl_usd,
+            "cancelled_on_bitget": cancelled_on_bitget,
+            "failed_on_bitget":    failed_on_bitget,
+            "message":             f"Zamknięcie pozycji nie powiodło się: {failed_on_bitget}. Setup NIE został rozliczony.",
+        }
+
     db.resolve_setup(setup_id, "anulowany", avg_entry, close_price, pnl_usd, None)
     db.update_setup(setup_id, exchange_done=True, cancel_reason="manual")
 
@@ -2936,7 +2952,7 @@ def api_cancel_setup(setup_id: int):
         "pnl_usd":             pnl_usd,
         "cancelled_on_bitget": cancelled_on_bitget,
         "failed_on_bitget":    failed_on_bitget,
-        "message":             "Setup anulowany" + (f" (błędy Bitget: {failed_on_bitget})" if failed_on_bitget else ""),
+        "message":             "Setup anulowany",
     }
 
 

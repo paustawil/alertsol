@@ -33,6 +33,7 @@ import hashlib
 import base64
 import logging
 import threading
+from threading import Lock
 import requests
 import db
 
@@ -811,14 +812,6 @@ def close_open_position(setup_id: int) -> bool:
         log.warning(f"[exchange] close_open_position #{setup_id}: brak kierunku lub qty=0")
         return False
 
-    # Anuluj wszystkie TPSL przed zamknięciem
-    for oid, plan_type in [
-        (tp1_oid, "profit_plan"), (tp2_oid, "profit_plan"),
-        (sl_oid, "loss_plan"),    (sl2_oid, "loss_plan"),
-    ]:
-        if oid:
-            _cancel_order(client, oid, plan_type)
-
     close_side = "sell" if direction == "long" else "buy"
     try:
         resp = client.post("/api/v2/mix/order/place-order", {
@@ -831,19 +824,30 @@ def close_open_position(setup_id: int) -> bool:
             "orderType":   "market",
             "size":        _fmt_qty(full_qty),
         })
-        if resp.get("code") == "00000":
-            print(f"[exchange] #{setup_id}: zamknięto pozycję market ({direction.upper()}, {_fmt_qty(full_qty)} SOL)")
-            db.update_setup(setup_id,
-                            exchange_done=True,
-                            exchange_tp1_oid=None,
-                            exchange_tp2_oid=None,
-                            exchange_sl_oid=None)
-            return True
-        log.warning(f"[exchange] close_open_position #{setup_id}: code={resp.get('code')} msg={resp.get('msg')}")
-        return False
+        if resp.get("code") != "00000":
+            log.warning(f"[exchange] close_open_position #{setup_id}: code={resp.get('code')} msg={resp.get('msg')}")
+            return False
     except Exception as e:
         log.warning(f"[exchange] close_open_position #{setup_id}: {e}")
         return False
+
+    print(f"[exchange] #{setup_id}: zamknięto pozycję market ({direction.upper()}, {_fmt_qty(full_qty)} SOL)")
+
+    # Anuluj TPSL dopiero po udanym zamknięciu pozycji
+    for oid, plan_type in [
+        (tp1_oid, "profit_plan"), (tp2_oid, "profit_plan"),
+        (sl_oid, "loss_plan"),    (sl2_oid, "loss_plan"),
+    ]:
+        if oid:
+            _cancel_order(client, oid, plan_type)
+
+    db.update_setup(setup_id,
+                    exchange_done=True,
+                    exchange_tp1_oid=None,
+                    exchange_tp2_oid=None,
+                    exchange_sl_oid=None,
+                    exchange_sl2_oid=None)
+    return True
 
 
 def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
@@ -954,6 +958,7 @@ def _check_after_tp1_positions(client: BitgetClient) -> None:
 # ── Główna funkcja synchronizacji ─────────────────────────────────────────────
 
 _sync_lock = threading.Lock()
+_exchange_configured = False
 
 def sync():
     """
@@ -997,8 +1002,11 @@ def _sync_inner():
     if client is None:
         return
 
-    _set_hedge_mode(client)
-    _set_leverage(client)
+    global _exchange_configured
+    if not _exchange_configured:
+        _set_hedge_mode(client)
+        _set_leverage(client)
+        _exchange_configured = True
 
     # Pobierz saldo raz na cały sync — używane przy obliczaniu dynamicznego trade_usdt
     account_balance = get_account_balance()
@@ -1229,13 +1237,38 @@ def _sync_inner():
                 print(f"[exchange] {label}: SL1 status = {sl_status}")
 
                 if sl_status == "executed":
-                    # SL1 zamknął pierwszą połowę — anuluj TP1, TP2
-                    # SL2 (ten sam trigger) powinien zamknąć drugą połowę automatycznie
-                    print(f"[exchange] {label}: SL1 wykonany — anuluj TP1, TP2; SL2 zamknie resztę")
+                    # SL1 zamknął pierwszą połowę — zamknij resztę market (nie polegaj na SL2)
+                    print(f"[exchange] {label}: SL1 wykonany — anuluj TP1, TP2; zamykam resztę market")
                     for oid, pt in [(tp1_oid, "profit_plan"), (tp2_oid, "profit_plan")]:
                         if oid:
                             _cancel_order(client, oid, pt)
+                    # Zamknij drugą połowę market zamiast polegać na SL2
+                    half_qty_str = (s.get("exchange_qty_half") or "0").replace(",", ".")
+                    half_qty_val = float(half_qty_str)
+                    if half_qty_val > 0:
+                        _dir = s.get("direction", "")
+                        close_side = "sell" if _dir == "long" else "buy"
+                        try:
+                            close_resp = client.post("/api/v2/mix/order/place-order", {
+                                "symbol":      SYMBOL,
+                                "productType": PRODUCT_TYPE,
+                                "marginCoin":  MARGIN_COIN,
+                                "side":        close_side,
+                                "tradeSide":   "close",
+                                "posSide":     _dir,
+                                "orderType":   "market",
+                                "size":        _fmt_qty(half_qty_val),
+                            })
+                            if close_resp.get("code") == "00000":
+                                print(f"[exchange] {label}: druga połowa zamknięta market")
+                            else:
+                                log.warning(f"[exchange] {label}: nie udało się zamknąć drugiej połowy: {close_resp.get('msg')}")
+                        except Exception as e:
+                            log.warning(f"[exchange] {label}: błąd zamykania drugiej połowy: {e}")
+                    if sl2_oid:
+                        _cancel_order(client, sl2_oid, "loss_plan")
                     s["exchange_sl_oid"]  = None
+                    s["exchange_sl2_oid"] = None
                     s["exchange_tp1_oid"] = None
                     s["exchange_tp2_oid"] = None
                     s["exchange_done"]    = True
@@ -1353,10 +1386,13 @@ def _sync_inner():
                     s["exchange_tp1_oid"] = None
                     modified = True
 
-            # Zwolnij slot gdy wszystkie TPSL zniknęły
+            # Zwolnij slot gdy wszystkie TPSL zniknęły — zamknij pozycję na giełdzie
             if (not s.get("exchange_sl_oid") and not s.get("exchange_tp1_oid")
                     and not s.get("exchange_tp2_oid") and not s.get("exchange_done")):
-                log.warning(f"[exchange] {label}: wszystkie TPSL zniknęły — zwalniam slot")
+                log.warning(f"[exchange] {label}: wszystkie TPSL zniknęły — zamykam pozycję market")
+                fq = float((s.get("exchange_qty_full") or "0").replace(",", "."))
+                if fq > 0 and sid and sid != "?":
+                    close_open_position(int(sid))
                 s["exchange_done"] = True
                 modified = True
 

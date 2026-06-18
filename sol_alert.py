@@ -4,6 +4,7 @@ SOL Alert Bot v2
 Algorytm vs Claude Sonnet — porównanie dwóch podejść do detekcji setupów SOL/USDT
 """
 
+import logging
 import math
 import os
 import json
@@ -22,10 +23,11 @@ import exchange_trader
 import db
 
 TZ = ZoneInfo("Europe/Warsaw")
+log = logging.getLogger(__name__)
 
 # ── Konfiguracja ──────────────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN",  "8645260464:AAGe_uTew0H1gJnijdcR7oav_A4U8n1HLHI")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7442390334")
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_KEY       = os.getenv("OPENAI_API_KEY", "")
 XAI_KEY          = os.getenv("XAI_API_KEY", "")
@@ -386,9 +388,8 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
     data = raw.get("data") or []
     # Debug: loguj pierwszy i ostatni element (newest first) + ewentualne błędy
     if data:
-        from datetime import datetime, timezone as _tz
-        newest_ts = datetime.fromtimestamp(int(data[0][0]) // 1000, tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
-        oldest_ts = datetime.fromtimestamp(int(data[-1][0]) // 1000, tz=_tz.utc).strftime("%Y-%m-%d %H:%M")
+        newest_ts = datetime.fromtimestamp(int(data[0][0]) // 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        oldest_ts = datetime.fromtimestamp(int(data[-1][0]) // 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         print(f"[fetch] {granularity} {len(data)} candles: {oldest_ts} → {newest_ts} UTC | now={now_utc} | endpoint=candles")
     else:
@@ -1259,7 +1260,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_str = f"${ma60_s2:.2f}" if ma60_s2 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_str} MA60={ma60_str} → {'OK' if ma_ok_s else 'BLOCKED (bullish MA)'}")
 
-            if (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s:
+            if (sl - w) > 0 and (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_resistance_short", "direction": "short",
@@ -1305,7 +1306,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_s = f"${ma60:.2f}" if ma60 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_s} MA60={ma60_s} → {'OK' if ma_ok else 'BLOCKED (bearish MA)'}")
 
-            if (tp1 - w) / (w - sl) >= 1.5 and dist_ok and momentum_ok and touches_ok and ma_ok:
+            if (w - sl) > 0 and (tp1 - w) / (w - sl) >= 1.5 and dist_ok and momentum_ok and touches_ok and ma_ok:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
                     "type": "range_support_long", "direction": "long",
@@ -1438,8 +1439,8 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         if isinstance(_at, str):
             _at = datetime.fromisoformat(_at)
         alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
-        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
-        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
+        entry_dt = datetime.fromtimestamp(entry_ts, tz=timezone.utc).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
+        exit_dt  = datetime.fromtimestamp(exit_ts, tz=timezone.utc).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
         n_w      = s.get("entries_hit", 1)
@@ -1520,8 +1521,8 @@ def log_to_anulowane_grok(s: dict, result: str, entry_ts, exit_ts,
         if isinstance(_at, str):
             _at = datetime.fromisoformat(_at)
         alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
-        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
-        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
+        entry_dt = datetime.fromtimestamp(entry_ts, tz=timezone.utc).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
+        exit_dt  = datetime.fromtimestamp(exit_ts, tz=timezone.utc).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
         n_w      = s.get("entries_hit", 1)
@@ -1577,8 +1578,8 @@ def log_to_grok_shadow(s: dict, result: str, entry_ts, exit_ts,
         if isinstance(_at, str):
             _at = datetime.fromisoformat(_at)
         alert_dt = _at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
-        entry_dt = datetime.utcfromtimestamp(entry_ts).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
-        exit_dt  = datetime.utcfromtimestamp(exit_ts).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
+        entry_dt = datetime.fromtimestamp(entry_ts, tz=timezone.utc).astimezone(TZ).strftime("%H:%M") if entry_ts else ""
+        exit_dt  = datetime.fromtimestamp(exit_ts, tz=timezone.utc).astimezone(TZ).strftime("%H:%M")  if exit_ts  else ""
         entries  = s.get("entries", [])
         tps      = s.get("tps", [])
         n_w      = s.get("entries_hit", 1)
@@ -2089,7 +2090,8 @@ def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
         if result == "SL":
             hypo_pnl = round(sign * full_qty * (eff_exit - eff_entry), 2)
         elif result == "TP1":
-            hypo_pnl = round(sign * half_qty * (eff_exit - eff_entry), 2)
+            tp1_qty = full_qty if tp2 is None else half_qty
+            hypo_pnl = round(sign * tp1_qty * (eff_exit - eff_entry), 2)
         else:  # TP2, TP1+BE, TP1+SL — obie połówki
             hypo_pnl = round(sign * (half_qty + half_qty) * (eff_exit - eff_entry), 2)
 
@@ -2626,12 +2628,6 @@ def format_grok_alert(result: dict, sol_price: float, setup_id=None, model_name:
     return "\n".join(lines)
 
 
-# ── Migracja setup_id dla istniejących setupów bez ID ─────────────────────────
-def _migrate_setup_ids():
-    """Nieaktualna — ID są teraz generowane przez SERIAL w PostgreSQL."""
-    pass
-
-
 # ── Breakout scanner (szybki, co 2-3 min) ────────────────────────────────────
 
 # Cooldown na powiadomienie Telegram (nie spamuj tym samym reżimem częściej niż co 30 min)
@@ -2803,7 +2799,10 @@ def breakout_scan():
             f"Siła: {regime.get('score', 0)}/10 | Volume: {regime['vol_ratio']}x\n"
             f"Sygnały: {regime['details']}"
         )
-        send_telegram(msg)
+        try:
+            send_telegram(msg)
+        except Exception as e:
+            print(f"[breakout_scan] send_telegram error: {e}")
 
     # Algo2 detekcja — natychmiast gdy IMPULSE, throttle 3 min (wspólny lock z main())
     if is_impulse:
@@ -2833,8 +2832,6 @@ def breakout_scan():
 def main():
     global _last_algo2_ts
     print(f"[{datetime.now(TZ).strftime('%H:%M:%S')}] SOL Alert v2 — start")
-
-    _migrate_setup_ids()
 
     candles_m15 = fetch_klines(SYMBOL, "15m", limit=100)
     candles_h1  = fetch_klines(SYMBOL, "1h",  limit=50)
