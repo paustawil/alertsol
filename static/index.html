@@ -207,7 +207,7 @@ const normalizeSetup = (s) => {
   const entries = s.entries || [];
   const tps     = s.tps     || [];
   let status = s.status;
-  if (s.tp1_hit_at)   status = 'po_tp1';
+  if (s.tp1_hit_at || s.exchange_tp1_done)   status = 'po_tp1';
   else if (s.entry_hit_at) status = 'pozycja';
   return {
     id: s.id, model: s.model, kier: s.kier, typ: s.typ, variant: s.variant||'', status,
@@ -353,7 +353,18 @@ function ActiveSetupsPanel({ mobile = false }) {
   const pC = (v) => v == null ? 'var(--text3)' : v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
   const fP = (p) => p == null ? '—' : Number(p).toFixed(2);
 
-  if (liveSetups.length === 0) return null;
+  if (liveSetups.length === 0) {
+    if (mobile) return null;
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <span className="panel-title">Aktywne setupy</span>
+          <span className="panel-badge">0</span>
+        </div>
+        <div className="panel-body" style={{padding:'16px',textAlign:'center',color:'var(--text3)',fontSize:11,fontFamily:'var(--mono)'}}>Brak aktywnych setupów</div>
+      </div>
+    );
+  }
 
   if (mobile) {
     return (
@@ -697,7 +708,7 @@ function ViewDashboard() {
   );
 }
 /* ── Desktop: ViewSetups (unified — all statuses) ── */
-const DEFAULT_STATUSES=['pending','open','zamkniete'];
+const DEFAULT_STATUSES=['pending','open','after_tp1','zamkniete'];
 function ViewSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
   const [shadowFilter,setShadowFilter]=useState('all');

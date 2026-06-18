@@ -1126,6 +1126,25 @@ def get_dashboard_stats(period: str = "30d") -> dict:
     }
     tf_closed, tf_all = _period_intervals.get(period, _period_intervals["30d"])
 
+    settings = get_app_settings()
+    cfg = settings.get("type_configs", {})
+    enabled_pairs = [
+        (k.split("__")[0], k.split("__")[1] if "__" in k else "baseline")
+        for k, v in cfg.items()
+        if isinstance(v, dict) and v.get("enabled") is True
+    ]
+
+    params: dict = {}
+    if enabled_pairs:
+        pair_clauses = []
+        for i, (t, v) in enumerate(enabled_pairs):
+            params[f"t{i}"] = t
+            params[f"v{i}"] = v
+            pair_clauses.append(f"(type = %(t{i})s AND variant = %(v{i})s)")
+        type_filter = "AND (" + " OR ".join(pair_clauses) + ")"
+    else:
+        type_filter = ""
+
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -1141,7 +1160,9 @@ def get_dashboard_stats(period: str = "30d") -> dict:
                     )::numeric, 2)                                                        AS pnl
                 FROM setups
                 WHERE model = 'Algo2'
-                """
+                {type_filter}
+                """,
+                params,
             )
             row = dict(cur.fetchone())
     wins          = int(row.get("wins")          or 0)
