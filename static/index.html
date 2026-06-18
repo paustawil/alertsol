@@ -340,7 +340,7 @@ function ActiveSetupsPanel({ mobile = false }) {
     const isAfterTp1 = raw.exchange_tp1_done || raw.tp1_hit_at;
     const tp1Pnl = tp1 != null ? (isAfterTp1 ? sign * half * (tp1 - entry) : sign * qty * (tp1 - entry)) : null;
     const tp12Pnl = tp1 != null && tp2 != null ? sign * half * (tp1 - entry) + sign * half * (tp2 - entry) : tp1Pnl;
-    const slPnl = sl != null ? sign * (isAfterTp1 ? half : qty) * (sl - entry) : null;
+    const slPnl = isAfterTp1 ? (slAfter != null ? sign * half * (slAfter - entry) : 0) : (sl != null ? sign * qty * (sl - entry) : null);
     const realized = isAfterTp1 && tp1 != null ? sign * half * (tp1 - entry) : null;
     const remaining = isAfterTp1 && tp2 != null ? sign * half * (tp2 - entry) : null;
     const slNow = isAfterTp1 ? (slAfter || entry) : null;
@@ -764,24 +764,15 @@ function ViewSetups() {
       setSettingsFilter({types,variants});
     }).catch(()=>setSettingsFilter({types:[],variants:[]}));
   },[]);
-  // Załaduj drzewo typów przy pierwszym otwarciu filtra
+  // Załaduj drzewo typów od razu (nie czekaj na otwarcie filtra)
   useEffect(()=>{
-    if(!showTypeFilter||filterTree.length>0) return;
     fetch('/api/dashboard/variants-tree').then(r=>r.ok?r.json():[])
       .then(tree=>{
         setFilterTree(tree);
-        // domyślnie zaznacz wszystkie aktywne pary (jeśli selectedPairs jeszcze nie ustawione)
-        setSelectedPairs(prev=>{
-          if(prev!==null) return prev;
-          // Przy pierwszym otwarciu filtra — zaznacz włączone w Ustawieniach, lub all-active jako fallback
-          if(settingsFilter&&settingsFilter.types.length>0)
-            return tree.flatMap(m=>m.types.flatMap(t=>t.variants
-              .filter(v=>settingsFilter.types.includes(t.name)&&settingsFilter.variants.includes(v.name))
-              .map(v=>`${m.name}:${t.name}:${v.name}`)));
-          return tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`)));
-        });
+        setSelectedPairs(prev=>prev!==null?prev:
+          tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`))));
       }).catch(()=>{});
-  },[showTypeFilter,filterTree.length]);
+  },[]);
   // Oblicz modele, typy i warianty z wybranych par (format model:type:variant)
   const [modelFilters,typeFilters,variantFilters]=React.useMemo(()=>{
     // Jeśli drzewo załadowane — używaj selectedPairs
@@ -795,12 +786,9 @@ function ViewSetups() {
         [...new Set(selectedPairs.map(p=>p.split(':')[2]))],
       ];
     }
-    // Fallback: filtruj po enabled types z ustawień
-    if(settingsFilter&&settingsFilter.types.length>0){
-      return [[],settingsFilter.types,settingsFilter.variants];
-    }
+    // Fallback: brak filtra (pokaż wszystko) dopóki drzewo się nie załaduje
     return [[],[],[]];
-  },[selectedPairs,filterTree,settingsFilter]);
+  },[selectedPairs,filterTree]);
   const pairsFiltered=selectedPairs!==null&&filterTree.length>0&&
     selectedPairs.length<filterTree.flatMap(m=>m.types.flatMap(t=>t.variants)).length;
   useEffect(()=>{
@@ -848,7 +836,7 @@ function ViewSetups() {
     const afterTp1=r.status_key==='after_tp1';
     const tp1Pnl=tp1!=null?(afterTp1?sign*half*(tp1-entry):sign*qty*(tp1-entry)):null;
     const tp12Pnl=tp1!=null&&tp2!=null?sign*half*(tp1-entry)+sign*half*(tp2-entry):tp1Pnl;
-    const slPnl=sl!=null?sign*(afterTp1?half:qty)*(sl-entry):null;
+    const slPnl=afterTp1?0:(sl!=null?sign*qty*(sl-entry):null);
     const tp1Pct=tp1Pnl!=null?Math.round(tp1Pnl/margin*10000)/100:null;
     const tp12Pct=tp12Pnl!=null?Math.round(tp12Pnl/margin*10000)/100:null;
     return {tp1:tp1Pnl,tp12:tp12Pnl,sl:slPnl,tp1Pct,tp12Pct,afterTp1};
