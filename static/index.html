@@ -353,7 +353,18 @@ function ActiveSetupsPanel({ mobile = false }) {
   const pC = (v) => v == null ? 'var(--text3)' : v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text3)';
   const fP = (p) => p == null ? '—' : Number(p).toFixed(2);
 
-  if (liveSetups.length === 0) return null;
+  if (liveSetups.length === 0) {
+    if (mobile) return null;
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <span className="panel-title">Aktywne setupy</span>
+          <span className="panel-badge">0</span>
+        </div>
+        <div className="panel-body" style={{padding:'16px',textAlign:'center',color:'var(--text3)',fontSize:11,fontFamily:'var(--mono)'}}>Brak aktywnych setupów</div>
+      </div>
+    );
+  }
 
   if (mobile) {
     return (
