@@ -765,14 +765,15 @@ function ViewSetups() {
       setSettingsFilter({types,variants});
     }).catch(()=>setSettingsFilter({types:[],variants:[]}));
   },[]);
-  // Załaduj drzewo typów od razu (nie czekaj na otwarcie filtra)
+  // Załaduj drzewo typów dopiero gdy settings są gotowe
   useEffect(()=>{
+    if(settingsFilter===null) return;
     fetch('/api/dashboard/variants-tree').then(r=>r.ok?r.json():[])
       .then(tree=>{
         setFilterTree(tree);
         setSelectedPairs(prev=>{
           if(prev!==null) return prev;
-          if(settingsFilter&&settingsFilter.types.length>0)
+          if(settingsFilter.types.length>0)
             return tree.flatMap(m=>m.types.flatMap(t=>t.variants
               .filter(v=>settingsFilter.types.includes(t.name)&&settingsFilter.variants.includes(v.name))
               .map(v=>`${m.name}:${t.name}:${v.name}`)));
