@@ -207,7 +207,7 @@ const normalizeSetup = (s) => {
   const entries = s.entries || [];
   const tps     = s.tps     || [];
   let status = s.status;
-  if (s.tp1_hit_at)   status = 'po_tp1';
+  if (s.tp1_hit_at || s.exchange_tp1_done)   status = 'po_tp1';
   else if (s.entry_hit_at) status = 'pozycja';
   return {
     id: s.id, model: s.model, kier: s.kier, typ: s.typ, variant: s.variant||'', status,
@@ -697,7 +697,7 @@ function ViewDashboard() {
   );
 }
 /* ── Desktop: ViewSetups (unified — all statuses) ── */
-const DEFAULT_STATUSES=['pending','open','zamkniete'];
+const DEFAULT_STATUSES=['pending','open','after_tp1','zamkniete'];
 function ViewSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
   const [shadowFilter,setShadowFilter]=useState('all');
