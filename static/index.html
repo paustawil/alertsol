@@ -772,8 +772,9 @@ function ViewSetups() {
         setSelectedPairs(prev=>{
           if(prev!==null) return prev;
           if(settingsFilter&&settingsFilter.types.length>0)
-            return tree.flatMap(m=>m.types.flatMap(t=>
-              settingsFilter.types.includes(t.name)?t.variants.map(v=>`${m.name}:${t.name}:${v.name}`):[]));
+            return tree.flatMap(m=>m.types.flatMap(t=>t.variants
+              .filter(v=>settingsFilter.types.includes(t.name)&&settingsFilter.variants.includes(v.name))
+              .map(v=>`${m.name}:${t.name}:${v.name}`)));
           return tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`)));
         });
       }).catch(()=>{});
@@ -791,9 +792,9 @@ function ViewSetups() {
         [...new Set(selectedPairs.map(p=>p.split(':')[2]))],
       ];
     }
-    // Fallback: filtruj po enabled types z ustawień (bez wariantów — mogą nie pasować)
+    // Fallback: filtruj po enabled types z ustawień
     if(settingsFilter&&settingsFilter.types.length>0){
-      return [[],settingsFilter.types,[]];
+      return [[],settingsFilter.types,settingsFilter.variants];
     }
     return [[],[],[]];
   },[selectedPairs,filterTree,settingsFilter]);
