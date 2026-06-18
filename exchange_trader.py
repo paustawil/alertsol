@@ -771,10 +771,11 @@ def _find_preset_tpsl_pair(
     return tp1_id, tp2_id, sl1_id, sl2_id
 
 
-def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty: float) -> bool:
+def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, setup_id: int | None = None) -> bool:
     """
-    Modyfikuje istniejący SL order: nowa cena triggera i nowy rozmiar.
-    Używane po TP1 — przesunięcie SL na SLpoTP1 i zmniejszenie size do half_qty.
+    Modyfikuje cenę triggera istniejącego SL order (in-place, bez zmiany size).
+    UWAGA: NIE wysyłaj parametru 'size' — Bitget przy zmianie size+price kasuje stary
+    order i tworzy nowy async, co może prowadzić do utraty SL.
     Zwraca True jeśli modyfikacja się powiodła.
     """
     try:
@@ -785,16 +786,27 @@ def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty
             "orderId":      sl_order_id,
             "triggerPrice": _fmt_price(new_price),
             "triggerType":  "mark_price",
-            "size":         _fmt_qty(new_qty),
         })
         if resp.get("code") == "00000":
-            print(f"[exchange] SL {sl_order_id} zmodyfikowany → {new_price}, size={_fmt_qty(new_qty)} SOL")
+            print(f"[exchange] SL {sl_order_id} zmodyfikowany → {new_price}")
+            db.log_exchange_event(setup_id, "sl_modify_ok", {
+                "sl_oid": sl_order_id, "new_price": new_price, "method": "modify_in_place",
+            })
             return True
         else:
-            log.warning(f"[exchange] modify_sl {sl_order_id}: code={resp.get('code')} msg={resp.get('msg')}")
+            code = resp.get("code")
+            msg  = resp.get("msg")
+            log.warning(f"[exchange] modify_sl {sl_order_id}: code={code} msg={msg}")
+            db.log_exchange_event(setup_id, "sl_modify_fail", {
+                "sl_oid": sl_order_id, "new_price": new_price,
+                "error_code": code, "error_msg": msg,
+            })
             return False
     except Exception as e:
         log.warning(f"[exchange] modify_sl {sl_order_id}: {e}")
+        db.log_exchange_event(setup_id, "sl_modify_fail", {
+            "sl_oid": sl_order_id, "new_price": new_price, "exception": str(e),
+        })
         return False
 
 
@@ -920,12 +932,35 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
     full_qty_str = (s.get("exchange_qty_full") or "0").replace(",", ".")
     full_qty     = float(full_qty_str)
 
+    direction = s.get("direction", "")
+
     if not sl_oid:
         log.warning(f"[exchange] move_sl_to_entry #{setup_id}: brak sl_oid — nie można zmodyfikować")
         return False
 
-    _modify_sl(client, sl_oid, new_sl_price, full_qty)
-    return True
+    if _modify_sl(client, sl_oid, new_sl_price, setup_id=setup_id):
+        print(f"[exchange] move_sl_to_entry #{setup_id}: SL zmodyfikowany → {new_sl_price}")
+        return True
+
+    # Fallback: wstaw nowy SL, zweryfikuj, potem kasuj stary
+    new_sl_oid = _place_new_sl(client, direction, new_sl_price, full_qty, setup_id)
+    if new_sl_oid:
+        _cancel_order(client, sl_oid, "loss_plan")
+        db.update_setup(setup_id, exchange_sl_oid=new_sl_oid)
+        print(f"[exchange] move_sl_to_entry #{setup_id}: nowy SL → {new_sl_price} (stary {sl_oid} anulowany)")
+        db.log_exchange_event(setup_id, "sl_fallback_ok", {
+            "old_sl_oid": sl_oid, "new_sl_oid": new_sl_oid,
+            "new_price": new_sl_price, "method": "place_new_then_cancel_old",
+            "context": "move_sl_to_entry",
+        })
+        return True
+
+    log.error(f"[exchange] move_sl_to_entry #{setup_id}: nie udało się przesunąć SL — stary SL {sl_oid} pozostaje aktywny")
+    db.log_exchange_event(setup_id, "sl_fallback_fail", {
+        "old_sl_oid": sl_oid, "new_price": new_sl_price,
+        "reason": "place_new_sl returned None", "context": "move_sl_to_entry",
+    })
+    return False
 
 
 # ── Monitoring pozycji po TP1 (wirtualna druga połowa) ───────────────────────
@@ -1337,17 +1372,28 @@ def _sync_inner():
                     sl_new     = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
 
                     new_sl2_oid = sl2_oid
+                    sid_int = int(sid) if sid and sid != "?" else None
                     if sl_new and half_qty_f > 0:
-                        if sl2_oid and _modify_sl(client, sl2_oid, sl_new, half_qty_f):
+                        if sl2_oid and _modify_sl(client, sl2_oid, sl_new, setup_id=sid_int):
                             print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new}")
                         else:
-                            if sl2_oid:
-                                _cancel_order(client, sl2_oid, "loss_plan")
-                            new_sl2_oid = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
-                            if new_sl2_oid:
-                                print(f"[exchange] {label}: nowy SL2 złożony → {new_sl2_oid} @ {sl_new}")
+                            # Fallback: wstaw nowy SL PRZED kasowaniem starego
+                            placed_sl2 = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
+                            if placed_sl2:
+                                if sl2_oid:
+                                    _cancel_order(client, sl2_oid, "loss_plan")
+                                new_sl2_oid = placed_sl2
+                                print(f"[exchange] {label}: nowy SL2 złożony → {placed_sl2} @ {sl_new} (stary anulowany)")
+                                db.log_exchange_event(sid_int, "sl_fallback_ok", {
+                                    "old_sl_oid": sl2_oid, "new_sl_oid": placed_sl2,
+                                    "new_price": sl_new, "method": "place_new_then_cancel_old",
+                                })
                             else:
-                                log.warning(f"[exchange] {label}: nie udało się złożyć nowego SL2!")
+                                log.error(f"[exchange] {label}: nie udało się złożyć nowego SL2 — stary SL2 {sl2_oid} pozostaje aktywny")
+                                db.log_exchange_event(sid_int, "sl_fallback_fail", {
+                                    "old_sl_oid": sl2_oid, "new_price": sl_new,
+                                    "reason": "place_new_sl returned None",
+                                })
 
                     pnl_usd = None
                     if avg_entry and tp1_price and half_qty_f:
