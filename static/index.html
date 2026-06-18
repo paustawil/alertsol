@@ -325,17 +325,25 @@ function ActiveSetupsPanel({ mobile = false }) {
   const calcPotentialPnl = (s) => {
     const raw = s._raw || s;
     const entry = raw.avg_entry || (raw.entries && raw.entries[0] != null ? Number(raw.entries[0]) : null);
-    if (!entry) return { tp1: null, sl: null };
+    if (!entry) return { tp1: null, tp12: null, sl: null, realized: null, remaining: null, remainRisk: null, afterTp1: false };
     const tp1 = raw.tps && raw.tps[0] != null ? Number(raw.tps[0]) : null;
+    const tp2 = raw.tps && raw.tps[1] != null ? Number(raw.tps[1]) : null;
     const sl = raw.sl != null ? Number(raw.sl) : null;
+    const slAfter = raw.sl_after_tp1 != null ? Number(raw.sl_after_tp1) : null;
     const sign = (raw.kier || s.kier || '').toUpperCase() === 'LONG' ? 1 : -1;
     const tu = raw.trade_usdt || 100;
     const qty = raw.exchange_qty_full ? parseFloat(raw.exchange_qty_full) : Math.floor(tu * 20 / entry / 0.1) * 0.1;
-    if (!qty || qty <= 0) return { tp1: null, sl: null };
-    return {
-      tp1: tp1 != null ? sign * qty * (tp1 - entry) : null,
-      sl: sl != null ? sign * qty * (sl - entry) : null,
-    };
+    if (!qty || qty <= 0) return { tp1: null, tp12: null, sl: null, realized: null, remaining: null, remainRisk: null, afterTp1: false };
+    const half = qty / 2;
+    const isAfterTp1 = raw.exchange_tp1_done || raw.tp1_hit_at;
+    const tp1Pnl = tp1 != null ? sign * half * (tp1 - entry) : null;
+    const tp12Pnl = tp1 != null && tp2 != null ? sign * half * (tp1 - entry) + sign * half * (tp2 - entry) : tp1Pnl;
+    const slPnl = sl != null ? sign * qty * (sl - entry) : null;
+    const realized = isAfterTp1 && tp1 != null ? sign * half * (tp1 - entry) : null;
+    const remaining = isAfterTp1 && tp2 != null ? sign * half * (tp2 - entry) : null;
+    const slNow = isAfterTp1 ? (slAfter || entry) : null;
+    const remainRisk = isAfterTp1 && slNow != null ? sign * half * (slNow - entry) : null;
+    return { tp1: tp1Pnl, tp12: tp12Pnl, sl: slPnl, realized, remaining, remainRisk, afterTp1: !!isAfterTp1 };
   };
 
   const verifyOrder = (oid, bitget) => {
@@ -404,10 +412,10 @@ function ActiveSetupsPanel({ mobile = false }) {
                   </div>
                   <div style={{textAlign:'right'}}>
                     {isOpen && livePnl != null
-                      ? <div style={{fontFamily:'var(--mono)',fontSize:16,fontWeight:700,color:pC(livePnl)}}>{fU(livePnl)}</div>
-                      : <div style={{fontFamily:'var(--mono)',fontSize:13,color:'var(--text3)',fontStyle:'italic'}}>{pot.tp1 != null ? fU(pot.tp1) : '—'}<span style={{fontSize:9,marginLeft:2}}>pot.</span></div>
+                      ? <><div style={{fontFamily:'var(--mono)',fontSize:16,fontWeight:700,color:pC(livePnl)}}>{fU(livePnl)}</div>
+                          <div style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)'}}>{pot.afterTp1 ? `live · TP1: ${fU(pot.realized)}` : 'live'}</div></>
+                      : <div style={{fontFamily:'var(--mono)',fontSize:13,color:'var(--text3)',fontStyle:'italic'}}>{pot.tp12 != null && pot.tp12 !== pot.tp1 ? fU(pot.tp12) : (pot.tp1 != null ? fU(pot.tp1) : '—')}<span style={{fontSize:9,marginLeft:2}}>pot.</span></div>
                     }
-                    {isOpen && livePnl != null && <div style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)'}}>live</div>}
                   </div>
                 </div>
                 <div className="setup-typ">{s.typ}{s.variant && <span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span>}</div>
@@ -425,10 +433,14 @@ function ActiveSetupsPanel({ mobile = false }) {
                   {raw.score && <span style={{color:'var(--text3)'}}>Score: <span style={{color:'var(--text2)'}}>{Number(raw.score).toFixed(1)}</span></span>}
                   {raw.exchange_qty_full && <span style={{color:'var(--text3)'}}>Qty: <span style={{color:'var(--text2)'}}>{raw.exchange_qty_full} SOL</span></span>}
                 </div>
-                {pot.sl != null && <div style={{marginBottom:4}}>
-                  <span style={{color:'var(--text3)'}}>Ryzyko SL: </span>
-                  <span style={{color:'var(--red)'}}>{fU(pot.sl)}</span>
-                  {pot.tp1 != null && <><span style={{color:'var(--text3)',marginLeft:8}}>Potencjał TP1: </span><span style={{color:'var(--green)'}}>{fU(pot.tp1)}</span></>}
+                {pot.afterTp1 ? <div style={{marginBottom:4}}>
+                  <span style={{color:'var(--text3)'}}>TP1 zreal.: </span><span style={{color:'var(--green)'}}>{fU(pot.realized)}</span>
+                  {pot.remaining != null && <><span style={{color:'var(--text3)',marginLeft:8}}>Pot. TP2: </span><span style={{color:'var(--green)'}}>{fU(pot.remaining)}</span></>}
+                  {pot.remainRisk != null && <><span style={{color:'var(--text3)',marginLeft:8}}>Risk BE: </span><span style={{color:pC(pot.remainRisk)}}>{fU(pot.remainRisk)}</span></>}
+                </div> : <div style={{marginBottom:4}}>
+                  {pot.sl != null && <><span style={{color:'var(--text3)'}}>Ryzyko SL: </span><span style={{color:'var(--red)'}}>{fU(pot.sl)}</span></>}
+                  {pot.tp1 != null && <><span style={{color:'var(--text3)',marginLeft:8}}>Pot. TP1: </span><span style={{color:'var(--green)'}}>{fU(pot.tp1)}</span></>}
+                  {pot.tp12 != null && pot.tp12 !== pot.tp1 && <><span style={{color:'var(--text3)',marginLeft:8}}>Pot. TP1+TP2: </span><span style={{color:'var(--green)'}}>{fU(pot.tp12)}</span></>}
                 </div>}
                 {bitgetData && <div style={{marginTop:4,padding:'4px 0',borderTop:'1px solid var(--border)'}}>
                   <div style={{fontWeight:600,color:'var(--text3)',fontSize:9,marginBottom:3,textTransform:'uppercase',letterSpacing:'.06em'}}>Weryfikacja Bitget</div>
@@ -514,8 +526,12 @@ function ActiveSetupsPanel({ mobile = false }) {
                 <td className="mono" style={{minWidth:80}}>
                   {isOpen && livePnl != null
                     ? <><span style={{color:pC(livePnl),fontWeight:700,fontSize:13}}>{fU(livePnl)}</span><span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>live</span>
-                        <br/><span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{pot.tp1 != null ? fU(pot.tp1) : '—'} pot.</span></>
-                    : <><span style={{color:'var(--text3)',fontStyle:'italic'}}>{pot.tp1 != null ? fU(pot.tp1) : '—'}</span>
+                        {pot.afterTp1
+                          ? <br/>
+                          : <><br/><span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{pot.tp12 != null && pot.tp12 !== pot.tp1 ? fU(pot.tp12) : (pot.tp1 != null ? fU(pot.tp1) : '—')} pot.</span></>
+                        }
+                        {pot.afterTp1 && <span style={{fontSize:9,color:'var(--green)'}}>TP1: {fU(pot.realized)}</span>}</>
+                    : <><span style={{color:'var(--text3)',fontStyle:'italic'}}>{pot.tp12 != null && pot.tp12 !== pot.tp1 ? fU(pot.tp12) : (pot.tp1 != null ? fU(pot.tp1) : '—')}</span>
                         <span style={{fontSize:8,color:'var(--text3)',marginLeft:2}}>pot.</span>
                         {pot.sl != null && <><br/><span style={{fontSize:9,color:'#ff6b6b88'}}>{fU(pot.sl)} risk</span></>}</>
                   }
@@ -537,8 +553,14 @@ function ActiveSetupsPanel({ mobile = false }) {
                     {raw.score && <span><span style={{color:'var(--text3)'}}>Score:&nbsp;</span>{Number(raw.score).toFixed(1)}</span>}
                     {raw.exchange_qty_full && <span><span style={{color:'var(--text3)'}}>Qty:&nbsp;</span>{raw.exchange_qty_full} SOL</span>}
                     {raw.alert_time && <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{raw.alert_time}</span>}
-                    {pot.sl != null && <span><span style={{color:'var(--text3)'}}>Ryzyko SL:&nbsp;</span><span style={{color:'var(--red)'}}>{fU(pot.sl)}</span></span>}
-                    {pot.tp1 != null && <span><span style={{color:'var(--text3)'}}>Potencjał TP1:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.tp1)}</span></span>}
+                    {pot.afterTp1
+                      ? <>{pot.realized != null && <span><span style={{color:'var(--text3)'}}>TP1 zreal.:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.realized)}</span></span>}
+                          {pot.remaining != null && <span><span style={{color:'var(--text3)'}}>Pot. TP2:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.remaining)}</span></span>}
+                          {pot.remainRisk != null && <span><span style={{color:'var(--text3)'}}>Risk BE:&nbsp;</span><span style={{color:pC(pot.remainRisk)}}>{fU(pot.remainRisk)}</span></span>}</>
+                      : <>{pot.sl != null && <span><span style={{color:'var(--text3)'}}>Ryzyko SL:&nbsp;</span><span style={{color:'var(--red)'}}>{fU(pot.sl)}</span></span>}
+                          {pot.tp1 != null && <span><span style={{color:'var(--text3)'}}>Pot. TP1:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.tp1)}</span></span>}
+                          {pot.tp12 != null && pot.tp12 !== pot.tp1 && <span><span style={{color:'var(--text3)'}}>Pot. TP1+TP2:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.tp12)}</span></span>}</>
+                    }
                   </div>
                   {bitgetData && <div style={{padding:'6px 0 2px',borderTop:'1px solid var(--border)'}}>
                     <div style={{fontWeight:600,color:'var(--text3)',fontSize:9,marginBottom:4,textTransform:'uppercase',letterSpacing:'.06em'}}>Weryfikacja zleceń Bitget</div>
@@ -818,8 +840,9 @@ function ViewSetups() {
     const qty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(tu*20/entry/0.1)*0.1;
     if(!qty||qty<=0) return {tp1:null,tp12:null,sl:null,tp1Pct:null,tp12Pct:null};
     const margin=qty*entry/20;
-    const tp1Pnl=tp1!=null?sign*qty*(tp1-entry):null;
-    const tp12Pnl=tp1!=null&&tp2!=null?sign*(qty/2)*(tp1-entry)+sign*(qty/2)*(tp2-entry):tp1Pnl;
+    const half=qty/2;
+    const tp1Pnl=tp1!=null?sign*half*(tp1-entry):null;
+    const tp12Pnl=tp1!=null&&tp2!=null?sign*half*(tp1-entry)+sign*half*(tp2-entry):tp1Pnl;
     const slPnl=sl!=null?sign*qty*(sl-entry):null;
     const tp1Pct=tp1Pnl!=null?Math.round(tp1Pnl/margin*10000)/100:null;
     const tp12Pct=tp12Pnl!=null?Math.round(tp12Pnl/margin*10000)/100:null;
