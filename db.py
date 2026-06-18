@@ -151,8 +151,8 @@ def _migrate_tp1_pnl() -> None:
 
 
 def _migrate_variant_from_type() -> None:
-    """Naprawia variant nadpisane przez starą migrację (variant=type → oryginalna wartość).
-    Bezpieczne do wielokrotnego wywołania."""
+    """Jednorazowa naprawa: przywraca oryginalne warianty dla setupów,
+    którym variant został błędnie ustawiony na type."""
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -165,7 +165,7 @@ def _migrate_variant_from_type() -> None:
                   )
                 """,
             )
-            fixed_baseline = cur.rowcount
+            b = cur.rowcount
             cur.execute(
                 """
                 UPDATE setups SET variant = 'h1_atr'
@@ -173,10 +173,9 @@ def _migrate_variant_from_type() -> None:
                   AND type IN ('impulse_aggressive_long', 'impulse_aggressive_short')
                 """,
             )
-            fixed_h1 = cur.rowcount
-    total = fixed_baseline + fixed_h1
-    if total:
-        log.info(f"[migrate] Naprawiono variant dla {total} setupów (baseline={fixed_baseline}, h1_atr={fixed_h1}).")
+            h = cur.rowcount
+    if b + h:
+        log.info(f"[migrate] Przywrócono variant: baseline={b}, h1_atr={h}.")
 
 
 # ── Setups ────────────────────────────────────────────────────────────────────
