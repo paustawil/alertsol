@@ -178,49 +178,39 @@ CREATE TABLE IF NOT EXISTS exchange_events (
 CREATE INDEX IF NOT EXISTS idx_exchange_events_setup ON exchange_events (setup_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exchange_events_recent ON exchange_events (created_at DESC);
 
--- ── Korekta P&L dla setupów 1782 i 1780 (problemy z sync Bitget) ──────────────
+-- ── Korekta P&L dla setupów 1282 i 1280 (problemy z sync Bitget) ──────────────
 
--- Setup 1782 (LONG, SL): pnl_usd był błędny — przelicz z planowanego SL
--- Używa COALESCE(avg_entry, entries->>0) bo avg_entry może być NULL
+-- Setup 1282 (LONG, SL): pnl_usd policzony z domyślnym qty (trade_usdt=100)
+-- zamiast faktycznego trade_usdt=816.12. Przelicz z zapisanym trade_usdt.
 UPDATE setups SET
-    avg_entry = COALESCE(avg_entry, (entries->>0)::numeric),
-    avg_exit = sl,
     pnl_usd = ROUND(
-        (sl - COALESCE(avg_entry, (entries->>0)::numeric))
-        * COALESCE(NULLIF(exchange_qty_full, '')::numeric,
-                   FLOOR(COALESCE(trade_usdt, 100) * 20
-                         / COALESCE(avg_entry, (entries->>0)::numeric) / 0.1) * 0.1),
+        (avg_exit - avg_entry)
+        * FLOOR(trade_usdt * 20 / avg_entry / 0.1) * 0.1,
         4),
     pnl_pct = ROUND(
-        (sl - COALESCE(avg_entry, (entries->>0)::numeric))
-        * COALESCE(NULLIF(exchange_qty_full, '')::numeric,
-                   FLOOR(COALESCE(trade_usdt, 100) * 20
-                         / COALESCE(avg_entry, (entries->>0)::numeric) / 0.1) * 0.1)
-        / NULLIF(COALESCE(trade_usdt, 100), 0) * 100,
+        (avg_exit - avg_entry)
+        * FLOOR(trade_usdt * 20 / avg_entry / 0.1) * 0.1
+        / trade_usdt * 100,
         2)
-WHERE setup_id = 1782
-  AND result = 'SL';
+WHERE setup_id = 1282
+  AND result = 'SL'
+  AND pnl_usd = -29.0200;
 
--- Setup 1780 (SHORT, TP1+TP2): pnl_usd był NULL — oblicz jako suma TP1 + TP2 (po połowie qty)
+-- Setup 1280 (SHORT, TP1+TP2): avg_entry NULL, pnl_usd NULL.
+-- Oblicz z entries[0], exchange_qty_half, tps[0]+tps[1].
 UPDATE setups SET
-    avg_entry = COALESCE(avg_entry, (entries->>0)::numeric),
-    avg_exit = (tps->>1)::numeric,
+    avg_entry = (entries->>0)::numeric,
     pnl_usd = ROUND(
-        COALESCE(NULLIF(exchange_qty_half, '')::numeric,
-                 NULLIF(exchange_qty_full, '')::numeric / 2,
-                 FLOOR(COALESCE(trade_usdt, 100) * 20
-                       / COALESCE(avg_entry, (entries->>0)::numeric) / 0.1) * 0.1 / 2)
-        * (  (COALESCE(avg_entry, (entries->>0)::numeric) - (tps->>0)::numeric)
-           + (COALESCE(avg_entry, (entries->>0)::numeric) - (tps->>1)::numeric) ),
+        exchange_qty_half::numeric
+        * (  ((entries->>0)::numeric - (tps->>0)::numeric)
+           + ((entries->>0)::numeric - (tps->>1)::numeric) ),
         4),
     pnl_pct = ROUND(
-        COALESCE(NULLIF(exchange_qty_half, '')::numeric,
-                 NULLIF(exchange_qty_full, '')::numeric / 2,
-                 FLOOR(COALESCE(trade_usdt, 100) * 20
-                       / COALESCE(avg_entry, (entries->>0)::numeric) / 0.1) * 0.1 / 2)
-        * (  (COALESCE(avg_entry, (entries->>0)::numeric) - (tps->>0)::numeric)
-           + (COALESCE(avg_entry, (entries->>0)::numeric) - (tps->>1)::numeric) )
-        / NULLIF(COALESCE(trade_usdt, 100), 0) * 100,
+        exchange_qty_half::numeric
+        * (  ((entries->>0)::numeric - (tps->>0)::numeric)
+           + ((entries->>0)::numeric - (tps->>1)::numeric) )
+        / trade_usdt * 100,
         2)
-WHERE setup_id = 1780
-  AND result = 'TP1+TP2';
+WHERE setup_id = 1280
+  AND result = 'TP1+TP2'
+  AND pnl_usd IS NULL;
