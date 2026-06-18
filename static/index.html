@@ -338,9 +338,9 @@ function ActiveSetupsPanel({ mobile = false }) {
     if (!qty || qty <= 0) return { tp1: null, tp12: null, sl: null, realized: null, remaining: null, remainRisk: null, afterTp1: false };
     const half = qty / 2;
     const isAfterTp1 = raw.exchange_tp1_done || raw.tp1_hit_at;
-    const tp1Pnl = tp1 != null ? sign * half * (tp1 - entry) : null;
+    const tp1Pnl = tp1 != null ? (isAfterTp1 ? sign * half * (tp1 - entry) : sign * qty * (tp1 - entry)) : null;
     const tp12Pnl = tp1 != null && tp2 != null ? sign * half * (tp1 - entry) + sign * half * (tp2 - entry) : tp1Pnl;
-    const slPnl = sl != null ? sign * qty * (sl - entry) : null;
+    const slPnl = sl != null ? sign * (isAfterTp1 ? half : qty) * (sl - entry) : null;
     const realized = isAfterTp1 && tp1 != null ? sign * half * (tp1 - entry) : null;
     const remaining = isAfterTp1 && tp2 != null ? sign * half * (tp2 - entry) : null;
     const slNow = isAfterTp1 ? (slAfter || entry) : null;
@@ -845,12 +845,13 @@ function ViewSetups() {
     if(!qty||qty<=0) return {tp1:null,tp12:null,sl:null,tp1Pct:null,tp12Pct:null};
     const margin=qty*entry/20;
     const half=qty/2;
-    const tp1Pnl=tp1!=null?sign*half*(tp1-entry):null;
+    const afterTp1=r.status_key==='after_tp1';
+    const tp1Pnl=tp1!=null?(afterTp1?sign*half*(tp1-entry):sign*qty*(tp1-entry)):null;
     const tp12Pnl=tp1!=null&&tp2!=null?sign*half*(tp1-entry)+sign*half*(tp2-entry):tp1Pnl;
-    const slPnl=sl!=null?sign*qty*(sl-entry):null;
+    const slPnl=sl!=null?sign*(afterTp1?half:qty)*(sl-entry):null;
     const tp1Pct=tp1Pnl!=null?Math.round(tp1Pnl/margin*10000)/100:null;
     const tp12Pct=tp12Pnl!=null?Math.round(tp12Pnl/margin*10000)/100:null;
-    return {tp1:tp1Pnl,tp12:tp12Pnl,sl:slPnl,tp1Pct,tp12Pct};
+    return {tp1:tp1Pnl,tp12:tp12Pnl,sl:slPnl,tp1Pct,tp12Pct,afterTp1};
   };
   const StatusPill=({sk,sl})=>{
     const cls={pending:'czeka',open:'pozycja',after_tp1:'po_tp1'}[sk]||'';
