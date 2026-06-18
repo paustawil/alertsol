@@ -21,6 +21,7 @@ import psycopg2.pool
 log = logging.getLogger(__name__)
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
+_pool_lock = threading.Lock()
 
 # Snapshot dla change-detection w save_pending_list()
 # Thread-local: każdy wątek (exchange_sync / sol_alert) ma własny baseline,
@@ -45,16 +46,19 @@ _EXCHANGE_FIELDS = [
 
 def get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
-    if _pool is None:
-        url = os.environ.get("DATABASE_URL")
-        if not url:
-            raise RuntimeError("DATABASE_URL nie jest ustawiona")
-        _pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=1,
-            maxconn=5,
-            dsn=url,
-        )
-        log.info("DB pool zainicjalizowany.")
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        if _pool is None:
+            url = os.environ.get("DATABASE_URL")
+            if not url:
+                raise RuntimeError("DATABASE_URL nie jest ustawiona")
+            _pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=1,
+                maxconn=5,
+                dsn=url,
+            )
+            log.info("DB pool zainicjalizowany.")
     return _pool
 
 
@@ -504,7 +508,10 @@ def save_pending_list(pending: list[dict]) -> None:
     Zapisuje tylko te pola exchange_*, które zmieniły się względem snapshotu.
     Odpowiednik _save_pending() z exchange_trader.py.
     """
-    baseline_map = getattr(_thread_local, "baseline", {})
+    baseline_map = getattr(_thread_local, "baseline", None)
+    if baseline_map is None:
+        log.warning("save_pending_list: brak baseline — load_pending() nie został wywołany w tym wątku")
+        baseline_map = {}
     for s in pending:
         sid = s.get("setup_id")
         if sid is None:
