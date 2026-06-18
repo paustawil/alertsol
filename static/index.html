@@ -769,10 +769,15 @@ function ViewSetups() {
     fetch('/api/dashboard/variants-tree').then(r=>r.ok?r.json():[])
       .then(tree=>{
         setFilterTree(tree);
-        setSelectedPairs(prev=>prev!==null?prev:
-          tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`))));
+        setSelectedPairs(prev=>{
+          if(prev!==null) return prev;
+          if(settingsFilter&&settingsFilter.types.length>0)
+            return tree.flatMap(m=>m.types.flatMap(t=>
+              settingsFilter.types.includes(t.name)?t.variants.map(v=>`${m.name}:${t.name}:${v.name}`):[]));
+          return tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`)));
+        });
       }).catch(()=>{});
-  },[]);
+  },[settingsFilter]);
   // Oblicz modele, typy i warianty z wybranych par (format model:type:variant)
   const [modelFilters,typeFilters,variantFilters]=React.useMemo(()=>{
     // Jeśli drzewo załadowane — używaj selectedPairs
@@ -786,9 +791,12 @@ function ViewSetups() {
         [...new Set(selectedPairs.map(p=>p.split(':')[2]))],
       ];
     }
-    // Fallback: brak filtra (pokaż wszystko) dopóki drzewo się nie załaduje
+    // Fallback: filtruj po enabled types z ustawień (bez wariantów — mogą nie pasować)
+    if(settingsFilter&&settingsFilter.types.length>0){
+      return [[],settingsFilter.types,[]];
+    }
     return [[],[],[]];
-  },[selectedPairs,filterTree]);
+  },[selectedPairs,filterTree,settingsFilter]);
   const pairsFiltered=selectedPairs!==null&&filterTree.length>0&&
     selectedPairs.length<filterTree.flatMap(m=>m.types.flatMap(t=>t.variants)).length;
   useEffect(()=>{
