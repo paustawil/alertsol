@@ -694,6 +694,8 @@ def _resize_pending_plan_orders(client: BitgetClient, pending: list[dict], accou
             continue
         if s.get("exchange_position_opened", False):
             continue
+        if s.get("_just_placed"):
+            continue
         sid = s.get("setup_id", "?")
         entries = s.get("entries", [])
         if not entries:
@@ -1180,6 +1182,7 @@ def _sync_inner():
                     s["exchange_qty_full"]        = _fmt_qty(full_qty)
                     s["exchange_qty_half"]        = _fmt_qty(half_qty)
                     s["exchange_position_opened"] = False
+                    s["_just_placed"]             = True
                     modified = True
                     print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
                 else:
@@ -1198,11 +1201,12 @@ def _sync_inner():
             print(f"[exchange] {label}: plan1 status = {status1}")
 
             if status1 == "cancelled":
-                print(f"[exchange] {label}: plan1 anulowany z zewnątrz — anuluję plan2 i zamykam")
+                print(f"[exchange] {label}: plan1 anulowany z zewnątrz — anuluję plan2 i zamykam setup")
                 if plan2_oid:
                     _cancel_order(client, plan2_oid, "normal_plan")
                 s["exchange_plan_oid"]  = None
                 s["exchange_plan2_oid"] = None
+                s["exchange_done"]      = True
                 modified = True
 
             elif status1 == "executed":
