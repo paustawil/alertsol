@@ -772,11 +772,8 @@ def _find_preset_tpsl_pair(
 
 
 def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, new_qty: float) -> bool:
-    """
-    Modyfikuje istniejący SL order: nowa cena triggera i nowy rozmiar.
-    Używane po TP1 — przesunięcie SL na SLpoTP1 i zmniejszenie size do half_qty.
-    Zwraca True jeśli modyfikacja się powiodła.
-    """
+    """DEPRECATED — NIE UŻYWAĆ. modify-tpsl-order wewnętrznie kasuje stary order i tworzy
+    nowy async, co może prowadzić do utraty SL. Zamiast tego: _place_new_sl + weryfikacja + _cancel_order."""
     try:
         resp = client.post("/api/v2/mix/order/modify-tpsl-order", {
             "symbol":       SYMBOL,
@@ -903,7 +900,8 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
     """
     Przesuwa SL do ceny wejścia (break-even) dla otwartej pozycji.
     Wywoływana przy inwalidacji reżimu gdy setup jest na plusie.
-    Zwraca True jeśli modyfikacja się powiodła.
+    Bezpieczna strategia: najpierw wstaw nowy SL, zweryfikuj, potem kasuj stary.
+    Zwraca True jeśli przesunięcie się powiodło.
     """
     client = _client()
     if client is None:
@@ -917,6 +915,7 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
         return False
 
     sl_oid       = s.get("exchange_sl_oid")
+    direction    = s.get("direction", "")
     full_qty_str = (s.get("exchange_qty_full") or "0").replace(",", ".")
     full_qty     = float(full_qty_str)
 
@@ -924,7 +923,19 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
         log.warning(f"[exchange] move_sl_to_entry #{setup_id}: brak sl_oid — nie można zmodyfikować")
         return False
 
-    _modify_sl(client, sl_oid, new_sl_price, full_qty)
+    new_sl_oid = _place_new_sl(client, direction, new_sl_price, full_qty, setup_id)
+    if not new_sl_oid:
+        log.error(f"[exchange] move_sl_to_entry #{setup_id}: nie udało się złożyć nowego SL — stary SL {sl_oid} pozostaje aktywny")
+        return False
+
+    sl_check = _tpsl_order_status(client, new_sl_oid)
+    if sl_check != "live":
+        log.error(f"[exchange] move_sl_to_entry #{setup_id}: nowy SL {new_sl_oid} status={sl_check} — stary SL {sl_oid} pozostaje aktywny")
+        return False
+
+    _cancel_order(client, sl_oid, "loss_plan")
+    db.update_setup(setup_id, exchange_sl_oid=new_sl_oid)
+    print(f"[exchange] move_sl_to_entry #{setup_id}: SL przesunięty → {new_sl_price} (nowy={new_sl_oid}, stary={sl_oid} anulowany)")
     return True
 
 
@@ -1338,16 +1349,27 @@ def _sync_inner():
 
                     new_sl2_oid = sl2_oid
                     if sl_new and half_qty_f > 0:
-                        if sl2_oid and _modify_sl(client, sl2_oid, sl_new, half_qty_f):
-                            print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new}")
-                        else:
-                            if sl2_oid:
-                                _cancel_order(client, sl2_oid, "loss_plan")
-                            new_sl2_oid = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
-                            if new_sl2_oid:
-                                print(f"[exchange] {label}: nowy SL2 złożony → {new_sl2_oid} @ {sl_new}")
+                        # Bezpieczna strategia: NAJPIERW wstaw nowy SL, potem kasuj stary.
+                        # modify-tpsl-order wewnętrznie kasuje + tworzy async — nie jest bezpieczne.
+                        placed_sl2 = None
+                        for attempt in range(1, 4):
+                            placed_sl2 = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
+                            if placed_sl2:
+                                break
+                            log.warning(f"[exchange] {label}: SL2-BE próba {attempt}/3 nie powiodła się")
+                            time.sleep(1)
+
+                        if placed_sl2:
+                            sl2_check = _tpsl_order_status(client, placed_sl2)
+                            if sl2_check == "live":
+                                if sl2_oid:
+                                    _cancel_order(client, sl2_oid, "loss_plan")
+                                new_sl2_oid = placed_sl2
+                                print(f"[exchange] {label}: SL2-BE aktywny → {placed_sl2} @ {sl_new} (stary SL2 anulowany)")
                             else:
-                                log.warning(f"[exchange] {label}: nie udało się złożyć nowego SL2!")
+                                log.warning(f"[exchange] {label}: nowy SL2 {placed_sl2} status={sl2_check} — zachowuję stary SL2 {sl2_oid}")
+                        else:
+                            log.error(f"[exchange] {label}: KRYTYCZNE — nie udało się złożyć SL2-BE po 3 próbach! Stary SL2 {sl2_oid} pozostaje aktywny")
 
                     pnl_usd = None
                     if avg_entry and tp1_price and half_qty_f:
