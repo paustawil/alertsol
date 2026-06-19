@@ -878,21 +878,27 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
         return False
 
     if _modify_sl(client, sl_oid, new_sl_price, setup_id=setup_id):
-        print(f"[exchange] move_sl_to_entry #{setup_id}: SL zmodyfikowany → {new_sl_price}")
-        return True
+        sl_check = _tpsl_order_status(client, sl_oid)
+        if sl_check == "live":
+            print(f"[exchange] move_sl_to_entry #{setup_id}: SL zmodyfikowany → {new_sl_price} (zweryfikowany)")
+            return True
+        log.warning(f"[exchange] move_sl_to_entry #{setup_id}: modify OK ale status={sl_check} — fallback")
 
-    # Fallback: wstaw nowy SL, zweryfikuj, potem kasuj stary
+    # Fallback: wstaw nowy SL, zweryfikuj, dopiero potem kasuj stary
     new_sl_oid = _place_new_sl(client, direction, new_sl_price, full_qty, setup_id)
     if new_sl_oid:
-        _cancel_order(client, sl_oid, "loss_plan")
-        db.update_setup(setup_id, exchange_sl_oid=new_sl_oid)
-        print(f"[exchange] move_sl_to_entry #{setup_id}: nowy SL → {new_sl_price} (stary {sl_oid} anulowany)")
-        db.log_exchange_event(setup_id, "sl_fallback_ok", {
-            "old_sl_oid": sl_oid, "new_sl_oid": new_sl_oid,
-            "new_price": new_sl_price, "method": "place_new_then_cancel_old",
-            "context": "move_sl_to_entry",
-        })
-        return True
+        sl_check = _tpsl_order_status(client, new_sl_oid)
+        if sl_check == "live":
+            _cancel_order(client, sl_oid, "loss_plan")
+            db.update_setup(setup_id, exchange_sl_oid=new_sl_oid)
+            print(f"[exchange] move_sl_to_entry #{setup_id}: nowy SL → {new_sl_price} (zweryfikowany, stary anulowany)")
+            db.log_exchange_event(setup_id, "sl_fallback_ok", {
+                "old_sl_oid": sl_oid, "new_sl_oid": new_sl_oid,
+                "new_price": new_sl_price, "method": "place_new_verify_cancel_old",
+                "context": "move_sl_to_entry",
+            })
+            return True
+        log.error(f"[exchange] move_sl_to_entry #{setup_id}: nowy SL złożony ({new_sl_oid}) ale status={sl_check}")
 
     log.error(f"[exchange] move_sl_to_entry #{setup_id}: nie udało się przesunąć SL — stary SL {sl_oid} pozostaje aktywny")
     db.log_exchange_event(setup_id, "sl_fallback_fail", {
@@ -1319,12 +1325,10 @@ def _sync_inner():
                     full_qty_f = float((s.get("exchange_qty_full") or "0").replace(",", "."))
                     half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
 
-                    # Anuluj SL1 (Bitget mógł już auto-anulować)
-                    if sl_oid:
-                        _cancel_order(client, sl_oid, "loss_plan")
-
                     if s.get("tp_strategy") == "tp1_only":
-                        # Cała pozycja zamknięta na TP1 — zakończ setup od razu
+                        # Cała pozycja zamknięta na TP1 — anuluj SL1 i zakończ setup
+                        if sl_oid:
+                            _cancel_order(client, sl_oid, "loss_plan")
                         pnl_usd = None
                         if avg_entry and tp1_price and full_qty_f:
                             sign    = 1 if s.get("direction") == "long" else -1
@@ -1337,46 +1341,78 @@ def _sync_inner():
                             db.resolve_setup(int(sid), "TP1", avg_entry, tp1_price, pnl_usd, None)
                         continue
 
-                    # Strategia TP1+TP2: przesuń SL2 → sl_after_tp1 (BE) i czekaj na TP2
+                    # Strategia TP1+TP2: NAJPIERW zabezpiecz SL2, POTEM anuluj SL1
                     sl_new_raw = s.get("sl_after_tp1")
                     sl_new     = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
 
                     new_sl2_oid = sl2_oid
                     sid_int = int(sid) if sid and sid != "?" else None
+                    sl2_secured = False
+
                     if sl_new and half_qty_f > 0:
+                        # Próba 1: modyfikuj istniejący SL2 in-place
                         if sl2_oid and _modify_sl(client, sl2_oid, sl_new, setup_id=sid_int):
-                            print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new}")
-                        else:
-                            # Fallback: wstaw nowy SL PRZED kasowaniem starego
+                            sl2_check = _tpsl_order_status(client, sl2_oid)
+                            if sl2_check == "live":
+                                sl2_secured = True
+                                print(f"[exchange] {label}: SL2 zmodyfikowany → {sl_new} (zweryfikowany)")
+                            else:
+                                log.warning(f"[exchange] {label}: SL2 modify OK ale status={sl2_check} — fallback")
+
+                        # Próba 2: złóż nowy SL, zweryfikuj, dopiero potem kasuj stary
+                        if not sl2_secured:
                             placed_sl2 = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
                             if placed_sl2:
-                                if sl2_oid:
-                                    _cancel_order(client, sl2_oid, "loss_plan")
-                                new_sl2_oid = placed_sl2
-                                print(f"[exchange] {label}: nowy SL2 złożony → {placed_sl2} @ {sl_new} (stary anulowany)")
-                                db.log_exchange_event(sid_int, "sl_fallback_ok", {
-                                    "old_sl_oid": sl2_oid, "new_sl_oid": placed_sl2,
-                                    "new_price": sl_new, "method": "place_new_then_cancel_old",
-                                })
+                                sl2_check = _tpsl_order_status(client, placed_sl2)
+                                if sl2_check == "live":
+                                    if sl2_oid:
+                                        _cancel_order(client, sl2_oid, "loss_plan")
+                                    new_sl2_oid = placed_sl2
+                                    sl2_secured = True
+                                    print(f"[exchange] {label}: nowy SL2 → {placed_sl2} @ {sl_new} (zweryfikowany, stary anulowany)")
+                                    db.log_exchange_event(sid_int, "sl_fallback_ok", {
+                                        "old_sl_oid": sl2_oid, "new_sl_oid": placed_sl2,
+                                        "new_price": sl_new, "method": "place_new_verify_cancel_old",
+                                    })
+                                else:
+                                    log.error(f"[exchange] {label}: nowy SL2 złożony ({placed_sl2}) ale status={sl2_check}")
+                                    db.log_exchange_event(sid_int, "sl_fallback_fail", {
+                                        "new_sl_oid": placed_sl2, "new_price": sl_new,
+                                        "reason": f"placed but status={sl2_check}",
+                                    })
                             else:
-                                log.error(f"[exchange] {label}: nie udało się złożyć nowego SL2 — stary SL2 {sl2_oid} pozostaje aktywny")
+                                log.error(f"[exchange] {label}: nie udało się złożyć nowego SL2")
                                 db.log_exchange_event(sid_int, "sl_fallback_fail", {
                                     "old_sl_oid": sl2_oid, "new_price": sl_new,
                                     "reason": "place_new_sl returned None",
                                 })
 
+                    # Anuluj SL1 DOPIERO po zabezpieczeniu SL2
+                    if sl2_secured:
+                        if sl_oid:
+                            _cancel_order(client, sl_oid, "loss_plan")
+                        s["exchange_sl_oid"] = None
+                    else:
+                        # SL2 nie zabezpieczony — SL1 pozostaje jako awaryjne zabezpieczenie
+                        log.error(f"[exchange] {label}: KRYTYCZNE — SL2 nie zabezpieczony! "
+                                  f"SL1 ({sl_oid}) pozostaje aktywny jako ochrona na cenie {s.get('sl')}")
+                        db.log_exchange_event(sid_int, "sl2_not_secured", {
+                            "sl1_oid": sl_oid, "sl2_oid": sl2_oid,
+                            "sl_new": sl_new, "sl_original": s.get("sl"),
+                        })
+
                     pnl_usd = None
                     if avg_entry and tp1_price and half_qty_f:
                         sign    = 1 if s.get("direction") == "long" else -1
                         pnl_usd = sign * half_qty_f * (tp1_price - float(avg_entry))
-                    s["pnl_usd"] = pnl_usd  # zachowaj w pamięci dla późniejszego TP1+BE/TP1+TP2
+                    s["pnl_usd"] = pnl_usd
 
                     s["exchange_tp1_oid"]  = None
                     s["exchange_tp1_done"] = True
-                    s["exchange_sl_oid"]   = None
                     s["exchange_sl2_oid"]  = new_sl2_oid
                     modified = True
-                    print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 (SL2={new_sl2_oid})")
+                    print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 "
+                          f"(SL2={new_sl2_oid}, secured={sl2_secured})")
                     if sid and sid != "?":
                         db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
                     continue
@@ -1457,9 +1493,34 @@ def _sync_inner():
                         db.resolve_setup(int(sid), "TP1+BE", avg_entry, avg_entry, pnl_tp1, None)
                         print(f"[exchange] {label}: TP1+BE — pnl tp1={pnl_tp1:.2f}")
                     continue
-                elif sl2_status == "cancelled":
-                    log.warning(f"[exchange] {label}: SL2-BE anulowany ręcznie")
-                    s["exchange_sl2_oid"] = None
+                elif sl2_status in ("cancelled", "unknown"):
+                    log.warning(f"[exchange] {label}: SL2-BE status={sl2_status} — próbuję odtworzyć")
+                    half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
+                    sl_new_raw = s.get("sl_after_tp1")
+                    avg_entry  = s.get("avg_entry")
+                    sl_new = float(sl_new_raw) if sl_new_raw else (float(avg_entry) if avg_entry else None)
+                    replaced_sl2 = None
+                    if sl_new and half_qty_f > 0:
+                        replaced_sl2 = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
+                    if replaced_sl2:
+                        sl2_check = _tpsl_order_status(client, replaced_sl2)
+                        if sl2_check == "live":
+                            s["exchange_sl2_oid"] = replaced_sl2
+                            print(f"[exchange] {label}: SL2-BE odtworzony → {replaced_sl2} @ {sl_new}")
+                            db.log_exchange_event(
+                                int(sid) if sid and sid != "?" else None,
+                                "sl2_restored", {"new_sl_oid": replaced_sl2, "price": sl_new},
+                            )
+                        else:
+                            log.error(f"[exchange] {label}: SL2-BE odtworzony ({replaced_sl2}) ale status={sl2_check}")
+                            s["exchange_sl2_oid"] = None
+                    else:
+                        log.error(f"[exchange] {label}: KRYTYCZNE — nie udało się odtworzyć SL2-BE! Pozycja bez ochrony")
+                        s["exchange_sl2_oid"] = None
+                        db.log_exchange_event(
+                            int(sid) if sid and sid != "?" else None,
+                            "sl2_restore_fail", {"old_sl_oid": sl2_oid, "sl_new": sl_new},
+                        )
                     modified = True
 
             # Zwolnij slot gdy faza 2 bez zleceń
