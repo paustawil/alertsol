@@ -707,6 +707,32 @@ def _find_preset_tpsl_pair(
     return tp1_id, tp2_id, sl1_id, sl2_id
 
 
+def _snapshot_tpsl_orders(client: BitgetClient, hold_side: str) -> list[dict]:
+    """Pobiera snapshot wszystkich aktywnych TPSL orderów dla danej strony pozycji."""
+    try:
+        resp = client.get("/api/v2/mix/order/orders-plan-pending", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "planType":    "profit_loss",
+        })
+        if resp.get("code") == "00000":
+            orders = []
+            for o in (resp["data"].get("entrustedList") or []):
+                if o.get("posSide", o.get("holdSide", "")) != hold_side:
+                    continue
+                orders.append({
+                    "orderId":      o.get("orderId"),
+                    "planType":     o.get("planType"),
+                    "triggerPrice": o.get("triggerPrice"),
+                    "size":         o.get("size"),
+                    "planStatus":   o.get("planStatus", ""),
+                })
+            return orders
+    except Exception as e:
+        log.warning(f"[exchange] _snapshot_tpsl_orders: {e}")
+    return []
+
+
 def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, setup_id: int | None = None) -> bool:
     """
     Modyfikuje cenę triggera istniejącego SL order (in-place, bez zmiany size).
@@ -1325,6 +1351,27 @@ def _sync_inner():
                     full_qty_f = float((s.get("exchange_qty_full") or "0").replace(",", "."))
                     half_qty_f = float((s.get("exchange_qty_half") or "0").replace(",", "."))
 
+                    # DIAGNOSTYKA: snapshot TPSL orderów PRZED jakąkolwiek operacją
+                    sid_int_diag = int(sid) if sid and sid != "?" else None
+                    snap_before = _snapshot_tpsl_orders(client, direction)
+                    live_ids = {o["orderId"] for o in snap_before}
+                    sl1_alive = sl_oid in live_ids if sl_oid else False
+                    sl2_alive = sl2_oid in live_ids if sl2_oid else False
+                    tp2_oid_check = s.get("exchange_tp2_oid")
+                    tp2_alive = tp2_oid_check in live_ids if tp2_oid_check else False
+                    print(f"[exchange] {label}: TP1 executed — TPSL na giełdzie: {len(snap_before)} orderów")
+                    print(f"[exchange] {label}: SL1={sl_oid} alive={sl1_alive} | "
+                          f"SL2={sl2_oid} alive={sl2_alive} | TP2={tp2_oid_check} alive={tp2_alive}")
+                    for o in snap_before:
+                        print(f"[exchange] {label}:   -> {o['orderId']} {o['planType']} "
+                              f"trigger={o['triggerPrice']} size={o['size']}")
+                    db.log_exchange_event(sid_int_diag, "tp1_diag_before", {
+                        "tpsl_on_exchange": snap_before,
+                        "our_sl1_oid": sl_oid, "sl1_alive": sl1_alive,
+                        "our_sl2_oid": sl2_oid, "sl2_alive": sl2_alive,
+                        "our_tp2_oid": tp2_oid_check, "tp2_alive": tp2_alive,
+                    })
+
                     if s.get("tp_strategy") == "tp1_only":
                         # Cała pozycja zamknięta na TP1 — anuluj SL1 i zakończ setup
                         if sl_oid:
@@ -1350,8 +1397,8 @@ def _sync_inner():
                     sl2_secured = False
 
                     if sl_new and half_qty_f > 0:
-                        # Próba 1: modyfikuj istniejący SL2 in-place
-                        if sl2_oid and _modify_sl(client, sl2_oid, sl_new, setup_id=sid_int):
+                        # Próba 1: modyfikuj istniejący SL2 in-place (tylko jeśli istnieje na giełdzie)
+                        if sl2_oid and sl2_alive and _modify_sl(client, sl2_oid, sl_new, setup_id=sid_int):
                             sl2_check = _tpsl_order_status(client, sl2_oid)
                             if sl2_check == "live":
                                 sl2_secured = True
@@ -1365,7 +1412,7 @@ def _sync_inner():
                             if placed_sl2:
                                 sl2_check = _tpsl_order_status(client, placed_sl2)
                                 if sl2_check == "live":
-                                    if sl2_oid:
+                                    if sl2_oid and sl2_alive:
                                         _cancel_order(client, sl2_oid, "loss_plan")
                                     new_sl2_oid = placed_sl2
                                     sl2_secured = True
@@ -1389,15 +1436,17 @@ def _sync_inner():
 
                     # Anuluj SL1 DOPIERO po zabezpieczeniu SL2
                     if sl2_secured:
-                        if sl_oid:
+                        if sl_oid and sl1_alive:
                             _cancel_order(client, sl_oid, "loss_plan")
                         s["exchange_sl_oid"] = None
                     else:
                         # SL2 nie zabezpieczony — SL1 pozostaje jako awaryjne zabezpieczenie
                         log.error(f"[exchange] {label}: KRYTYCZNE — SL2 nie zabezpieczony! "
-                                  f"SL1 ({sl_oid}) pozostaje aktywny jako ochrona na cenie {s.get('sl')}")
+                                  f"SL1 ({sl_oid}) alive={sl1_alive} pozostaje jako ochrona "
+                                  f"na cenie {s.get('sl')}")
                         db.log_exchange_event(sid_int, "sl2_not_secured", {
-                            "sl1_oid": sl_oid, "sl2_oid": sl2_oid,
+                            "sl1_oid": sl_oid, "sl1_alive": sl1_alive,
+                            "sl2_oid": sl2_oid, "sl2_alive": sl2_alive,
                             "sl_new": sl_new, "sl_original": s.get("sl"),
                         })
 
@@ -1411,6 +1460,18 @@ def _sync_inner():
                     s["exchange_tp1_done"] = True
                     s["exchange_sl2_oid"]  = new_sl2_oid
                     modified = True
+
+                    # DIAGNOSTYKA: snapshot TPSL orderów PO wszystkich operacjach
+                    snap_after = _snapshot_tpsl_orders(client, direction)
+                    print(f"[exchange] {label}: TP1 executed — TPSL snapshot PO: {snap_after}")
+                    db.log_exchange_event(sid_int, "tp1_diag_after", {
+                        "tpsl_on_exchange": snap_after,
+                        "new_sl2_oid": new_sl2_oid,
+                        "sl2_secured": sl2_secured,
+                        "sl1_kept": not sl2_secured,
+                        "sl1_oid": sl_oid if not sl2_secured else None,
+                    })
+
                     print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 "
                           f"(SL2={new_sl2_oid}, secured={sl2_secured})")
                     if sid and sid != "?":
