@@ -158,6 +158,10 @@ WHERE pnl_usd IS NOT NULL
   AND trade_usdt IS NOT NULL
   AND resolved = TRUE;
 
+-- Prowizje Bitget (fee) — osobno za otwarcie i zamknięcie pozycji
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_fee_open   NUMERIC(12,6);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS exchange_fee_close  NUMERIC(12,6);
+
 -- Ustawienia aplikacji (jedna wiersz JSON)
 CREATE TABLE IF NOT EXISTS app_settings (
     id         INT PRIMARY KEY DEFAULT 1,

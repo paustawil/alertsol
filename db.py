@@ -41,6 +41,8 @@ _EXCHANGE_FIELDS = [
     "exchange_sl2_oid",
     "exchange_tp1_done",
     "exchange_done",
+    "exchange_fee_open",
+    "exchange_fee_close",
 ]
 
 

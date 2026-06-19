@@ -92,11 +92,11 @@ def _save_pending(pending: list[dict]):
 
 # ── Pobieranie aktualnej pozycji ──────────────────────────────────────────────
 
-def _get_open_position_size(client: "BitgetClient", hold_side: str) -> float:
+def _get_open_position_info(client: "BitgetClient", hold_side: str) -> tuple[float, float | None]:
     """
-    Zwraca rzeczywisty rozmiar otwartej pozycji dla danego hold_side ('long'/'short').
+    Zwraca (size, averageOpenPrice) otwartej pozycji dla danego hold_side.
     Odpytuje Bitget bezpośrednio — służy do weryfikacji po wykonaniu plan ordera.
-    Zwraca 0.0 jeśli brak pozycji lub błąd.
+    Zwraca (0.0, None) jeśli brak pozycji lub błąd.
     """
     try:
         resp = client.get("/api/v2/mix/position/all-position", {
@@ -107,10 +107,41 @@ def _get_open_position_size(client: "BitgetClient", hold_side: str) -> float:
             for pos in (resp.get("data") or []):
                 if (pos.get("symbol") == SYMBOL
                         and pos.get("holdSide") == hold_side):
-                    return float(pos.get("total") or 0)
+                    size = float(pos.get("total") or 0)
+                    avg_price_raw = pos.get("averageOpenPrice")
+                    avg_price = float(avg_price_raw) if avg_price_raw else None
+                    return size, avg_price
     except Exception as e:
-        log.warning(f"[exchange] get_position_size({hold_side}): {e}")
-    return 0.0
+        log.warning(f"[exchange] get_position_info({hold_side}): {e}")
+    return 0.0, None
+
+
+def _get_open_position_size(client: "BitgetClient", hold_side: str) -> float:
+    size, _ = _get_open_position_info(client, hold_side)
+    return size
+
+
+def _get_fill_fees(client: "BitgetClient", order_id: str) -> float:
+    """
+    Pobiera sumę prowizji (fee) z historii fill-ów dla danego orderId.
+    Fee z Bitget jest ujemne (koszt), zwracamy wartość bezwzględną.
+    """
+    total_fee = 0.0
+    try:
+        resp = client.get("/api/v2/mix/order/fill-history", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "orderId":     order_id,
+        })
+        if resp.get("code") == "00000":
+            for fill in (resp.get("data", {}).get("fillList") or []):
+                try:
+                    total_fee += abs(float(fill.get("fee") or 0))
+                except (ValueError, TypeError):
+                    pass
+    except Exception as e:
+        log.warning(f"[exchange] get_fill_fees({order_id}): {e}")
+    return round(total_fee, 6)
 
 
 # ── Klient Bitget REST API ─────────────────────────────────────────────────────
@@ -440,23 +471,35 @@ def _place_market_entry(
         log.error(f"[exchange] #{sid} market entry: code={resp.get('code')} msg={resp.get('msg')}")
         return False
 
-    print(f"[exchange] #{sid} market entry: {_fmt_qty(full_qty)} SOL {side.upper()} (aggressive)")
+    market_oid = (resp.get("data") or {}).get("orderId")
+    print(f"[exchange] #{sid} market entry: {_fmt_qty(full_qty)} SOL {side.upper()} (aggressive) oid={market_oid}")
 
-    actual_qty = _get_open_position_size(client, direction)
+    actual_qty, avg_open_price = _get_open_position_info(client, direction)
     if actual_qty <= 0:
         log.error(f"[exchange] #{sid} market entry: pozycja=0 po market order")
         return False
 
-    tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, half_qty)
+    # Zapisz faktyczne dane z giełdy
+    actual_half = _round_qty(actual_qty / 2)
+    tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, actual_half)
+
+    fee_open = _get_fill_fees(client, market_oid) if market_oid else 0.0
 
     s["exchange_position_opened"] = True
     s["exchange_plan_oid"]        = None
-    s["exchange_qty_full"]        = _fmt_qty(full_qty)
-    s["exchange_qty_half"]        = _fmt_qty(half_qty)
+    s["exchange_qty_full"]        = _fmt_qty(actual_qty)
+    s["exchange_qty_half"]        = _fmt_qty(actual_half)
     s["exchange_tp1_oid"]         = tp1_id
     s["exchange_tp2_oid"]         = tp2_id
     s["exchange_sl_oid"]          = sl1_id
     s["exchange_sl2_oid"]         = sl2_id
+
+    if avg_open_price:
+        s["avg_entry"] = avg_open_price
+        db.update_setup(s["setup_id"], avg_entry=avg_open_price)
+    if fee_open > 0:
+        db.update_setup(s["setup_id"], exchange_fee_open=fee_open)
+    print(f"[exchange] #{sid} faktyczne: qty={actual_qty} avg_entry={avg_open_price} fee={fee_open}")
     return True
 
 
@@ -878,6 +921,7 @@ def close_open_position(setup_id: int) -> bool:
         log.warning(f"[exchange] close_open_position #{setup_id}: {e}")
         return False
 
+    close_oid = (resp.get("data") or {}).get("orderId")
     print(f"[exchange] #{setup_id}: zamknięto pozycję market ({direction.upper()}, {_fmt_qty(full_qty)} SOL)")
 
     # Anuluj TPSL dopiero po udanym zamknięciu pozycji
@@ -888,12 +932,17 @@ def close_open_position(setup_id: int) -> bool:
         if oid:
             _cancel_order(client, oid, plan_type)
 
-    db.update_setup(setup_id,
-                    exchange_done=True,
-                    exchange_tp1_oid=None,
-                    exchange_tp2_oid=None,
-                    exchange_sl_oid=None,
-                    exchange_sl2_oid=None)
+    fee_close = _get_fill_fees(client, close_oid) if close_oid else 0.0
+    upd = dict(
+        exchange_done=True,
+        exchange_tp1_oid=None,
+        exchange_tp2_oid=None,
+        exchange_sl_oid=None,
+        exchange_sl2_oid=None,
+    )
+    if fee_close > 0:
+        upd["exchange_fee_close"] = fee_close
+    db.update_setup(setup_id, **upd)
     return True
 
 
@@ -1214,14 +1263,7 @@ def _sync_inner():
                     continue
 
                 # Oba wykonane — weryfikuj pozycję
-                calc_full = float(s.get("exchange_qty_full", "0").replace(",", ".") or "0")
-                half_qty  = float(s.get("exchange_qty_half", "0").replace(",", ".") or "0")
-                if calc_full <= 0:
-                    w1        = entries[0]
-                    calc_full = _round_qty((TRADE_USDT * LEVERAGE) / w1)
-                    half_qty  = _round_qty(calc_full / 2)
-
-                actual_qty = _get_open_position_size(client, direction)
+                actual_qty, avg_open_price = _get_open_position_info(client, direction)
                 if actual_qty <= 0:
                     log.error(
                         f"[exchange] {label}: oba plan ordery wykonane ale pozycja=0 "
@@ -1233,8 +1275,8 @@ def _sync_inner():
                     modified = True
                     continue
 
-                full_qty = _round_qty(calc_full)
-                half_qty = _round_qty(half_qty or full_qty / 2)
+                full_qty = _round_qty(actual_qty)
+                half_qty = _round_qty(full_qty / 2)
 
                 # Szukaj 4 preset TPSL orderów (z obu plan orderów)
                 tps      = s.get("tps", [])
@@ -1253,7 +1295,7 @@ def _sync_inner():
                     tp1_id, tp2_id, sl1_id, sl2_id = _place_tpsl_orders_split(client, s, half_qty)
 
                 s["exchange_position_opened"] = True
-                s["exchange_qty_full"]        = _fmt_qty(full_qty)
+                s["exchange_qty_full"]        = _fmt_qty(actual_qty)
                 s["exchange_qty_half"]        = _fmt_qty(half_qty)
                 s["exchange_tp1_oid"]         = tp1_id
                 s["exchange_tp2_oid"]         = tp2_id
@@ -1261,7 +1303,22 @@ def _sync_inner():
                 s["exchange_sl2_oid"]         = sl2_id
                 s["exchange_plan2_oid"]       = None   # plan ordery już wykonane
                 modified = True
-                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL) | "
+
+                # Zapisz faktyczne dane z giełdy
+                if avg_open_price:
+                    s["avg_entry"] = avg_open_price
+                    db.update_setup(int(sid), avg_entry=avg_open_price)
+
+                fee_open = 0.0
+                if plan_oid:
+                    fee_open += _get_fill_fees(client, plan_oid)
+                if plan2_oid:
+                    fee_open += _get_fill_fees(client, plan2_oid)
+                if fee_open > 0:
+                    db.update_setup(int(sid), exchange_fee_open=fee_open)
+
+                print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL, "
+                      f"avg_entry={avg_open_price}, fee={fee_open}) | "
                       f"TP1={tp1_id} TP2={tp2_id} SL1={sl1_id} SL2={sl2_id}")
             continue
 
@@ -1298,6 +1355,7 @@ def _sync_inner():
                     # Zamknij drugą połowę market zamiast polegać na SL2
                     half_qty_str = (s.get("exchange_qty_half") or "0").replace(",", ".")
                     half_qty_val = float(half_qty_str)
+                    close_oid_2 = None
                     if half_qty_val > 0:
                         _dir = s.get("direction", "")
                         close_side = "sell" if _dir == "long" else "buy"
@@ -1313,6 +1371,7 @@ def _sync_inner():
                                 "size":        _fmt_qty(half_qty_val),
                             })
                             if close_resp.get("code") == "00000":
+                                close_oid_2 = (close_resp.get("data") or {}).get("orderId")
                                 print(f"[exchange] {label}: druga połowa zamknięta market")
                             else:
                                 log.warning(f"[exchange] {label}: nie udało się zamknąć drugiej połowy: {close_resp.get('msg')}")
@@ -1335,6 +1394,12 @@ def _sync_inner():
                             full_qty = float(fq)
                             sign     = 1 if s.get("direction") == "long" else -1
                             pnl_usd  = sign * full_qty * (float(sl_price) - float(avg_entry))
+                        # Zbierz fee z SL1 + market close drugiej połowy
+                        fee_close = _get_fill_fees(client, sl_oid)
+                        if close_oid_2:
+                            fee_close += _get_fill_fees(client, close_oid_2)
+                        if fee_close > 0:
+                            db.update_setup(int(sid), exchange_fee_close=fee_close)
                         db.resolve_setup(int(sid), "SL", avg_entry, sl_price, pnl_usd, None)
                     continue
 
@@ -1406,6 +1471,9 @@ def _sync_inner():
                         modified = True
                         print(f"[exchange] {label}: TP1-only wykonany — setup zamknięty pnl={pnl_usd}")
                         if sid and sid != "?":
+                            fee_close = _get_fill_fees(client, tp1_oid) if tp1_oid else 0.0
+                            if fee_close > 0:
+                                db.update_setup(int(sid), exchange_fee_close=fee_close)
                             db.resolve_setup(int(sid), "TP1", avg_entry, tp1_price, pnl_usd, None)
                         continue
 
@@ -1493,6 +1561,12 @@ def _sync_inner():
                         "sl1_oid": sl_oid if not sl2_secured else None,
                     })
 
+                    # Fee za zamknięcie pierwszej połowy (TP1)
+                    tp1_fee = _get_fill_fees(client, tp1_oid) if tp1_oid else 0.0
+                    if tp1_fee > 0 and sid and sid != "?":
+                        db.update_setup(int(sid), exchange_fee_close=tp1_fee)
+                    s["exchange_fee_close"] = tp1_fee
+
                     print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 "
                           f"(SL2={new_sl2_oid}, secured={sl2_secured})")
                     if sid and sid != "?":
@@ -1550,6 +1624,10 @@ def _sync_inner():
                             sign    = 1 if s.get("direction") == "long" else -1
                             pnl_tp2 = sign * half_qty_f * (tp2_price - float(avg_entry))
                         total_pnl = (pnl_tp1 or 0) + (pnl_tp2 or 0)
+                        fee_close = _get_fill_fees(client, tp2_oid)
+                        if fee_close > 0:
+                            prev_fee = float(s.get("exchange_fee_close") or 0)
+                            db.update_setup(int(sid), exchange_fee_close=round(prev_fee + fee_close, 6))
                         db.resolve_setup(int(sid), "TP1+TP2", s.get("avg_entry"), tp2_price, total_pnl, None)
                         print(f"[exchange] {label}: TP1+TP2 — total pnl={total_pnl:.2f}")
                     continue
@@ -1572,6 +1650,10 @@ def _sync_inner():
                     if sid and sid != "?":
                         pnl_tp1  = s.get("pnl_usd") or 0
                         avg_entry = s.get("avg_entry")
+                        fee_close = _get_fill_fees(client, sl2_oid)
+                        if fee_close > 0:
+                            prev_fee = float(s.get("exchange_fee_close") or 0)
+                            db.update_setup(int(sid), exchange_fee_close=round(prev_fee + fee_close, 6))
                         db.resolve_setup(int(sid), "TP1+BE", avg_entry, avg_entry, pnl_tp1, None)
                         print(f"[exchange] {label}: TP1+BE — pnl tp1={pnl_tp1:.2f}")
                     continue

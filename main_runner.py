@@ -3608,6 +3608,8 @@ def api_dashboard_setups():
             "exchange_plan_oid":        s.get("exchange_plan_oid"),
             "exchange_plan2_oid":       s.get("exchange_plan2_oid"),
             "trade_usdt":               float(s["trade_usdt"]) if s.get("trade_usdt") is not None else None,
+            "exchange_fee_open":        float(s["exchange_fee_open"]) if s.get("exchange_fee_open") is not None else None,
+            "exchange_fee_close":       float(s["exchange_fee_close"]) if s.get("exchange_fee_close") is not None else None,
         })
     return result
 
@@ -3706,6 +3708,8 @@ def api_all_setups(
             "exchange_tp1_oid":         s.get("exchange_tp1_oid"),
             "exchange_sl_oid":          s.get("exchange_sl_oid"),
             "trade_usdt":               _f(s.get("trade_usdt")),
+            "exchange_fee_open":        _f(s.get("exchange_fee_open")),
+            "exchange_fee_close":       _f(s.get("exchange_fee_close")),
         })
     return {"total": data["total"], "rows": rows}
 
