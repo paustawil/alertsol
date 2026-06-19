@@ -50,6 +50,7 @@ def run_exchange_sync():
         exchange_trader.sync()
     except Exception:
         log.exception("exchange_trader.sync() BŁĄD")
+    _retry_pending_transfer()
 
 
 def run_sol_alert():
@@ -105,12 +106,64 @@ def _last_friday_8_warsaw_utc():
     warsaw = ZoneInfo("Europe/Warsaw")
     now_w = datetime.now(warsaw)
     days_since_friday = (now_w.weekday() - 4) % 7
-    if days_since_friday == 0 and now_w.hour < 8:
+    if days_since_friday == 0 and now_w.hour <= 8:
         days_since_friday = 7
     last_friday = (now_w - timedelta(days=days_since_friday)).replace(
         hour=8, minute=0, second=0, microsecond=0
     )
     return last_friday.astimezone(timezone.utc)
+
+
+_last_pending_transfer_check = 0
+
+
+def _retry_pending_transfer():
+    """Sprawdza czy jest oczekujący transfer i próbuje go zrealizować gdy środki się zwolnią."""
+    global _last_pending_transfer_check
+    import time as _time
+    now = _time.time()
+    if now - _last_pending_transfer_check < 300:
+        return
+    _last_pending_transfer_check = now
+
+    settings = db.get_app_settings()
+    pending = settings.get("pending_transfer_amount", 0)
+    if pending <= 0:
+        return
+
+    import exchange_trader as et
+    from datetime import datetime, timezone
+    available = et.get_available_balance()
+    min_buffer = 5.0
+    if available is None or available <= min_buffer:
+        return
+
+    actual_transfer = min(pending, round(available - min_buffer, 2))
+    if actual_transfer <= 0:
+        return
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    result = et.transfer_futures_to_spot(actual_transfer)
+    if result["ok"]:
+        remainder = round(pending - actual_transfer, 2)
+        _save_pending_transfer(max(remainder, 0))
+        log.info(f"[weekly_transfer] Oczekujący transfer {actual_transfer:.2f} USDT zrealizowany "
+                 f"(pozostało: {remainder:.2f})")
+        db.save_transfer_log({
+            "date": now_str, "weekly_pnl": 0,
+            "transfer_amount": actual_transfer,
+            "status": "ok_deferred",
+            "detail": result.get("transfer_id"),
+        })
+    else:
+        log.warning(f"[weekly_transfer] Retry oczekującego transferu nie powiódł się: {result.get('error')}")
+
+
+def _save_pending_transfer(amount: float):
+    """Zapisuje kwotę oczekującego transferu w app_settings."""
+    settings = db.get_app_settings()
+    settings["pending_transfer_amount"] = round(amount, 2)
+    db.save_app_settings(settings)
 
 
 def run_weekly_transfer():
@@ -122,7 +175,11 @@ def run_weekly_transfer():
     weekly_pnl = db.get_weekly_pnl(since_utc=since_utc)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    if weekly_pnl <= 0:
+    # Sprawdź czy jest oczekujący transfer z poprzedniej próby (środki były zaangażowane)
+    settings = db.get_app_settings()
+    pending_transfer = settings.get("pending_transfer_amount", 0)
+
+    if weekly_pnl <= 0 and pending_transfer <= 0:
         log.info(f"[weekly_transfer] {now_str} — PnL tygodniowy: {weekly_pnl:.2f} USDT (<=0, brak transferu)")
         db.save_transfer_log({
             "date": now_str, "weekly_pnl": round(weekly_pnl, 2),
@@ -130,8 +187,36 @@ def run_weekly_transfer():
         })
         return
 
-    transfer_amount = round(weekly_pnl * 0.5, 2)
-    log.info(f"[weekly_transfer] {now_str} — PnL tygodniowy: {weekly_pnl:.2f} USDT → transfer: {transfer_amount:.2f} USDT")
+    transfer_amount = round(weekly_pnl * 0.5, 2) if weekly_pnl > 0 else 0
+    transfer_amount = round(transfer_amount + pending_transfer, 2)
+
+    if transfer_amount <= 0:
+        return
+
+    # Sprawdź dostępne środki przed próbą transferu
+    available = et.get_available_balance()
+    min_buffer = 5.0  # zostawiamy $5 buforu na prowizje
+    if available is not None and available < transfer_amount + min_buffer:
+        if available > min_buffer:
+            actual_transfer = round(available - min_buffer, 2)
+            remainder = round(transfer_amount - actual_transfer, 2)
+            log.info(f"[weekly_transfer] {now_str} — available={available:.2f} < planowane {transfer_amount:.2f} "
+                     f"→ transferuję {actual_transfer:.2f}, reszta {remainder:.2f} oczekuje")
+            transfer_amount = actual_transfer
+            _save_pending_transfer(remainder)
+        else:
+            log.warning(f"[weekly_transfer] {now_str} — available={available:.2f} za mało — "
+                        f"odkładam transfer {transfer_amount:.2f} USDT")
+            _save_pending_transfer(transfer_amount)
+            db.save_transfer_log({
+                "date": now_str, "weekly_pnl": round(weekly_pnl, 2),
+                "transfer_amount": 0, "status": "deferred_no_available",
+                "detail": f"available={available:.2f}, pending={transfer_amount:.2f}",
+            })
+            return
+
+    log.info(f"[weekly_transfer] {now_str} — PnL tygodniowy: {weekly_pnl:.2f} USDT "
+             f"(+pending: {pending_transfer:.2f}) → transfer: {transfer_amount:.2f} USDT")
 
     result = et.transfer_futures_to_spot(transfer_amount)
     entry = {
@@ -144,8 +229,11 @@ def run_weekly_transfer():
     db.save_transfer_log(entry)
     if result["ok"]:
         log.info(f"[weekly_transfer] Transfer {transfer_amount:.2f} USDT zakończony sukcesem.")
+        _save_pending_transfer(0)
     else:
         log.warning(f"[weekly_transfer] Transfer BŁĄD: {result.get('error')}")
+        _save_pending_transfer(transfer_amount)
+        log.info(f"[weekly_transfer] Kwota {transfer_amount:.2f} zapisana jako oczekująca")
 
 
 # ── FastAPI dashboard ──────────────────────────────────────────────────────────

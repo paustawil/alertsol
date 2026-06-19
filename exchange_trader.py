@@ -275,6 +275,27 @@ def get_account_balance() -> float | None:
     return None
 
 
+def get_available_balance() -> float | None:
+    """Zwraca dostępne (niezaangażowane) środki na koncie futures USDT."""
+    client = _client()
+    if client is None:
+        return None
+    try:
+        resp = client.get("/api/v2/mix/account/account", {
+            "symbol":      SYMBOL,
+            "productType": PRODUCT_TYPE,
+            "marginCoin":  MARGIN_COIN,
+        })
+        if resp.get("code") == "00000":
+            data = resp.get("data") or {}
+            available = data.get("available") or data.get("crossedMaxAvailable")
+            if available is not None:
+                return float(available)
+    except Exception as e:
+        log.warning(f"[exchange] get_available_balance: {e}")
+    return None
+
+
 # ── Składanie zleceń ───────────────────────────────────────────────────────────
 
 def _place_entry_plan_orders(
