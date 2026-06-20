@@ -3047,7 +3047,7 @@ def api_cancel_setup(setup_id: int):
 @app.post("/api/update-result/{setup_id}")
 def api_update_result(setup_id: int, body: ResultUpdate):
     """Ręczna korekta wyniku i PnL zamkniętego setupu."""
-    VALID_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "SL", "nieokreslone", "nie weszlo", "anulowany"}
+    VALID_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2", "SL", "nieokreslone", "nie weszlo", "anulowany"}
     if body.result not in VALID_RESULTS:
         raise HTTPException(status_code=400, detail=f"Nieprawidłowy wynik: {body.result}")
 
