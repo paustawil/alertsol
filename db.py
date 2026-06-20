@@ -990,17 +990,29 @@ def get_resolved_filtered(
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage = 20
     _tu = f"COALESCE(trade_usdt, {trade_usdt})"
+    _entry = f"COALESCE(avg_entry,(entries->>0)::numeric)"
+    _full_qty = f"""COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                    FLOOR({_tu}*{leverage}/{_entry}/0.1)*0.1)"""
+    _half_qty = f"""COALESCE(NULLIF(exchange_qty_half,'')::numeric,
+                    FLOOR({_full_qty}/2/0.1)*0.1)"""
+    _sign = "CASE direction WHEN 'long' THEN 1 ELSE -1 END"
     pnl_calc_f = f"""
         COALESCE(pnl_usd,
             CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
-                      AND avg_exit IS NOT NULL
-                      AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
-            THEN CASE direction WHEN 'long'
-                 THEN (avg_exit - COALESCE(avg_entry,(entries->>0)::numeric))
-                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - avg_exit)
-                 END *
-                 COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                      FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                      AND {_entry} IS NOT NULL
+            THEN CASE
+                WHEN avg_exit IS NOT NULL
+                THEN ({_sign}) * (avg_exit - {_entry}) * ({_full_qty})
+                WHEN result = 'TP1+BE' AND (tps->>0) IS NOT NULL
+                THEN ({_sign}) * ((tps->>0)::numeric - {_entry}) * ({_half_qty})
+                WHEN result = 'SL' AND sl IS NOT NULL
+                THEN ({_sign}) * (sl - {_entry}) * ({_full_qty})
+                WHEN result = 'TP1+TP2' AND (tps->>0) IS NOT NULL AND (tps->>1) IS NOT NULL
+                THEN ({_sign}) * (((tps->>0)::numeric - {_entry}) + ((tps->>1)::numeric - {_entry})) * ({_half_qty})
+                WHEN result = 'TP1+SL' AND (tps->>0) IS NOT NULL AND sl IS NOT NULL
+                THEN ({_sign}) * ((tps->>0)::numeric - {_entry}) * ({_half_qty})
+                   + ({_sign}) * (sl - {_entry}) * ({_half_qty})
+            END
             END
         )"""
     pnl_pct_calc_f = f"({pnl_calc_f}) / NULLIF({_tu}, 0) * 100"
@@ -1009,15 +1021,8 @@ def get_resolved_filtered(
             WHEN result = 'SL' THEN {pnl_calc_f}
             WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
                  AND (tps->>0) IS NOT NULL
-                 AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
-            THEN CASE direction WHEN 'long'
-                 THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                 ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                      COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                           FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                 END
+                 AND {_entry} IS NOT NULL
+            THEN ({_sign}) * ((tps->>0)::numeric - {_entry}) * ({_full_qty})
         END"""
     tp1_only_pct_calc_f = f"({tp1_only_calc_f}) / NULLIF({_tu}, 0) * 100"
 
