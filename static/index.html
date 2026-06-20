@@ -864,9 +864,27 @@ function ViewSetups() {
   };
   const StatusResultChip=({r})=>{
     const sk=r.status_key;
+    const [editing,setEditing]=useState(false);
+    const [saving,setSaving]=useState(false);
+    const RESULTS=['TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL','nieokreslone'];
+    const saveResult=async(newResult)=>{
+      setSaving(true);
+      try{
+        const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:newResult})});
+        if(resp.ok){setEditing(false);location.reload();}
+      }catch(e){}
+      setSaving(false);
+    };
     if(['zamkniete','anulowane','nie_weszlo'].includes(sk)){
       const lbl=r.result||(sk==='anulowane'?'Anulowane':'Nie weszło');
-      return <span style={{fontFamily:'var(--mono)',fontSize:10,color:resC(lbl),background:resBg(lbl),padding:'2px 7px',borderRadius:3,whiteSpace:'nowrap',display:'inline-block'}}>{lbl}</span>;
+      return <>
+        <span style={{fontFamily:'var(--mono)',fontSize:10,color:resC(lbl),background:resBg(lbl),padding:'2px 7px',borderRadius:3,whiteSpace:'nowrap',display:'inline-block',cursor:'pointer'}} onClick={e=>{e.stopPropagation();setEditing(!editing);}}>{lbl}</span>
+        {editing&&<div style={{position:'relative',zIndex:10}} onClick={e=>e.stopPropagation()}>
+          <div style={{position:'absolute',top:2,left:0,background:'var(--bg1)',border:'1px solid var(--border2)',borderRadius:4,padding:4,display:'flex',flexDirection:'column',gap:2,minWidth:90,boxShadow:'0 4px 12px rgba(0,0,0,.4)'}}>
+            {RESULTS.map(opt=><button key={opt} disabled={saving} style={{background:opt===lbl?'var(--bg3)':'transparent',border:'none',color:resC(opt),fontFamily:'var(--mono)',fontSize:10,padding:'4px 8px',cursor:'pointer',borderRadius:3,textAlign:'left',whiteSpace:'nowrap'}} onClick={()=>saveResult(opt)}>{opt}</button>)}
+          </div>
+        </div>}
+      </>;
     }
     return <StatusPill sk={sk} sl={r.status}/>;
   };
@@ -1594,8 +1612,25 @@ function TabSetups() {
         {['all','real','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':'Shadow'}</div>)}
       </div>
       {rows===null&&<div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
-      {rows!==null&&rows.map((r,i)=>(
-        <div key={i} className="hist-card">
+      {rows!==null&&rows.map((r,i)=>{
+        const MobileResultChip=()=>{
+          const [editing,setEditing]=useState(false);
+          const [saving,setSaving]=useState(false);
+          const RES_OPTS=['TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL','nieokreslone'];
+          const saveR=async(nr)=>{
+            setSaving(true);
+            try{const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:nr})});if(resp.ok)location.reload();}catch(e){}
+            setSaving(false);
+          };
+          if(!r.result) return <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{r.status}</span>;
+          return <div style={{position:'relative'}}>
+            <span style={{fontFamily:'var(--mono)',fontSize:11,color:resC(r.result),padding:'2px 7px',borderRadius:3,background:resC(r.result)==='var(--green)'?'var(--green-dim)':resC(r.result)==='var(--red)'?'var(--red-dim)':'var(--bg3)',cursor:'pointer'}} onClick={e=>{e.stopPropagation();setEditing(!editing);}}>{r.result}</span>
+            {editing&&<div style={{position:'absolute',top:'100%',right:0,marginTop:2,background:'var(--bg1)',border:'1px solid var(--border2)',borderRadius:4,padding:4,display:'flex',flexDirection:'column',gap:2,minWidth:90,boxShadow:'0 4px 12px rgba(0,0,0,.4)',zIndex:20}} onClick={e=>e.stopPropagation()}>
+              {RES_OPTS.map(opt=><button key={opt} disabled={saving} style={{background:opt===r.result?'var(--bg3)':'transparent',border:'none',color:resC(opt),fontFamily:'var(--mono)',fontSize:11,padding:'6px 10px',cursor:'pointer',borderRadius:3,textAlign:'left',whiteSpace:'nowrap'}} onClick={()=>saveR(opt)}>{opt}</button>)}
+            </div>}
+          </div>;
+        };
+        return <div key={i} className="hist-card">
           <div className="hist-card-row1">
             <div style={{display:'flex',alignItems:'center',gap:6}}>
               <span className={`kier-badge ${(r.kier||'long').toLowerCase()}`}>{r.kier}</span>
@@ -1604,9 +1639,7 @@ function TabSetups() {
             </div>
             <div style={{display:'flex',alignItems:'center',gap:6}}>
               <SrcBadge shadow={r.shadow} exch={r.exchange_position_opened}/>
-              {r.result
-                ?<span style={{fontFamily:'var(--mono)',fontSize:11,color:resC(r.result),padding:'2px 7px',borderRadius:3,background:resC(r.result)==='var(--green)'?'var(--green-dim)':resC(r.result)==='var(--red)'?'var(--red-dim)':'var(--bg3)'}}>{r.result}</span>
-                :<span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{r.status}</span>}
+              <MobileResultChip/>
             </div>
           </div>
           <div className="hist-typ" style={{marginBottom:4}}>{r.typ} · <span style={{color:'var(--text3)'}}>{r.variant}</span></div>
@@ -1621,8 +1654,8 @@ function TabSetups() {
             <span className="hist-item">TP1+TP2: <span style={{color:pC(r.pnl_tp12)}}>{fmtU(r.pnl_tp12)}</span></span>
             <span className="hist-item" style={{marginLeft:'auto'}}>{r.t_entry?`WE: ${r.t_entry.slice(11,16)}`:'brak WE'}</span>
           </div>
-        </div>
-      ))}
+        </div>;
+      })}
     </div>
   );
 }
