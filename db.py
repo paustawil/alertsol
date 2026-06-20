@@ -1029,7 +1029,10 @@ def get_resolved_filtered(
             cur.execute(
                 f"""
                 SELECT setup_id, alert_time, entry_hit_at, model, direction, type, variant, score,
-                       result, avg_entry, avg_exit, pnl_usd, pnl_pct, cancel_reason,
+                       result, avg_entry, avg_exit,
+                       ROUND(({pnl_calc_f})::numeric, 2)                 AS pnl_usd,
+                       ROUND(({pnl_pct_calc_f})::numeric, 2)             AS pnl_pct,
+                       cancel_reason,
                        ROUND(({tp1_only_calc_f})::numeric, 2)            AS tp1_only_pnl,
                        ROUND(({tp1_only_pct_calc_f})::numeric, 2)        AS tp1_only_pnl_pct,
                        exit_time, entries, tps, sl, sl_after_tp1,
