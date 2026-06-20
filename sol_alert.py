@@ -1027,6 +1027,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
                             "score": strength, "variant": _vname,
                             "tp_strategy": "tp1_only",
+                            "force_shadow": True,
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
                         })
                     else:
@@ -1177,6 +1178,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
                             "score": strength, "variant": _vname,
                             "tp_strategy": "tp1_only",
+                            "force_shadow": True,
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
                         })
                     else:
