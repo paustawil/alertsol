@@ -1434,44 +1434,47 @@ function ViewSimulator() {
     let wins=0,losses=0,skipped=0;
     let maxCapital=capital,maxDrawdown=0;
     let totalWithdrawn=0;
-    let lastWithdrawCheck=null;
-    let capitalAtLastWithdraw=startCapital;
+    let capitalAtPeriodStart=startCapital;
+    let nextWithdrawTs=null;
 
-    const shouldWithdraw=(dateMs)=>{
-      if(!withdrawEnabled) return false;
-      const d=new Date(dateMs);
+    const calcNextWithdraw=(fromMs)=>{
+      const d=new Date(fromMs);
       if(withdrawMode==='weekly'){
-        if(d.getDay()!==4) return false;
-        const dayKey=d.toISOString().slice(0,10);
-        if(dayKey===lastWithdrawCheck) return false;
-        lastWithdrawCheck=dayKey;
-        return true;
+        const daysUntilThu=(4-d.getDay()+7)%7||7;
+        const thu=new Date(d);
+        thu.setDate(thu.getDate()+daysUntilThu);
+        thu.setHours(8,0,0,0);
+        return thu.getTime();
       } else {
-        const dayOfMonth=d.getDate();
-        const monthKey=d.getFullYear()+'-'+d.getMonth();
-        if(dayOfMonth<withdrawDay) return false;
-        if(monthKey===lastWithdrawCheck) return false;
-        lastWithdrawCheck=monthKey;
-        return true;
+        let target=new Date(d.getFullYear(),d.getMonth(),withdrawDay,8,0,0,0);
+        if(target.getTime()<=fromMs)
+          target=new Date(d.getFullYear(),d.getMonth()+1,withdrawDay,8,0,0,0);
+        return target.getTime();
       }
     };
 
-    const tryWithdraw=(afterTime)=>{
+    const tryWithdraw=(currentTime)=>{
       if(!withdrawEnabled) return;
-      if(!shouldWithdraw(afterTime)) return;
-      const profit=capital-capitalAtLastWithdraw;
-      if(profit<=0) return;
-      const amount=Math.round(profit*withdrawPct/100*100)/100;
-      totalWithdrawn+=amount;
-      const prevCap=capital;
-      capital=capital-amount;
-      capitalAtLastWithdraw=capital;
-      steps.push({isWithdrawal:true,
-        withdraw_amount:amount,withdraw_profit:Math.round(profit*100)/100,
-        withdraw_time:new Date(afterTime).toISOString(),
-        capital_before:Math.round(prevCap*100)/100,
-        capital_after:Math.round(capital*100)/100,
-        entry_ts:afterTime,exit_ts:afterTime});
+      if(nextWithdrawTs===null) nextWithdrawTs=calcNextWithdraw(currentTime);
+      while(currentTime>=nextWithdrawTs){
+        const profit=capital-capitalAtPeriodStart;
+        if(profit>0){
+          const amount=Math.round(profit*withdrawPct/100*100)/100;
+          totalWithdrawn+=amount;
+          const prevCap=capital;
+          capital=capital-amount;
+          capitalAtPeriodStart=capital;
+          steps.push({isWithdrawal:true,
+            withdraw_amount:amount,withdraw_profit:Math.round(profit*100)/100,
+            withdraw_time:new Date(nextWithdrawTs).toISOString(),
+            capital_before:Math.round(prevCap*100)/100,
+            capital_after:Math.round(capital*100)/100,
+            entry_ts:nextWithdrawTs,exit_ts:nextWithdrawTs});
+        } else {
+          capitalAtPeriodStart=capital;
+        }
+        nextWithdrawTs=calcNextWithdraw(nextWithdrawTs);
+      }
     };
 
     for(const t of trades){
@@ -1482,6 +1485,8 @@ function ViewSimulator() {
         direction:t.direction,result:t.result,
         entry_time:t.entry_time,exit_time:t.exit_time,
         entry_ts:entryTime,exit_ts:exitTime};
+
+      tryWithdraw(entryTime);
 
       if(currentExitTime&&entryTime<currentExitTime){
         skipped++;
@@ -1505,7 +1510,6 @@ function ViewSimulator() {
         pnl_pct:pnlPct,pnl_usd:Math.round(pnlUsd*100)/100,
         capital_before:Math.round(prevCapital*100)/100,
         capital_after:Math.round(capital*100)/100});
-      tryWithdraw(exitTime);
     }
     return {
       steps,final:Math.round(capital*100)/100,
