@@ -870,8 +870,8 @@ function ViewSetups() {
     const [previewPnl,setPreviewPnl]=useState(null);
     const RESULTS=['TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL','nieokreslone'];
     const calcPreview=(result,qtyStr)=>{
-      const entry=r.avg_entry||(r.entries&&r.entries[0]!=null?Number(r.entries[0]):null);
-      if(!entry) return null;
+      const entry=r.avg_entry!=null?Number(r.avg_entry):(r.entries&&r.entries[0]!=null?Number(r.entries[0]):null);
+      if(!entry||entry<=0) return null;
       const qty=parseFloat(qtyStr);
       if(!qty||qty<=0) return null;
       const half=Math.max(Math.floor((qty/2)/0.1)*0.1,0.1);
