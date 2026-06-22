@@ -1135,6 +1135,16 @@ def get_simulator_trades(
             END
         )"""
     pnl_pct_calc = f"({pnl_calc}) / NULLIF({_tu}, 0) * 100"
+    tp1_only_calc = f"""
+        CASE
+            WHEN result = 'SL' AND sl IS NOT NULL AND {_entry} IS NOT NULL
+            THEN ({_sign}) * (sl - {_entry}) * ({_full_qty})
+            WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
+                 AND (tps->>0) IS NOT NULL
+                 AND {_entry} IS NOT NULL
+            THEN ({_sign}) * ((tps->>0)::numeric - {_entry}) * ({_full_qty})
+        END"""
+    tp1_only_pct_calc = f"({tp1_only_calc}) / NULLIF({_tu}, 0) * 100"
 
     where = ["resolved = TRUE", "entry_hit_at IS NOT NULL",
              "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"]
@@ -1161,7 +1171,8 @@ def get_simulator_trades(
                        COALESCE(exit_time, resolved_at) AS exit_time,
                        {_entry} AS avg_entry,
                        avg_exit,
-                       ROUND(({pnl_pct_calc})::numeric, 4) AS pnl_pct
+                       ROUND(({pnl_pct_calc})::numeric, 4) AS pnl_pct,
+                       ROUND(({tp1_only_pct_calc})::numeric, 4) AS tp1_only_pnl_pct
                 FROM setups
                 WHERE {where_sql}
                 ORDER BY entry_hit_at ASC

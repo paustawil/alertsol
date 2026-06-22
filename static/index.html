@@ -1344,6 +1344,7 @@ function ViewSimulator() {
   const [dateFrom,setDateFrom]=useState('');
   const [dateTo,setDateTo]=useState('');
   const [startCapital,setStartCapital]=useState(1000);
+  const [pnlMode,setPnlMode]=useState('tp12');
   const [trades,setTrades]=useState(null);
   const [loading,setLoading]=useState(false);
 
@@ -1432,13 +1433,12 @@ function ViewSimulator() {
     for(const t of trades){
       const entryTime=new Date(t.entry_time).getTime();
       const exitTime=new Date(t.exit_time).getTime();
-      if(inPosition&&entryTime<currentExitTime){
+      if(currentExitTime&&entryTime<currentExitTime){
         skipped++;
         continue;
       }
-      inPosition=true;
       currentExitTime=exitTime;
-      const pnlPct=parseFloat(t.pnl_pct);
+      const pnlPct=parseFloat(pnlMode==='tp1'?t.tp1_only_pnl_pct:t.pnl_pct);
       if(isNaN(pnlPct)) continue;
       const pnlUsd=capital*(pnlPct/100);
       const prevCapital=capital;
@@ -1456,14 +1456,13 @@ function ViewSimulator() {
         capital_before:Math.round(prevCapital*100)/100,
         capital_after:Math.round(capital*100)/100,
       });
-      inPosition=false;
     }
     return {
       steps,final:Math.round(capital*100)/100,
       totalReturn:Math.round((capital-startCapital)/startCapital*10000)/100,
       wins,losses,skipped,maxDrawdown:Math.round(maxDrawdown*100)/100,
     };
-  },[trades,startCapital]);
+  },[trades,startCapital,pnlMode]);
 
   const fmtD=(s)=>s?String(s).replace('T',' ').slice(0,16):'—';
   const pnlC=(v)=>v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
@@ -1504,6 +1503,14 @@ function ViewSimulator() {
             <input type="number" value={startCapital} onChange={e=>setStartCapital(Math.max(1,Number(e.target.value)||1))}
               style={{width:80,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
             <span style={{fontSize:10,color:'var(--text3)'}}>USDT</span>
+          </div>
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Model:</span>
+            <div className="seg-tabs">
+              <div className={`seg-tab ${pnlMode==='tp12'?'active':''}`} onClick={()=>setPnlMode('tp12')}>TP1+TP2</div>
+              <div className={`seg-tab ${pnlMode==='tp1'?'active':''}`} onClick={()=>setPnlMode('tp1')}>TP1 only</div>
+            </div>
+            <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{pnlMode==='tp1'?'Cały wolumen wychodzi na TP1':'Połowa na TP1, połowa na TP2'}</span>
           </div>
           {filterTree.length>0&&selectedPairs!==null&&<div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
             <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Typy:</span>
