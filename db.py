@@ -1168,7 +1168,13 @@ def get_simulator_trades(
                 f"""
                 SELECT setup_id, type, variant, direction, result,
                        to_timestamp(entry_hit_at) AT TIME ZONE 'UTC' AS entry_time,
-                       COALESCE(exit_time, resolved_at) AS exit_time,
+                       COALESCE(
+                           exit_time,
+                           CASE WHEN tp1_hit_at IS NOT NULL
+                                THEN to_timestamp(tp1_hit_at) AT TIME ZONE 'UTC' + interval '4 hours'
+                                ELSE to_timestamp(entry_hit_at) AT TIME ZONE 'UTC' + interval '8 hours'
+                           END
+                       ) AS exit_time,
                        {_entry} AS avg_entry,
                        avg_exit,
                        ROUND(({pnl_pct_calc})::numeric, 4) AS pnl_pct,
