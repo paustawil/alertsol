@@ -1722,6 +1722,7 @@ def get_all_setups_filtered(
     variants: list[str] | None = None,
     models: list[str] | None = None,
     shadow: bool | None = None,
+    bitget_only: bool = False,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = 100,
@@ -1770,6 +1771,9 @@ def get_all_setups_filtered(
     if shadow is not None:
         where.append("shadow = %(shadow)s")
         params["shadow"] = shadow
+
+    if bitget_only:
+        where.append("exchange_position_opened = TRUE")
 
     if date_from:
         where.append("alert_time >= %(date_from)s::date")
