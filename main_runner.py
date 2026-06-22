@@ -2445,6 +2445,12 @@ def admin_diagnose_positions():
     }
 
 
+@app.get("/api/exchange-events")
+def api_exchange_events(setup_id: int | None = None, limit: int = 100):
+    """Zwraca zdarzenia exchange (diagnostyka TP/SL)."""
+    return db.get_exchange_events(setup_id=setup_id, limit=min(limit, 500))
+
+
 @app.get("/api/market-status")
 def api_market_status():
     """Zwraca aktualny kurs SOL i reżim rynkowy."""
@@ -2727,6 +2733,7 @@ class ResultUpdate(BaseModel):
     result: str
     avg_exit: float | None = None
     avg_entry: float | None = None
+    qty_full: float | None = None
 
 
 class TpsUpdate(BaseModel):
@@ -3066,16 +3073,21 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         float(s["avg_entry"]) if s.get("avg_entry") else None
     )
 
-    if avg_entry and body.result in ("TP1", "TP2", "TP1+BE", "TP1+SL", "SL"):
+    if avg_entry and body.result in ("TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2", "SL"):
         direction = s.get("direction", "long")
         sign      = 1 if direction == "long" else -1
 
-        # Wyznacz qty
+        # Wyznacz qty — priorytet: body.qty_full > DB > domyślne
         try:
             full_qty = float(s["exchange_qty_full"]) if s.get("exchange_qty_full") else None
             half_qty = float(s["exchange_qty_half"]) if s.get("exchange_qty_half") else None
         except (ValueError, TypeError):
             full_qty = half_qty = None
+
+        if body.qty_full is not None and body.qty_full > 0:
+            full_qty = body.qty_full
+            half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
+            db.update_setup(setup_id, exchange_qty_full=str(full_qty), exchange_qty_half=str(half_qty))
 
         if not full_qty:
             trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
@@ -3085,16 +3097,17 @@ def api_update_result(setup_id: int, body: ResultUpdate):
 
         tps_list  = s.get("tps") or []
         tp1_setup = float(tps_list[0]) if tps_list else None
+        tp2_setup = float(tps_list[1]) if len(tps_list) > 1 else None
 
         if body.result in ("SL", "TP1", "TP2") and avg_exit is not None:
             pnl_usd = sign * full_qty * (avg_exit - avg_entry)
         elif body.result == "TP1+BE" and tp1_setup:
-            # Pierwsza połowa wychodzi na TP1, druga na BE (avg_entry) → PnL tylko z TP1
             pnl_usd = sign * half_qty * (tp1_setup - avg_entry)
         elif body.result == "TP1+SL" and tp1_setup:
-            # Pierwsza połowa na TP1, druga na SL (avg_exit)
             sl_pnl  = sign * half_qty * (avg_exit - avg_entry) if avg_exit is not None else 0
             pnl_usd = sign * half_qty * (tp1_setup - avg_entry) + sl_pnl
+        elif body.result == "TP1+TP2" and tp1_setup and tp2_setup:
+            pnl_usd = sign * half_qty * (tp1_setup - avg_entry) + sign * half_qty * (tp2_setup - avg_entry)
 
     db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)
     return {
@@ -3104,6 +3117,7 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         "avg_entry": avg_entry,
         "avg_exit":  avg_exit,
         "pnl_usd":  round(pnl_usd, 2) if pnl_usd is not None else None,
+        "qty_full":  full_qty,
     }
 
 
