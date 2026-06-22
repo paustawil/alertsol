@@ -3667,10 +3667,14 @@ def api_all_setups(
     statuses: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo (przecinkami)
     """
     shadow: bool | None = None
+    bitget_only = False
     if shadow_filter == "shadow":
         shadow = True
     elif shadow_filter == "real":
         shadow = False
+    elif shadow_filter == "bitget":
+        shadow = False
+        bitget_only = True
 
     data = db.get_all_setups_filtered(
         statuses  = [s.strip() for s in statuses.split(",")  if s.strip()] or None,
@@ -3678,6 +3682,7 @@ def api_all_setups(
         variants  = [v.strip() for v in variants.split(",")  if v.strip()] or None,
         models    = [m.strip() for m in models.split(",")    if m.strip()] or None,
         shadow    = shadow,
+        bitget_only = bitget_only,
         date_from = date_from or None,
         date_to   = date_to   or None,
         limit     = min(limit, 500),
@@ -3835,6 +3840,7 @@ def api_dashboard_algo(
 
     if view == "wariant":
         rows = db.get_algo2_variant_summary(days, pairs=pair_list)
+        period_days_count = days if days else 365
         def _pct(v, tu):
             if v is None: return None
             if not tu: return None
@@ -3852,8 +3858,10 @@ def api_dashboard_algo(
                 "sl_rate":      _r(r.get("sl_rate")),
                 "avg_pct_tp1":  _pct(r.get("avg_tp1only_usd"), r.get("avg_trade_usdt") or trade_usdt),
                 "avg_pct_tp12": _pct(r.get("avg_tp1tp2_usd"), r.get("avg_trade_usdt") or trade_usdt),
-                "daily_pct_tp1":  round(float(r["sum_pct_tp1"]) / int(r["trading_days"]), 1) if r.get("sum_pct_tp1") is not None and (r.get("trading_days") or 0) > 0 else None,
-                "daily_pct_tp12": round(float(r["sum_pct_tp12"]) / int(r["trading_days"]), 1) if r.get("sum_pct_tp12") is not None and (r.get("trading_days") or 0) > 0 else None,
+                "sum_pct_tp1":  round(float(r["sum_pct_tp1"]), 1) if r.get("sum_pct_tp1") is not None else None,
+                "sum_pct_tp12": round(float(r["sum_pct_tp12"]), 1) if r.get("sum_pct_tp12") is not None else None,
+                "daily_pct_tp1":  round(float(r["sum_pct_tp1"]) / period_days_count, 1) if r.get("sum_pct_tp1") is not None else None,
+                "daily_pct_tp12": round(float(r["sum_pct_tp12"]) / period_days_count, 1) if r.get("sum_pct_tp12") is not None else None,
             }
             for r in rows
         ]
@@ -3879,10 +3887,15 @@ def api_dashboard_algo(
 
     if view == "per model":
         stats = db.get_summary_stats(days)
+        trade_usdt_env = float(os.getenv("BITGET_TRADE_USDT", "100"))
+        period_days_count = days if days else 365
         def _rp(v):
             if v is None: return "—"
             v = float(v)
             return f"{v:+.1f}%" if v != 0 else "0%"
+        def _sum_pct(usd_val):
+            if usd_val is None: return None
+            return round(float(usd_val) / trade_usdt_env * 100, 1)
         return [
             {
                 "name":    m.get("model", ""),
@@ -3893,6 +3906,10 @@ def api_dashboard_algo(
                 ),
                 "avg_pct_tp1":  _rp(m.get("avg_tp1only_pct")),
                 "avg_pct_tp12": _rp(m.get("avg_pnl_pct")),
+                "sum_pct_tp1":  _sum_pct(m.get("tp1_only_pnl_usd")),
+                "sum_pct_tp12": _sum_pct(m.get("pnl_usd")),
+                "daily_pct_tp1":  round(_sum_pct(m.get("tp1_only_pnl_usd")) / period_days_count, 1) if _sum_pct(m.get("tp1_only_pnl_usd")) is not None else None,
+                "daily_pct_tp12": round(_sum_pct(m.get("pnl_usd")) / period_days_count, 1) if _sum_pct(m.get("pnl_usd")) is not None else None,
             }
             for m in (stats.get("by_model") or [])
         ]

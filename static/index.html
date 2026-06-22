@@ -751,7 +751,7 @@ function ViewSetups() {
   const [tradeUsdt,setTradeUsdt]=useState(100);
   const [currentPrice,setCurrentPrice]=useState(null);
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
-  const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'shadow',l:'Shadow'}];
+  const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'bitget',l:'Bitget'},{v:'shadow',l:'Shadow'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   // Załaduj enabled types z ustawień przy montowaniu
   useEffect(()=>{
@@ -1257,10 +1257,10 @@ function ViewAlgo() {
       {rows!==null && selectedPairs!==null && subTab==='wariant' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per scenariusz / wariant</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>Avg%/poz TP1</th><th>Avg%/poz TP1+TP2</th><th>Avg%/dzień TP1</th><th>Avg%/dzień TP1+TP2</th></tr></thead>
+          <thead><tr><th>Scenariusz / Wariant</th><th>Setupy</th><th>Entry%</th><th>TP1+BE%</th><th>TP2%</th><th>SL%</th><th>Avg%/poz TP1</th><th>Avg%/poz TP1+TP2</th><th>Suma% TP1</th><th>Suma% TP1+TP2</th><th>Avg%/dzień TP1</th><th>Avg%/dzień TP1+TP2</th></tr></thead>
           <tbody>{Object.entries(groups||{}).map(([sc,variants])=>(
             <React.Fragment key={sc}>
-              <tr><td colSpan={10} style={{background:'var(--bg3)',color:'var(--text2)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'.08em',padding:'5px 12px'}}>{sc}</td></tr>
+              <tr><td colSpan={12} style={{background:'var(--bg3)',color:'var(--text2)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'.08em',padding:'5px 12px'}}>{sc}</td></tr>
               {variants.map((r,i)=>(
                 <tr key={i}>
                   <td style={{paddingLeft:24,color:'var(--text1)'}}>{r.variant}</td>
@@ -1271,6 +1271,8 @@ function ViewAlgo() {
                   <td className="mono" style={{color:r.sl_rate==='0%'?'var(--green)':r.sl_rate==='100%'?'var(--red)':'var(--text2)'}}>{r.sl_rate}</td>
                   <td className="mono" style={{color:pnlC(r.avg_pct_tp1)}}>{fmtP(r.avg_pct_tp1)}</td>
                   <td className="mono" style={{fontWeight:600,color:pnlC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</td>
+                  <td className="mono" style={{fontWeight:700,color:pnlC(r.sum_pct_tp1)}}>{fmtP(r.sum_pct_tp1)}</td>
+                  <td className="mono" style={{fontWeight:700,color:pnlC(r.sum_pct_tp12)}}>{fmtP(r.sum_pct_tp12)}</td>
                   <td className="mono" style={{color:pnlC(r.daily_pct_tp1)}}>{fmtP(r.daily_pct_tp1)}</td>
                   <td className="mono" style={{fontWeight:600,color:pnlC(r.daily_pct_tp12)}}>{fmtP(r.daily_pct_tp12)}</td>
                 </tr>
@@ -1306,14 +1308,18 @@ function ViewAlgo() {
       {rows!==null && selectedPairs!==null && subTab==='per model' && <div className="panel" style={{flex:1}}>
         <div className="panel-head"><span className="panel-title">Per model</span><span className="panel-badge">{rows.length}</span></div>
         <div className="panel-body scroll-y"><table className="tbl">
-          <thead><tr><th>Model</th><th>S</th><th>WR</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th></tr></thead>
+          <thead><tr><th>Model</th><th>S</th><th>WR</th><th>Avg% TP1</th><th>Avg% TP1+TP2</th><th>Suma% TP1</th><th>Suma% TP1+TP2</th><th>Avg%/dzień TP1</th><th>Avg%/dzień TP1+TP2</th></tr></thead>
           <tbody>{rows.map((r,i)=>(
             <tr key={i}>
               <td style={{fontWeight:600,color:'var(--text1)'}}>{r.name}</td>
               <td className="mono dim">{r.s}</td>
               <td className="mono dim">{r.wr}</td>
               <td className="mono" style={{color:pC(r.avg_pct_tp1)}}>{r.avg_pct_tp1}</td>
-              <td className="mono" style={{fontWeight:600,color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</td>
+              <td className="mono" style={{color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</td>
+              <td className="mono" style={{fontWeight:700,color:pnlC(r.sum_pct_tp1)}}>{fmtP(r.sum_pct_tp1)}</td>
+              <td className="mono" style={{fontWeight:700,color:pnlC(r.sum_pct_tp12)}}>{fmtP(r.sum_pct_tp12)}</td>
+              <td className="mono" style={{color:pnlC(r.daily_pct_tp1)}}>{fmtP(r.daily_pct_tp1)}</td>
+              <td className="mono" style={{fontWeight:600,color:pnlC(r.daily_pct_tp12)}}>{fmtP(r.daily_pct_tp12)}</td>
             </tr>
           ))}</tbody>
         </table></div>
@@ -1659,7 +1665,7 @@ function TabSetups() {
       <div className="sec-header"><span className="sec-title">Setups</span><span className="sec-badge">{rows?`${rows.length}/${total}`:'…'}</span></div>
       <div className="filter-scroll">
         {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
-        {['all','real','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':'Shadow'}</div>)}
+        {['all','real','bitget','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':v==='bitget'?'Bitget':'Shadow'}</div>)}
       </div>
       {rows===null&&<div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
       {rows!==null&&rows.map((r,i)=>{
@@ -1806,15 +1812,17 @@ function TabAlgo() {
           <div style={{padding:'6px 16px',background:'var(--bg2)',fontSize:10,fontWeight:700,color:'var(--text2)',textTransform:'uppercase',letterSpacing:'.08em'}}>{sc}</div>
           <div style={{display:'flex',padding:'6px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
             <div style={{flex:1,fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase'}}>Wariant</div>
-            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>%/poz</div>
-            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>%/dzień</div>
+            <div style={{width:50,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>%/poz</div>
+            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Suma%</div>
+            <div style={{width:50,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>%/dzień</div>
           </div>
           {variants.map((r,i)=>{const nC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';return(
             <div key={i} className="algo-row" style={{flexDirection:'column',gap:2}}>
               <div style={{display:'flex',alignItems:'center'}}>
                 <div style={{flex:1}}><div className="algo-name" style={{fontSize:11}}>{r.variant}</div><div className="algo-sub">Entry: {r.entry_rate} · SL: {r.sl_rate}</div></div>
-                <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:nC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</div>
-                <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:nC(r.daily_pct_tp12)}}>{fmtP(r.daily_pct_tp12)}</div>
+                <div style={{width:50,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:nC(r.avg_pct_tp12)}}>{fmtP(r.avg_pct_tp12)}</div>
+                <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:nC(r.sum_pct_tp12)}}>{fmtP(r.sum_pct_tp12)}</div>
+                <div style={{width:50,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:nC(r.daily_pct_tp12)}}>{fmtP(r.daily_pct_tp12)}</div>
               </div>
             </div>
           );})}
@@ -1853,14 +1861,16 @@ function TabAlgo() {
       {rows!==null && subTab==='per model' && <div className="section-wrap">
         <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
           <div style={{flex:1,fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Model</div>
-          <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1</div>
-          <div style={{width:70,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg% TP1+TP2</div>
+          <div style={{width:50,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg%</div>
+          <div style={{width:56,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Suma%</div>
+          <div style={{width:50,fontSize:10,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>%/dzień</div>
         </div>
         {rows.map((r,i)=>(
           <div key={i} className="algo-row">
             <div style={{flex:1}}><div className="algo-name">{r.name}</div></div>
-            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.avg_pct_tp1)}}>{r.avg_pct_tp1}</div>
-            <div style={{width:70,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</div>
+            <div style={{width:50,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</div>
+            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(r.sum_pct_tp12)}}>{fmtP(r.sum_pct_tp12)}</div>
+            <div style={{width:50,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.daily_pct_tp12)}}>{fmtP(r.daily_pct_tp12)}</div>
           </div>
         ))}
       </div>}
