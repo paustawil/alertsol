@@ -673,10 +673,11 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
     return "unknown"
 
 
-def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
+def _tpsl_order_detail(client: BitgetClient, order_id: str) -> tuple[str, float]:
     """
-    Status zlecenia TPSL (profit_plan lub loss_plan): 'live' | 'executed' | 'cancelled' | 'unknown'
-    Bitget używa planType='profit_loss' do odpytywania obu typów razem.
+    Zwraca (status, size) zlecenia TPSL z Bitgeta.
+    Status: 'live' | 'executed' | 'cancelled' | 'unknown'.
+    Size: qty z ordera na giełdzie (0.0 gdy nieznany).
     """
     try:
         resp = client.get("/api/v2/mix/order/orders-plan-pending", {
@@ -685,9 +686,9 @@ def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
             "planType":    "profit_loss",
         })
         if resp.get("code") == "00000":
-            live_ids = {o["orderId"] for o in (resp["data"].get("entrustedList") or [])}
-            if order_id in live_ids:
-                return "live"
+            for o in (resp["data"].get("entrustedList") or []):
+                if o["orderId"] == order_id:
+                    return "live", float(o.get("size") or 0)
 
         resp = client.get("/api/v2/mix/order/orders-plan-history", {
             "symbol":      SYMBOL,
@@ -699,14 +700,20 @@ def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
         if resp.get("code") == "00000":
             for o in (resp["data"].get("entrustedList") or []):
                 if o["orderId"] == order_id:
+                    size = float(o.get("size") or 0)
                     status = o.get("planStatus", "")
                     if status == "executed":
-                        return "executed"
+                        return "executed", size
                     if status in ("cancelled", "expired"):
-                        return "cancelled"
+                        return "cancelled", size
     except Exception as e:
-        log.warning(f"[exchange] tpsl_order_status {order_id}: {e}")
-    return "unknown"
+        log.warning(f"[exchange] tpsl_order_detail {order_id}: {e}")
+    return "unknown", 0.0
+
+
+def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
+    status, _ = _tpsl_order_detail(client, order_id)
+    return status
 
 
 # ── Anulowanie i modyfikacja zleceń ───────────────────────────────────────────
@@ -798,13 +805,21 @@ def _snapshot_tpsl_orders(client: BitgetClient, hold_side: str) -> list[dict]:
     return []
 
 
-def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, setup_id: int | None = None) -> bool:
+def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float,
+               size: float | None = None, setup_id: int | None = None) -> bool:
     """
-    Modyfikuje cenę triggera istniejącego SL order (in-place, bez zmiany size).
-    UWAGA: NIE wysyłaj parametru 'size' — Bitget przy zmianie size+price kasuje stary
-    order i tworzy nowy async, co może prowadzić do utraty SL.
-    Zwraca True jeśli modyfikacja się powiodła.
+    Modyfikuje cenę triggera istniejącego SL order.
+    size pobierany z aktualnego stanu ordera na giełdzie (wymagany przez Bitget API).
     """
+    if size is None or size <= 0:
+        _, size = _tpsl_order_detail(client, sl_order_id)
+        if size <= 0:
+            log.warning(f"[exchange] modify_sl {sl_order_id}: nie udało się ustalić size")
+            db.log_exchange_event(setup_id, "sl_modify_fail", {
+                "sl_oid": sl_order_id, "new_price": new_price,
+                "reason": "size unknown",
+            })
+            return False
     try:
         resp = client.post("/api/v2/mix/order/modify-tpsl-order", {
             "symbol":       SYMBOL,
@@ -813,6 +828,7 @@ def _modify_sl(client: BitgetClient, sl_order_id: str, new_price: float, setup_i
             "orderId":      sl_order_id,
             "triggerPrice": _fmt_price(new_price),
             "triggerType":  "mark_price",
+            "size":         _fmt_qty(size),
         })
         if resp.get("code") == "00000":
             print(f"[exchange] SL {sl_order_id} zmodyfikowany → {new_price}")
@@ -964,17 +980,19 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
         log.warning(f"[exchange] move_sl_to_entry #{setup_id}: nie znaleziono setupu")
         return False
 
-    sl_oid       = s.get("exchange_sl_oid")
-    full_qty_str = (s.get("exchange_qty_full") or "0").replace(",", ".")
-    full_qty     = float(full_qty_str)
-
+    sl_oid    = s.get("exchange_sl_oid")
     direction = s.get("direction", "")
 
     if not sl_oid:
         log.warning(f"[exchange] move_sl_to_entry #{setup_id}: brak sl_oid — nie można zmodyfikować")
         return False
 
-    if _modify_sl(client, sl_oid, new_sl_price, setup_id=setup_id):
+    sl_status, sl_size = _tpsl_order_detail(client, sl_oid)
+    if sl_status != "live":
+        log.warning(f"[exchange] move_sl_to_entry #{setup_id}: SL {sl_oid} status={sl_status}")
+        return False
+
+    if _modify_sl(client, sl_oid, new_sl_price, size=sl_size, setup_id=setup_id):
         sl_check = _tpsl_order_status(client, sl_oid)
         if sl_check == "live":
             print(f"[exchange] move_sl_to_entry #{setup_id}: SL zmodyfikowany → {new_sl_price} (zweryfikowany)")
@@ -982,7 +1000,7 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
         log.warning(f"[exchange] move_sl_to_entry #{setup_id}: modify OK ale status={sl_check} — fallback")
 
     # Fallback: wstaw nowy SL, zweryfikuj, dopiero potem kasuj stary
-    new_sl_oid = _place_new_sl(client, direction, new_sl_price, full_qty, setup_id)
+    new_sl_oid = _place_new_sl(client, direction, new_sl_price, sl_size, setup_id)
     if new_sl_oid:
         sl_check = _tpsl_order_status(client, new_sl_oid)
         if sl_check == "live":
@@ -1542,9 +1560,20 @@ def _sync_inner():
                     sid_int = int(sid) if sid and sid != "?" else None
                     sl2_secured = False
 
-                    if sl_new and half_qty_f > 0:
-                        # Próba 1: modyfikuj istniejący SL2 in-place (tylko jeśli istnieje na giełdzie)
-                        if sl2_oid and sl2_alive and _modify_sl(client, sl2_oid, sl_new, setup_id=sid_int):
+                    # Pobierz size SL2 ze snapshotu giełdy
+                    sl2_exchange_size = 0.0
+                    for o in snap_before:
+                        if o["orderId"] == sl2_oid:
+                            sl2_exchange_size = float(o.get("size") or 0)
+                            break
+
+                    if sl_new and sl2_exchange_size <= 0 and sl2_oid and sl2_alive:
+                        log.warning(f"[exchange] {label}: SL2 {sl2_oid} alive ale size=0 w snapshocie — fallback na half_qty")
+                        sl2_exchange_size = half_qty_f
+
+                    if sl_new and sl2_exchange_size > 0:
+                        # Próba 1: modyfikuj istniejący SL2 in-place
+                        if sl2_oid and sl2_alive and _modify_sl(client, sl2_oid, sl_new, size=sl2_exchange_size, setup_id=sid_int):
                             sl2_check = _tpsl_order_status(client, sl2_oid)
                             if sl2_check == "live":
                                 sl2_secured = True
@@ -1554,7 +1583,7 @@ def _sync_inner():
 
                         # Próba 2: złóż nowy SL, zweryfikuj, dopiero potem kasuj stary
                         if not sl2_secured:
-                            placed_sl2 = _place_new_sl(client, direction, sl_new, half_qty_f, sid)
+                            placed_sl2 = _place_new_sl(client, direction, sl_new, sl2_exchange_size, sid)
                             if placed_sl2:
                                 sl2_check = _tpsl_order_status(client, placed_sl2)
                                 if sl2_check == "live":
