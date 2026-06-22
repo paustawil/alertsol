@@ -1707,8 +1707,8 @@ function TabSetups() {
             <span>SL: <span style={{color:'var(--red)'}}>{r.sl!=null?`$${Number(r.sl).toFixed(2)}`:'—'}</span></span>
           </div>
           <div className="hist-meta">
-            <span className="hist-item">TP1: <span style={{color:pC(r.pnl_tp1)}}>{fmtU(r.pnl_tp1)}</span></span>
-            <span className="hist-item">TP1+TP2: <span style={{color:pC(r.pnl_tp12)}}>{fmtU(r.pnl_tp12)}</span></span>
+            <span className="hist-item">TP1: <span style={{color:pC(r.pnl_tp1)}}>{fmtU(r.pnl_tp1)}</span>{r.pnl_tp1_pct!=null&&<span style={{color:pC(r.pnl_tp1_pct),fontSize:9,marginLeft:2}}>({r.pnl_tp1_pct>0?'+':''}{Number(r.pnl_tp1_pct).toFixed(1)}%)</span>}</span>
+            <span className="hist-item">TP1+TP2: <span style={{color:pC(r.pnl_tp12)}}>{fmtU(r.pnl_tp12)}</span>{r.pnl_pct!=null&&<span style={{color:pC(r.pnl_pct),fontSize:9,marginLeft:2}}>({r.pnl_pct>0?'+':''}{Number(r.pnl_pct).toFixed(1)}%)</span>}</span>
             <span className="hist-item" style={{marginLeft:'auto'}}>{r.t_entry?`WE: ${r.t_entry.slice(11,16)}`:'brak WE'}</span>
           </div>
         </div>;
