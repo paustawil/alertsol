@@ -1837,7 +1837,8 @@ function TabAlgo() {
             <div style={{width:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>W</div>
             <div style={{width:24,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>L</div>
             <div style={{flex:1,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'center',textTransform:'uppercase'}}>WR</div>
-            <div style={{width:56,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>Avg%</div>
+            <div style={{width:48,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>TP1</div>
+            <div style={{width:48,fontSize:9,color:'var(--text3)',fontWeight:600,textAlign:'right',textTransform:'uppercase'}}>TP1+2</div>
           </div>
           {rows.map((r,i)=>(
             <div key={i} className="data-row">
@@ -1846,7 +1847,8 @@ function TabAlgo() {
               <div style={{width:24,textAlign:'center',color:'var(--green)',fontSize:11}}>{r.w}</div>
               <div style={{width:24,textAlign:'center',color:'var(--red)',fontSize:11}}>{r.l}</div>
               <div style={{flex:1,textAlign:'center',color:wC(r.wr),fontSize:11}}>{r.wr}</div>
-              <div className="data-pnl" style={{color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</div>
+              <div style={{width:48,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,color:pC(r.avg_pct_tp1)}}>{r.avg_pct_tp1}</div>
+              <div style={{width:48,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:600,color:pC(r.avg_pct_tp12)}}>{r.avg_pct_tp12}</div>
             </div>
           ))}
           {periodSummary && <div style={{display:'flex',padding:'8px 16px',borderTop:'2px solid var(--border)',background:'var(--bg3)'}}>
@@ -1855,7 +1857,8 @@ function TabAlgo() {
             <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--green)'}}>{periodSummary.w}</div>
             <div style={{width:24,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:'var(--red)'}}>{periodSummary.l}</div>
             <div style={{flex:1,textAlign:'center',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:wC(periodSummary.wr)}}>{periodSummary.wr}</div>
-            <div style={{width:56,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(periodSummary.avg_pct_tp12)}}>{periodSummary.avg_pct_tp12}</div>
+            <div style={{width:48,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(periodSummary.avg_pct_tp1)}}>{periodSummary.avg_pct_tp1}</div>
+            <div style={{width:48,textAlign:'right',fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:pC(periodSummary.avg_pct_tp12)}}>{periodSummary.avg_pct_tp12}</div>
           </div>}
         </div>
       </>}

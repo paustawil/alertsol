@@ -3891,6 +3891,8 @@ def api_dashboard_algo(
                 "wr":      f"{r['win_rate']}%" if r.get("win_rate") is not None else "—",
                 "avg_pct_tp1":  _rp(r.get("avg_pct_tp1")),
                 "avg_pct_tp12": _rp(r.get("avg_pct_tp12")),
+                "sum_pct_tp1":  _rp(r.get("sum_pct_tp1")),
+                "sum_pct_tp12": _rp(r.get("sum_pct_tp12")),
             }
             for r in rows
         ]
