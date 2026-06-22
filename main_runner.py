@@ -3841,10 +3841,6 @@ def api_dashboard_algo(
     if view == "wariant":
         rows = db.get_algo2_variant_summary(days, pairs=pair_list)
         period_days_count = days if days else 365
-        def _pct(v, tu):
-            if v is None: return None
-            if not tu: return None
-            return round(float(v) / float(tu) * 100, 1)
         def _r(v): return f"{v}%" if v is not None else "—"
         return [
             {
@@ -3856,8 +3852,8 @@ def api_dashboard_algo(
                 "tp1_be_rate":  _r(r.get("tp1_be_rate")),
                 "tp2_rate":     _r(r.get("tp2_rate")),
                 "sl_rate":      _r(r.get("sl_rate")),
-                "avg_pct_tp1":  _pct(r.get("avg_tp1only_usd"), r.get("avg_trade_usdt") or trade_usdt),
-                "avg_pct_tp12": _pct(r.get("avg_tp1tp2_usd"), r.get("avg_trade_usdt") or trade_usdt),
+                "avg_pct_tp1":  round(float(r["avg_pct_tp1"]), 1) if r.get("avg_pct_tp1") is not None else None,
+                "avg_pct_tp12": round(float(r["avg_pct_tp12"]), 1) if r.get("avg_pct_tp12") is not None else None,
                 "sum_pct_tp1":  round(float(r["sum_pct_tp1"]), 1) if r.get("sum_pct_tp1") is not None else None,
                 "sum_pct_tp12": round(float(r["sum_pct_tp12"]), 1) if r.get("sum_pct_tp12") is not None else None,
                 "daily_pct_tp1":  round(float(r["sum_pct_tp1"]) / period_days_count, 1) if r.get("sum_pct_tp1") is not None else None,
@@ -3887,15 +3883,11 @@ def api_dashboard_algo(
 
     if view == "per model":
         stats = db.get_summary_stats(days)
-        trade_usdt_env = float(os.getenv("BITGET_TRADE_USDT", "100"))
         period_days_count = days if days else 365
         def _rp(v):
             if v is None: return "—"
             v = float(v)
             return f"{v:+.1f}%" if v != 0 else "0%"
-        def _sum_pct(usd_val):
-            if usd_val is None: return None
-            return round(float(usd_val) / trade_usdt_env * 100, 1)
         return [
             {
                 "name":    m.get("model", ""),
@@ -3906,10 +3898,10 @@ def api_dashboard_algo(
                 ),
                 "avg_pct_tp1":  _rp(m.get("avg_tp1only_pct")),
                 "avg_pct_tp12": _rp(m.get("avg_pnl_pct")),
-                "sum_pct_tp1":  _sum_pct(m.get("tp1_only_pnl_usd")),
-                "sum_pct_tp12": _sum_pct(m.get("pnl_usd")),
-                "daily_pct_tp1":  round(_sum_pct(m.get("tp1_only_pnl_usd")) / period_days_count, 1) if _sum_pct(m.get("tp1_only_pnl_usd")) is not None else None,
-                "daily_pct_tp12": round(_sum_pct(m.get("pnl_usd")) / period_days_count, 1) if _sum_pct(m.get("pnl_usd")) is not None else None,
+                "sum_pct_tp1":  round(float(m["sum_tp1only_pct"]), 1) if m.get("sum_tp1only_pct") is not None else None,
+                "sum_pct_tp12": round(float(m["sum_pnl_pct"]), 1) if m.get("sum_pnl_pct") is not None else None,
+                "daily_pct_tp1":  round(float(m["sum_tp1only_pct"]) / period_days_count, 1) if m.get("sum_tp1only_pct") is not None else None,
+                "daily_pct_tp12": round(float(m["sum_pnl_pct"]) / period_days_count, 1) if m.get("sum_pnl_pct") is not None else None,
             }
             for m in (stats.get("by_model") or [])
         ]

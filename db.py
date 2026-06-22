@@ -706,6 +706,10 @@ def get_summary_stats(period_days: int | None = None) -> dict:
                            AND {trading_filter})::numeric, 1)                AS avg_pnl_pct,
                        ROUND(AVG({tp1_only_pct_calc}) FILTER (WHERE resolved = TRUE
                            AND {trading_filter})::numeric, 1)                AS avg_tp1only_pct,
+                       ROUND(SUM({pnl_pct_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})::numeric, 2)                AS sum_pnl_pct,
+                       ROUND(SUM({tp1_only_pct_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})::numeric, 2)                AS sum_tp1only_pct,
                        COUNT(*) FILTER (WHERE resolved = TRUE
                            AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2'))    AS wins
                 FROM setups
@@ -1429,6 +1433,8 @@ def get_algo2_variant_summary(period_days: int | None = None, pairs: list[tuple[
                     ROUND(AVG({_tu}) FILTER (WHERE {trading_filter})::numeric, 2)          AS avg_trade_usdt,
                     ROUND(SUM(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS sum_pct_tp1,
                     ROUND(SUM(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS sum_pct_tp12,
+                    ROUND(AVG(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS avg_pct_tp1,
+                    ROUND(AVG(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS avg_pct_tp12,
                     COUNT(DISTINCT (COALESCE(exit_time, resolved_at, alert_time) AT TIME ZONE 'Europe/Warsaw')::date)
                         FILTER (WHERE {trading_filter})                                    AS trading_days
                 FROM setups
@@ -1537,12 +1543,8 @@ def get_algo2_daily_stats(
                     ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS win_rate,
-                    ROUND(AVG({tp1_only}) FILTER (WHERE {trading_filter})
-                          / NULLIF(AVG({_tu}) FILTER (WHERE {trading_filter}), 0)
-                          * 100::numeric, 1)                                               AS avg_pct_tp1,
-                    ROUND(AVG({tp1tp2_calc}) FILTER (WHERE {trading_filter})
-                          / NULLIF(AVG({_tu}) FILTER (WHERE {trading_filter}), 0)
-                          * 100::numeric, 1)                                               AS avg_pct_tp12
+                    ROUND(AVG(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 1) AS avg_pct_tp1,
+                    ROUND(AVG(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 1) AS avg_pct_tp12
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
