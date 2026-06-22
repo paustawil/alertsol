@@ -1345,6 +1345,10 @@ function ViewSimulator() {
   const [dateTo,setDateTo]=useState('');
   const [startCapital,setStartCapital]=useState(1000);
   const [pnlMode,setPnlMode]=useState('tp12');
+  const [withdrawEnabled,setWithdrawEnabled]=useState(false);
+  const [withdrawMode,setWithdrawMode]=useState('weekly');
+  const [withdrawPct,setWithdrawPct]=useState(50);
+  const [withdrawDay,setWithdrawDay]=useState(1);
   const [trades,setTrades]=useState(null);
   const [loading,setLoading]=useState(false);
 
@@ -1429,6 +1433,46 @@ function ViewSimulator() {
     const steps=[];
     let wins=0,losses=0,skipped=0;
     let maxCapital=capital,maxDrawdown=0;
+    let totalWithdrawn=0;
+    let lastWithdrawCheck=null;
+    let capitalAtLastWithdraw=startCapital;
+
+    const shouldWithdraw=(dateMs)=>{
+      if(!withdrawEnabled) return false;
+      const d=new Date(dateMs);
+      if(withdrawMode==='weekly'){
+        if(d.getDay()!==4) return false;
+        const dayKey=d.toISOString().slice(0,10);
+        if(dayKey===lastWithdrawCheck) return false;
+        lastWithdrawCheck=dayKey;
+        return true;
+      } else {
+        const dayOfMonth=d.getDate();
+        const monthKey=d.getFullYear()+'-'+d.getMonth();
+        if(dayOfMonth<withdrawDay) return false;
+        if(monthKey===lastWithdrawCheck) return false;
+        lastWithdrawCheck=monthKey;
+        return true;
+      }
+    };
+
+    const tryWithdraw=(afterTime)=>{
+      if(!withdrawEnabled) return;
+      if(!shouldWithdraw(afterTime)) return;
+      const profit=capital-capitalAtLastWithdraw;
+      if(profit<=0) return;
+      const amount=Math.round(profit*withdrawPct/100*100)/100;
+      totalWithdrawn+=amount;
+      const prevCap=capital;
+      capital=capital-amount;
+      capitalAtLastWithdraw=capital;
+      steps.push({isWithdrawal:true,
+        withdraw_amount:amount,withdraw_profit:Math.round(profit*100)/100,
+        withdraw_time:new Date(afterTime).toISOString(),
+        capital_before:Math.round(prevCap*100)/100,
+        capital_after:Math.round(capital*100)/100,
+        entry_ts:afterTime,exit_ts:afterTime});
+    };
 
     for(const t of trades){
       const entryTime=new Date(t.entry_time).getTime();
@@ -1461,13 +1505,16 @@ function ViewSimulator() {
         pnl_pct:pnlPct,pnl_usd:Math.round(pnlUsd*100)/100,
         capital_before:Math.round(prevCapital*100)/100,
         capital_after:Math.round(capital*100)/100});
+      tryWithdraw(exitTime);
     }
     return {
       steps,final:Math.round(capital*100)/100,
-      totalReturn:Math.round((capital-startCapital)/startCapital*10000)/100,
+      totalReturn:Math.round((capital-startCapital+totalWithdrawn)/startCapital*10000)/100,
       wins,losses,skipped,maxDrawdown:Math.round(maxDrawdown*100)/100,
+      totalWithdrawn:Math.round(totalWithdrawn*100)/100,
+      withdrawCount:steps.filter(s=>s.isWithdrawal).length,
     };
-  },[trades,startCapital,pnlMode]);
+  },[trades,startCapital,pnlMode,withdrawEnabled,withdrawMode,withdrawPct,withdrawDay]);
 
   const fmtD=(s)=>s?String(s).replace('T',' ').slice(0,16):'—';
   const pnlC=(v)=>v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
@@ -1516,6 +1563,32 @@ function ViewSimulator() {
               <div className={`seg-tab ${pnlMode==='tp1'?'active':''}`} onClick={()=>setPnlMode('tp1')}>TP1 only</div>
             </div>
             <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{pnlMode==='tp1'?'Cały wolumen wychodzi na TP1':'Połowa na TP1, połowa na TP2'}</span>
+          </div>
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Wypłaty:</span>
+            <div className={`filter-chip ${withdrawEnabled?'active':''}`}
+              onClick={()=>setWithdrawEnabled(p=>!p)}>{withdrawEnabled?'Włączone':'Wyłączone'}</div>
+            {withdrawEnabled&&<>
+              <div className="seg-tabs">
+                <div className={`seg-tab ${withdrawMode==='weekly'?'active':''}`} onClick={()=>setWithdrawMode('weekly')}>Co czwartek</div>
+                <div className={`seg-tab ${withdrawMode==='monthly'?'active':''}`} onClick={()=>setWithdrawMode('monthly')}>Co miesiąc</div>
+              </div>
+              <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                <input type="number" min="1" max="100" value={withdrawPct}
+                  onChange={e=>setWithdrawPct(Math.min(100,Math.max(1,Number(e.target.value)||1)))}
+                  style={{width:50,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 6px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+                <span style={{fontSize:10,color:'var(--text3)'}}>% zysku</span>
+              </div>
+              {withdrawMode==='monthly'&&<div style={{display:'flex',gap:4,alignItems:'center'}}>
+                <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>dzień:</span>
+                <input type="number" min="1" max="28" value={withdrawDay}
+                  onChange={e=>setWithdrawDay(Math.min(28,Math.max(1,Number(e.target.value)||1)))}
+                  style={{width:40,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 6px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+              </div>}
+              <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>
+                {withdrawMode==='weekly'?`${withdrawPct}% zysku wypłacane po każdym czwartku`:`${withdrawPct}% zysku wypłacane po ${withdrawDay}. dniu miesiąca`}
+              </span>
+            </>}
           </div>
           {filterTree.length>0&&selectedPairs!==null&&<div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
             <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Typy:</span>
@@ -1586,6 +1659,16 @@ function ViewSimulator() {
               <div className="qs-val" style={{color:pnlC(simulation.final-startCapital)}}>{simulation.final>=startCapital?'+':''}${(simulation.final-startCapital).toFixed(2)}</div>
               <div className="qs-lbl">Zysk / Strata $</div>
             </div>
+            {simulation.totalWithdrawn>0&&<>
+              <div className="qs-cell">
+                <div className="qs-val" style={{color:'var(--blue)'}}>${simulation.totalWithdrawn.toLocaleString('en',{minimumFractionDigits:2})}</div>
+                <div className="qs-lbl">Suma wypłat ({simulation.withdrawCount}x)</div>
+              </div>
+              <div className="qs-cell">
+                <div className="qs-val" style={{color:'var(--green)'}}>${(simulation.final+simulation.totalWithdrawn).toLocaleString('en',{minimumFractionDigits:2})}</div>
+                <div className="qs-lbl">Kapitał + wypłaty</div>
+              </div>
+            </>}
           </div>
         </div>
 
@@ -1622,6 +1705,21 @@ function ViewSimulator() {
               </tr></thead>
               <tbody>
                 {simulation.steps.map((s,i)=>{
+                  if(s.isWithdrawal) return (
+                    <tr key={'w-'+i} style={{background:'var(--blue-dim)'}}>
+                      <td style={{width:20,textAlign:'center'}}><span style={{color:'var(--blue)',fontSize:13}}>💸</span></td>
+                      <td style={{color:'var(--text3)',fontFamily:'var(--mono)'}}></td>
+                      <td colSpan={3} style={{fontFamily:'var(--mono)',fontWeight:600,color:'var(--blue)',fontSize:11}}>
+                        WYPŁATA — {withdrawPct}% zysku (${s.withdraw_profit})
+                      </td>
+                      <td style={{fontFamily:'var(--mono)',fontWeight:600,color:'var(--blue)'}}></td>
+                      <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{fmtD(s.withdraw_time)}</td>
+                      <td></td>
+                      <td style={{fontFamily:'var(--mono)',fontWeight:600,color:'var(--blue)'}}>-${s.withdraw_amount.toFixed(2)}</td>
+                      <td></td>
+                      <td style={{fontFamily:'var(--mono)',fontWeight:600,color:'var(--text1)'}}>${s.capital_after.toLocaleString('en',{minimumFractionDigits:2})}</td>
+                    </tr>
+                  );
                   const sk=s.skipped;
                   const opacity=sk?0.35:1;
                   const rowStyle={opacity};
@@ -1669,7 +1767,8 @@ function SimChart({steps,startCapital}) {
     ctx.scale(dpr,dpr);
     ctx.clearRect(0,0,W,H);
 
-    const points=[startCapital,...steps.map(s=>s.capital_after)];
+    const nonSkipped=steps.filter(s=>!s.skipped);
+    const points=[startCapital,...nonSkipped.map(s=>s.capital_after)];
     const minV=Math.min(...points)*0.98;
     const maxV=Math.max(...points)*1.02;
     const range=maxV-minV||1;
@@ -1707,7 +1806,12 @@ function SimChart({steps,startCapital}) {
       const x=padL+i*xStep;
       const y=padT+cH*(1-(v-minV)/range);
       ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);
-      ctx.fillStyle=v>=startCapital?'#00d68f':'#ff4d6a';ctx.fill();
+      const isW=i>0&&nonSkipped[i-1]&&nonSkipped[i-1].isWithdrawal;
+      ctx.fillStyle=isW?'#4a9eff':v>=startCapital?'#00d68f':'#ff4d6a';ctx.fill();
+      if(isW){
+        ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);
+        ctx.strokeStyle='#4a9eff66';ctx.lineWidth=1;ctx.stroke();
+      }
     });
   },[steps,startCapital]);
 
@@ -1715,24 +1819,25 @@ function SimChart({steps,startCapital}) {
 }
 
 function SimTimeline({steps}) {
+  const posSteps=React.useMemo(()=>steps.filter(s=>!s.isWithdrawal),[steps]);
   const canvasRef=React.useRef(null);
   const containerRef=React.useRef(null);
   React.useEffect(()=>{
     const canvas=canvasRef.current;
-    if(!canvas||steps.length===0) return;
+    if(!canvas||posSteps.length===0) return;
     const ctx=canvas.getContext('2d');
     const dpr=window.devicePixelRatio||1;
     const rect=canvas.parentElement.getBoundingClientRect();
 
     const ROW_H=18, padL=60, padR=20, padT=24, padB=20;
-    const H=padT+steps.length*ROW_H+padB;
+    const H=padT+posSteps.length*ROW_H+padB;
     const W=rect.width;
     canvas.width=W*dpr; canvas.height=H*dpr;
     canvas.style.width=W+'px'; canvas.style.height=H+'px';
     ctx.scale(dpr,dpr);
     ctx.clearRect(0,0,W,H);
 
-    const allTs=steps.flatMap(s=>[s.entry_ts,s.exit_ts]);
+    const allTs=posSteps.flatMap(s=>[s.entry_ts,s.exit_ts]);
     const minT=Math.min(...allTs), maxT=Math.max(...allTs);
     const rangeT=maxT-minT||1;
     const cW=W-padL-padR;
@@ -1750,7 +1855,7 @@ function SimTimeline({steps}) {
       ctx.fillText(label,x,padT-8);
     }
 
-    steps.forEach((s,i)=>{
+    posSteps.forEach((s,i)=>{
       const y=padT+i*ROW_H+ROW_H/2;
       const x1=toX(s.entry_ts), x2=toX(s.exit_ts);
       const barW=Math.max(x2-x1,3);
@@ -1780,9 +1885,9 @@ function SimTimeline({steps}) {
         ctx.fillText(lbl,x1+3,y+3);
       }
     });
-  },[steps]);
+  },[posSteps]);
 
-  const H=24+steps.length*18+20;
+  const H=24+posSteps.length*18+20;
   return <div ref={containerRef} style={{overflowX:'auto',overflowY:'auto',maxHeight:400}}>
     <canvas ref={canvasRef} style={{width:'100%',height:H,display:'block',minWidth:400}}/>
   </div>;
