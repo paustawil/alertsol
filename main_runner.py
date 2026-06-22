@@ -3098,13 +3098,25 @@ def api_update_result(setup_id: int, body: ResultUpdate):
         tps_list  = s.get("tps") or []
         tp1_setup = float(tps_list[0]) if tps_list else None
         tp2_setup = float(tps_list[1]) if len(tps_list) > 1 else None
+        sl_setup  = float(s["sl"]) if s.get("sl") else None
 
-        if body.result in ("SL", "TP1", "TP2") and avg_exit is not None:
-            pnl_usd = sign * full_qty * (avg_exit - avg_entry)
+        if body.result == "SL":
+            exit_p = avg_exit if avg_exit is not None else sl_setup
+            if exit_p is not None:
+                pnl_usd = sign * full_qty * (exit_p - avg_entry)
+        elif body.result == "TP1":
+            exit_p = avg_exit if avg_exit is not None else tp1_setup
+            if exit_p is not None:
+                pnl_usd = sign * full_qty * (exit_p - avg_entry)
+        elif body.result == "TP2":
+            exit_p = avg_exit if avg_exit is not None else tp2_setup
+            if exit_p is not None:
+                pnl_usd = sign * full_qty * (exit_p - avg_entry)
         elif body.result == "TP1+BE" and tp1_setup:
             pnl_usd = sign * half_qty * (tp1_setup - avg_entry)
         elif body.result == "TP1+SL" and tp1_setup:
-            sl_pnl  = sign * half_qty * (avg_exit - avg_entry) if avg_exit is not None else 0
+            exit_p = avg_exit if avg_exit is not None else sl_setup
+            sl_pnl = sign * half_qty * (exit_p - avg_entry) if exit_p is not None else 0
             pnl_usd = sign * half_qty * (tp1_setup - avg_entry) + sl_pnl
         elif body.result == "TP1+TP2" and tp1_setup and tp2_setup:
             pnl_usd = sign * half_qty * (tp1_setup - avg_entry) + sign * half_qty * (tp2_setup - avg_entry)

@@ -1792,9 +1792,14 @@ def get_all_setups_filtered(
     pnl_calc_f = f"""
         COALESCE(pnl_usd,
             CASE
-                WHEN result IN ('TP1','TP2','SL')
-                     AND avg_exit IS NOT NULL AND {_entry} IS NOT NULL
-                THEN {_sign} * ({_qty_full}) * (avg_exit - {_entry})
+                WHEN result = 'SL' AND {_entry} IS NOT NULL
+                THEN {_sign} * ({_qty_full}) * (COALESCE(avg_exit, sl::numeric) - {_entry})
+
+                WHEN result = 'TP1' AND {_entry} IS NOT NULL
+                THEN {_sign} * ({_qty_full}) * (COALESCE(avg_exit, (tps->>0)::numeric) - {_entry})
+
+                WHEN result = 'TP2' AND {_entry} IS NOT NULL
+                THEN {_sign} * ({_qty_full}) * (COALESCE(avg_exit, (tps->>1)::numeric) - {_entry})
 
                 WHEN result = 'TP1+BE'
                      AND (tps->>0) IS NOT NULL AND {_entry} IS NOT NULL
@@ -1808,9 +1813,7 @@ def get_all_setups_filtered(
                 WHEN result = 'TP1+SL'
                      AND (tps->>0) IS NOT NULL AND {_entry} IS NOT NULL
                 THEN {_sign} * ({_qty_half}) * ((tps->>0)::numeric - {_entry})
-                   + CASE WHEN avg_exit IS NOT NULL
-                          THEN {_sign} * ({_qty_half}) * (avg_exit - {_entry})
-                          ELSE 0 END
+                   + {_sign} * ({_qty_half}) * (COALESCE(avg_exit, sl::numeric) - {_entry})
             END
         )"""
     tp1_only_calc_f = f"""
