@@ -3618,7 +3618,7 @@ def api_dashboard_setups():
             "kurs":                    float(s["kurs"])   if s.get("kurs")   is not None else None,
             "score":                   float(s["score"])  if s.get("score")  is not None else None,
             "rr":                      float(s["rr"])     if s.get("rr")     is not None else None,
-            "alert_time":              str(s.get("alert_time", ""))[:19],
+            "alert_time":              str(s["alert_time"].astimezone(ZoneInfo("Europe/Warsaw")))[:19] if s.get("alert_time") else "",
             "exchange_position_opened": s.get("exchange_position_opened", False),
             "exchange_tp1_done":        s.get("exchange_tp1_done", False),
             "entry_hit_at":             s.get("entry_hit_at") is not None,
@@ -3690,7 +3690,14 @@ def api_all_setups(
     )
 
     def _f(v): return float(v) if v is not None else None
-    def _dt(v, n): return str(v)[:n] if v else None
+    _tz_w = ZoneInfo("Europe/Warsaw")
+    def _dt(v, n):
+        if not v: return None
+        if isinstance(v, datetime):
+            return str(v.astimezone(_tz_w))[:n]
+        if isinstance(v, (int, float)):
+            return str(datetime.fromtimestamp(int(v), tz=_tz_w))[:n]
+        return str(v)[:n]
 
     rows = []
     for s in data["rows"]:
@@ -3787,7 +3794,14 @@ def api_dashboard_trades(
         rows = [r for r in rows if (r.get("direction") or "").lower() in dirs]
 
     def _f(v): return float(v) if v is not None else None
-    def _dt(v, n): return str(v)[:n] if v else None
+    _tz_w = ZoneInfo("Europe/Warsaw")
+    def _dt(v, n):
+        if not v: return None
+        if isinstance(v, datetime):
+            return str(v.astimezone(_tz_w))[:n]
+        if isinstance(v, (int, float)):
+            return str(datetime.fromtimestamp(int(v), tz=_tz_w))[:n]
+        return str(v)[:n]
     trades = []
     for t in rows:
         tps = t.get("tps") or []

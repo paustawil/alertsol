@@ -750,7 +750,7 @@ def get_period_stats(period: str) -> dict:
                 time_filter = "alert_time >= NOW() - %(interval)s::interval"
                 time_params: dict = {"interval": interval}
             else:
-                time_filter = "alert_time::date = CURRENT_DATE"
+                time_filter = "(alert_time AT TIME ZONE 'Europe/Warsaw')::date = (NOW() AT TIME ZONE 'Europe/Warsaw')::date"
                 time_params = {}
 
             # Total setups in period
@@ -1140,8 +1140,8 @@ def get_dashboard_stats(period: str = "30d") -> dict:
     wins_cond = "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')"
 
     _period_intervals = {
-        "today": ("DATE(COALESCE(resolved_at, alert_time)) = CURRENT_DATE",
-                  "DATE(alert_time) = CURRENT_DATE"),
+        "today": ("(COALESCE(resolved_at, alert_time) AT TIME ZONE 'Europe/Warsaw')::date = (NOW() AT TIME ZONE 'Europe/Warsaw')::date",
+                  "(alert_time AT TIME ZONE 'Europe/Warsaw')::date = (NOW() AT TIME ZONE 'Europe/Warsaw')::date"),
         "24h":   ("COALESCE(resolved_at, alert_time) >= NOW() - INTERVAL '1 day'",
                   "alert_time >= NOW() - INTERVAL '1 day'"),
         "7d":    ("COALESCE(resolved_at, alert_time) >= NOW() - INTERVAL '7 days'",
@@ -1441,7 +1441,7 @@ def get_algo2_daily_stats(
             cur.execute(
                 f"""
                 SELECT
-                    (COALESCE(exit_time, resolved_at, alert_time) AT TIME ZONE 'Europe/Warsaw')::date AS day,
+                    (alert_time AT TIME ZONE 'Europe/Warsaw')::date AS day,
                     COUNT(*)                                                               AS total,
                     COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL)                      AS entered,
                     COUNT(*) FILTER (WHERE {wins_filter})                                  AS wins,
