@@ -48,6 +48,7 @@ MARGIN_MODE  = "crossed"
 LEVERAGE     = int(os.getenv("BITGET_LEVERAGE", "20"))
 TRADE_USDT    = float(os.getenv("BITGET_TRADE_USDT") or "100.0")
 MAX_POSITIONS = int(os.getenv("BITGET_MAX_POSITIONS") or "5")
+SINGLE_POSITION_MODE = True
 QTY_STEP     = 0.1
 PRICE_DEC    = 2
 BASE_URL     = "https://api.bitget.com"
@@ -1099,6 +1100,41 @@ def _calc_dynamic_trade_usdt(balance: float | None, fallback: float) -> float:
     return dynamic
 
 
+def _cancel_other_pending_on_position_open(client, opened_sid: int, pending: list[dict]) -> bool:
+    """SINGLE_POSITION_MODE: gdy pozycja się otwiera, anuluj inne plan ordery
+    na Bitget i oznacz te setupy jako shadow."""
+    if not SINGLE_POSITION_MODE:
+        return False
+    changed = False
+    for s in pending:
+        sid = s.get("setup_id")
+        if sid == opened_sid:
+            continue
+        if s.get("exchange_done", False) or s.get("shadow", False):
+            continue
+        plan_oid  = s.get("exchange_plan_oid")
+        plan2_oid = s.get("exchange_plan2_oid")
+        pos_open  = s.get("exchange_position_opened", False)
+        if pos_open:
+            continue
+        if plan_oid and plan_oid != "PENDING":
+            print(f"[exchange] SINGLE_POS: #{sid} → anuluję plan order {plan_oid} (pozycja #{opened_sid} otwarta)")
+            _cancel_order(client, plan_oid, "normal_plan")
+            if plan2_oid:
+                _cancel_order(client, plan2_oid, "normal_plan")
+            s["exchange_plan_oid"]  = None
+            s["exchange_plan2_oid"] = None
+            s["exchange_done"]      = True
+            s["shadow"]             = True
+            db.update_setup(sid, shadow=True, cancel_reason="single_position_mode")
+            db.log_exchange_event(sid, "single_pos_cancel", {
+                "reason": f"position #{opened_sid} opened",
+                "plan_oid": plan_oid,
+            })
+            changed = True
+    return changed
+
+
 def _sync_inner():
     client = _client()
     if client is None:
@@ -1133,6 +1169,19 @@ def _sync_inner():
         )
     active_longs  = _active_for_dir("long")
     active_shorts = _active_for_dir("short")
+
+    # SINGLE_POSITION_MODE: max 1 otwarta pozycja na Bitget (oba kierunki łącznie)
+    total_active_positions = sum(
+        1 for s in pending
+        if s.get("exchange_position_opened")
+        and not s.get("exchange_done", False)
+        and not s.get("shadow", False)
+        and not s.get("exchange_tp1_done", False)
+    )
+    single_pos_block = SINGLE_POSITION_MODE and total_active_positions >= 1
+
+    if single_pos_block:
+        print(f"[exchange] SINGLE_POSITION_MODE: pozycja aktywna ({total_active_positions}) — nowe zlecenia wstrzymane.")
     if active_longs >= MAX_POSITIONS:
         print(f"[exchange] Limit LONG pozycji osiągnięty ({active_longs}/{MAX_POSITIONS}) — nowe long wstrzymane.")
     if active_shorts >= MAX_POSITIONS:
@@ -1179,6 +1228,9 @@ def _sync_inner():
 
         # ── NOWY setup ────────────────────────────────────────────────────────
         if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
+            if single_pos_block:
+                print(f"[exchange] {label}: pominięty — SINGLE_POSITION_MODE, aktywna pozycja na Bitget")
+                continue
             dir_active = active_longs if direction == "long" else active_shorts
             if dir_active >= MAX_POSITIONS:
                 print(f"[exchange] {label}: pominięty — limit {direction} pozycji ({dir_active}/{MAX_POSITIONS})")
@@ -1211,6 +1263,8 @@ def _sync_inner():
                     db.update_setup(s["setup_id"], entry_hit_at=now_ts)
                     modified = True
                     print(f"[exchange] {label}: market entry sukces → pozycja otwarta")
+                    if _cancel_other_pending_on_position_open(client, int(sid), pending):
+                        modified = True
                 else:
                     db.release_plan_order_claim(s["setup_id"])
             else:
@@ -1320,6 +1374,9 @@ def _sync_inner():
                 print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL, "
                       f"avg_entry={avg_open_price}, fee={fee_open}) | "
                       f"TP1={tp1_id} TP2={tp2_id} SL1={sl1_id} SL2={sl2_id}")
+
+                if _cancel_other_pending_on_position_open(client, int(sid), pending):
+                    modified = True
             continue
 
         # ── Pozycja otwarta, brak TPSL — retry składania zleceń ──────────────

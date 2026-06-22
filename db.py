@@ -2012,6 +2012,39 @@ def get_trade_analysis(date_from: str | None = None) -> list[dict]:
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
+def get_exchange_events(setup_id: int | None = None, limit: int = 100) -> list[dict]:
+    """Zwraca ostatnie zdarzenia exchange, opcjonalnie filtrowane po setup_id."""
+    try:
+        with _conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if setup_id is not None:
+                    cur.execute(
+                        "SELECT * FROM exchange_events WHERE setup_id = %s ORDER BY created_at DESC LIMIT %s",
+                        (setup_id, limit),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT * FROM exchange_events ORDER BY created_at DESC LIMIT %s",
+                        (limit,),
+                    )
+                rows = cur.fetchall()
+                result = []
+                for r in rows:
+                    d = dict(r)
+                    if d.get("created_at"):
+                        d["created_at"] = d["created_at"].isoformat()
+                    if isinstance(d.get("detail"), str):
+                        try:
+                            d["detail"] = json.loads(d["detail"])
+                        except Exception:
+                            pass
+                    result.append(d)
+                return result
+    except Exception as e:
+        logging.getLogger("db").warning(f"get_exchange_events: {e}")
+        return []
+
+
 def log_exchange_event(setup_id: int | None, event: str, detail: dict | None = None) -> None:
     """Zapisuje zdarzenie exchange do tabeli exchange_events."""
     try:

@@ -866,11 +866,34 @@ function ViewSetups() {
     const sk=r.status_key;
     const [editing,setEditing]=useState(false);
     const [saving,setSaving]=useState(false);
+    const [editQty,setEditQty]=useState('');
+    const [previewPnl,setPreviewPnl]=useState(null);
     const RESULTS=['TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL','nieokreslone'];
+    const calcPreview=(result,qtyStr)=>{
+      const entry=r.avg_entry||(r.entries&&r.entries[0]!=null?Number(r.entries[0]):null);
+      if(!entry) return null;
+      const qty=parseFloat(qtyStr);
+      if(!qty||qty<=0) return null;
+      const half=Math.max(Math.floor((qty/2)/0.1)*0.1,0.1);
+      const sign=(r.kier||'LONG').toUpperCase()==='LONG'?1:-1;
+      const tp1=r.tps&&r.tps[0]!=null?Number(r.tps[0]):null;
+      const tp2=r.tps&&r.tps[1]!=null?Number(r.tps[1]):null;
+      const sl=r.sl!=null?Number(r.sl):null;
+      if(result==='TP1'&&tp1) return sign*qty*(tp1-entry);
+      if(result==='TP2'&&tp2) return sign*qty*(tp2-entry);
+      if(result==='TP1+BE'&&tp1) return sign*half*(tp1-entry);
+      if(result==='TP1+TP2'&&tp1&&tp2) return sign*half*(tp1-entry)+sign*half*(tp2-entry);
+      if(result==='TP1+SL'&&tp1&&sl) return sign*half*(tp1-entry)+sign*half*(sl-entry);
+      if(result==='SL'&&sl) return sign*qty*(sl-entry);
+      return null;
+    };
     const saveResult=async(newResult)=>{
       setSaving(true);
       try{
-        const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:newResult})});
+        const body={result:newResult};
+        const qty=parseFloat(editQty);
+        if(qty>0) body.qty_full=qty;
+        const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         if(resp.ok){setEditing(false);location.reload();}
       }catch(e){}
       setSaving(false);
@@ -878,10 +901,16 @@ function ViewSetups() {
     if(['zamkniete','anulowane','nie_weszlo'].includes(sk)){
       const lbl=r.result||(sk==='anulowane'?'Anulowane':'Nie weszło');
       return <>
-        <span style={{fontFamily:'var(--mono)',fontSize:10,color:resC(lbl),background:resBg(lbl),padding:'2px 7px',borderRadius:3,whiteSpace:'nowrap',display:'inline-block',cursor:'pointer'}} onClick={e=>{e.stopPropagation();setEditing(!editing);}}>{lbl}</span>
+        <span style={{fontFamily:'var(--mono)',fontSize:10,color:resC(lbl),background:resBg(lbl),padding:'2px 7px',borderRadius:3,whiteSpace:'nowrap',display:'inline-block',cursor:'pointer'}} onClick={e=>{e.stopPropagation();setEditing(!editing);if(!editing)setEditQty(r.exchange_qty_full||'');}}>{lbl}</span>
         {editing&&<div style={{position:'relative',zIndex:10}} onClick={e=>e.stopPropagation()}>
-          <div style={{position:'absolute',top:2,left:0,background:'var(--bg1)',border:'1px solid var(--border2)',borderRadius:4,padding:4,display:'flex',flexDirection:'column',gap:2,minWidth:90,boxShadow:'0 4px 12px rgba(0,0,0,.4)'}}>
-            {RESULTS.map(opt=><button key={opt} disabled={saving} style={{background:opt===lbl?'var(--bg3)':'transparent',border:'none',color:resC(opt),fontFamily:'var(--mono)',fontSize:10,padding:'4px 8px',cursor:'pointer',borderRadius:3,textAlign:'left',whiteSpace:'nowrap'}} onClick={()=>saveResult(opt)}>{opt}</button>)}
+          <div style={{position:'absolute',top:2,left:0,background:'var(--bg1)',border:'1px solid var(--border2)',borderRadius:4,padding:6,display:'flex',flexDirection:'column',gap:3,minWidth:160,boxShadow:'0 4px 12px rgba(0,0,0,.4)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:2}}>
+              <span style={{fontSize:9,color:'var(--text3)',whiteSpace:'nowrap'}}>Qty:</span>
+              <input type="number" step="0.1" value={editQty} onChange={e=>setEditQty(e.target.value)} style={{width:60,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'2px 4px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:10}} placeholder={r.exchange_qty_full||'auto'}/>
+              <span style={{fontSize:9,color:'var(--text3)'}}>SOL</span>
+            </div>
+            {previewPnl!=null&&<div style={{fontSize:9,fontFamily:'var(--mono)',color:previewPnl>0?'var(--green)':previewPnl<0?'var(--red)':'var(--text3)',marginBottom:2}}>PnL: {previewPnl>0?'+':''}{previewPnl.toFixed(1)}$</div>}
+            {RESULTS.map(opt=><button key={opt} disabled={saving} style={{background:opt===lbl?'var(--bg3)':'transparent',border:'none',color:resC(opt),fontFamily:'var(--mono)',fontSize:10,padding:'4px 8px',cursor:'pointer',borderRadius:3,textAlign:'left',whiteSpace:'nowrap'}} onMouseEnter={()=>setPreviewPnl(calcPreview(opt,editQty||r.exchange_qty_full||'0'))} onMouseLeave={()=>setPreviewPnl(null)} onClick={()=>saveResult(opt)}>{opt}</button>)}
           </div>
         </div>}
       </>;
@@ -981,7 +1010,9 @@ function ViewSetups() {
                     <span><span style={{color:'var(--text3)'}}>Wyjście:&nbsp;</span>{r.t_exit||'—'}</span>
                     {r.exchange_tp1_oid&&<span><span style={{color:'var(--text3)'}}>Bitget TP1:&nbsp;</span>{r.exchange_tp1_oid}</span>}
                     {r.exchange_sl_oid&&<span><span style={{color:'var(--text3)'}}>Bitget SL:&nbsp;</span>{r.exchange_sl_oid}</span>}
+                    {r.exchange_qty_full&&<span><span style={{color:'var(--text3)'}}>Qty:&nbsp;</span>{r.exchange_qty_full} SOL</span>}
                   </div>
+                  {r.exchange_position_opened&&<ExchangeEventsPanel setupId={r.id}/>}
                 </td>
               </tr>}
             </React.Fragment>;
@@ -990,6 +1021,24 @@ function ViewSetups() {
       </div>
     </div>
   );
+}
+/* ── ExchangeEventsPanel — diagnostyka TP/SL ── */
+function ExchangeEventsPanel({setupId}) {
+  const [events,setEvents]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const load=()=>{setLoading(true);fetch(`/api/exchange-events?setup_id=${setupId}&limit=20`).then(r=>r.ok?r.json():[]).then(d=>{setEvents(d);setLoading(false);}).catch(()=>{setEvents([]);setLoading(false);});};
+  useEffect(()=>{load();},[setupId]);
+  const evColor=(e)=>{if(e.includes('fail')||e.includes('not_secured')||e.includes('restore_fail'))return'var(--red)';if(e.includes('ok')||e.includes('restored'))return'var(--green)';if(e.includes('diag'))return'var(--blue)';return'var(--text2)';};
+  if(loading) return <div style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)',padding:'4px 0'}}>Ładowanie zdarzeń…</div>;
+  if(!events||events.length===0) return <div style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)',padding:'4px 0'}}>Brak zdarzeń exchange</div>;
+  return <div style={{marginTop:6,borderTop:'1px solid var(--border)',paddingTop:4}}>
+    <div style={{fontSize:9,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:4}}>Zdarzenia Exchange</div>
+    {events.map((ev,i)=><div key={i} style={{fontSize:9,fontFamily:'var(--mono)',color:'var(--text2)',padding:'2px 0',display:'flex',gap:8,flexWrap:'wrap'}}>
+      <span style={{color:'var(--text3)',minWidth:110,flexShrink:0}}>{ev.created_at?ev.created_at.replace('T',' ').slice(0,19):''}</span>
+      <span style={{color:evColor(ev.event),fontWeight:600,minWidth:100}}>{ev.event}</span>
+      {ev.detail&&Object.keys(ev.detail).length>0&&<span style={{color:'var(--text3)',wordBreak:'break-all',maxWidth:400}}>{JSON.stringify(ev.detail).slice(0,200)}</span>}
+    </div>)}
+  </div>;
 }
 /* ── FilterTree3 — drzewko checkbox model→type→variant ── */
 function FilterTree3({tree,selected,onSelect,settingsFilter}) {
@@ -1076,11 +1125,6 @@ function FilterTree({tree,selected,onSelect}) {
   const togglePair=(sc,v)=>{const k=mk(sc,v);const next=new Set(selSet);next.has(k)?next.delete(k):next.add(k);onSelect([...next]);};
   const cb={width:13,height:13,accentColor:'var(--amber)',cursor:'pointer',flexShrink:0};
   return <div style={{fontSize:12}}>
-    <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
-      <span className="filter-chip" style={{fontSize:10}} onClick={()=>onSelect(tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>mk(n.name,v.name))))}>tylko włączone</span>
-      <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>onSelect(tree.flatMap(n=>n.variants.map(v=>mk(n.name,v.name))))}>wszystkie</span>
-      <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>onSelect([])}>✕ wyczyść</span>
-    </div>
     {tree.map(node=>(
       <div key={node.name} style={{marginBottom:5}}>
         <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',userSelect:'none'}}>
@@ -1666,22 +1710,49 @@ function TabAlgo() {
   const [rows,setRows]=useState(null);
   const [filterTree,setFilterTree]=useState([]);
   const [selectedPairs,setSelectedPairs]=useState(null);
+  const [settingsFilter,setSettingsFilter]=useState(null);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
+  useEffect(()=>{
+    fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
+      const cfg=d.type_configs||{};
+      const enabledKeys=Object.entries(cfg).filter(([,v])=>v.enabled===true).map(([k])=>k);
+      if(enabledKeys.length===0){setSettingsFilter({pairs:[]});return;}
+      const pairs=enabledKeys.map(k=>{const[t,v]=k.split('__');return`${t}:${v||'baseline'}`;});
+      setSettingsFilter({pairs});
+    }).catch(()=>setSettingsFilter({pairs:[]}));
+  },[]);
   useEffect(()=>{
     fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[])
       .then(tree=>{
         setFilterTree(tree);
-        setSelectedPairs(prev=>prev!==null?prev:tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
+        setSelectedPairs(prev=>{
+          if(prev!==null) return prev;
+          if(settingsFilter&&settingsFilter.pairs.length>0){
+            const treeSet=new Set(tree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)));
+            return settingsFilter.pairs.filter(p=>treeSet.has(p));
+          }
+          return tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`));
+        });
       }).catch(()=>{});
-  },[]);
+  },[settingsFilter]);
+  useEffect(()=>{
+    if(settingsFilter===null||filterTree.length===0||selectedPairs!==null) return;
+    const treeSet=new Set(filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)));
+    if(settingsFilter.pairs.length>0)
+      setSelectedPairs(settingsFilter.pairs.filter(p=>treeSet.has(p)));
+    else
+      setSelectedPairs(filterTree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
+  },[settingsFilter,filterTree,selectedPairs]);
+  const allTreePairs=React.useMemo(()=>filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)),[filterTree]);
+  const pairsFiltered=selectedPairs!==null&&allTreePairs.length>0&&selectedPairs.length<allTreePairs.length;
   useEffect(()=>{
     if(selectedPairs===null) return;
     setRows(null);
     const p=new URLSearchParams({period,view:subTab});
-    const allPairs=filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`));
-    if(selectedPairs.length>0&&selectedPairs.length<allPairs.length) p.set('pairs',selectedPairs.join(','));
+    if(selectedPairs.length>0&&selectedPairs.length<allTreePairs.length) p.set('pairs',selectedPairs.join(','));
     fetch(`/api/dashboard/algo?${p}`)
       .then(r=>r.ok?r.json():[]).then(setRows).catch(()=>setRows([]));
-  },[period,subTab,selectedPairs,filterTree]);
+  },[period,subTab,selectedPairs,allTreePairs.length]);
   const pC=(v)=>v==null?'var(--text3)':String(v).startsWith('+')?'var(--green)':String(v).startsWith('-')?'var(--red)':'var(--text3)';
   const wC=(w)=>w==='100%'?'var(--green)':w==='0%'?'var(--red)':'var(--text3)';
   const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${v}%`;
@@ -1709,7 +1780,20 @@ function TabAlgo() {
     <div>
       <div className="sec-header" style={{paddingBottom:10}}><span className="sec-title">Analityka Algo</span></div>
       <div className="m-seg-tabs">{['7d','30d','3m','6m','12m'].map(p=><div key={p} className={`m-seg-tab ${period===p?'active':''}`} onClick={()=>setPeriod(p)}>{p}</div>)}</div>
-      <div className="filter-scroll">{['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}</div>
+      <div className="filter-scroll">
+        {['wariant','per data','per model'].map(t=><div key={t} className={`filter-chip ${subTab===t?'active':''}`} onClick={()=>setSubTab(t)}>{t}</div>)}
+        {filterTree.length>0&&selectedPairs!==null&&<div className={`filter-chip ${showTypeFilter?'active':''}`} style={{fontFamily:'var(--mono)',fontSize:9}} onClick={()=>setShowTypeFilter(p=>!p)}>
+          Filtr{pairsFiltered?' *':''} {showTypeFilter?'▴':'▾'}
+        </div>}
+      </div>
+      {showTypeFilter&&filterTree.length>0&&selectedPairs!==null&&<div style={{padding:'10px 16px',borderBottom:'1px solid var(--border)'}}>
+        <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+          {settingsFilter&&settingsFilter.pairs.length>0&&<span className="filter-chip" style={{fontSize:10}} onClick={()=>{const s=new Set(settingsFilter.pairs);setSelectedPairs(allTreePairs.filter(p=>s.has(p)));}}>tylko włączone</span>}
+          <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>setSelectedPairs(allTreePairs)}>wszystkie</span>
+          <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>setSelectedPairs([])}>✕ wyczyść</span>
+        </div>
+        <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
+      </div>}
       {rows===null && <div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
       {rows!==null && subTab==='wariant' && Object.entries(groups||{}).map(([sc,variants])=>(
         <div key={sc} className="section-wrap">
@@ -1731,10 +1815,6 @@ function TabAlgo() {
         </div>
       ))}
       {rows!==null && subTab==='per data' && <>
-        {filterTree.length>0 && <div style={{padding:'10px 16px',borderBottom:'1px solid var(--border)'}}>
-          <div style={{fontSize:9,color:'var(--text3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}}>Filtr setupów</div>
-          <FilterTree tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs}/>
-        </div>}
         <div className="section-wrap">
           <div style={{display:'flex',padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}}>
             <div style={{width:52,fontSize:9,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em'}}>Data</div>
