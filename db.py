@@ -313,19 +313,61 @@ def resolve_setup(
 ) -> None:
     """
     Zamknij setup: zapisz wynik, PnL, czas wyjścia.
-    pnl_pct obliczany automatycznie jeśli avg_entry jest dostępne.
+    Jeśli pnl_usd=None, oblicza PnL z danych setupu (entries, tps, sl, qty).
+    pnl_pct obliczany automatycznie.
     """
     exit_time = None
     if exit_ts:
         exit_time = datetime.fromtimestamp(exit_ts, tz=timezone.utc)
 
-    # Pobierz trade_usdt zapisany przy tworzeniu setupu (fallback: env var)
     _default_tu = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage = 20
     with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT trade_usdt FROM setups WHERE setup_id = %s", (setup_id,))
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT trade_usdt, avg_entry, entries, tps, sl, direction, "
+                "exchange_qty_full, exchange_qty_half FROM setups WHERE setup_id = %s",
+                (setup_id,),
+            )
             row = cur.fetchone()
-            trade_usdt = float(row[0]) if row and row[0] else _default_tu
+            trade_usdt = float(row["trade_usdt"]) if row and row["trade_usdt"] else _default_tu
+
+            if pnl_usd is None and result in ("TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2", "SL") and row:
+                eff_entry = avg_entry or (float(row["avg_entry"]) if row["avg_entry"] else None)
+                eff_exit = avg_exit
+                entries = row["entries"] or []
+                tps = row["tps"] or []
+                sl_val = float(row["sl"]) if row["sl"] else None
+                direction = row["direction"]
+                sign = 1 if direction == "long" else -1
+
+                fq = (row["exchange_qty_full"] or "0") if isinstance(row["exchange_qty_full"], str) else str(row["exchange_qty_full"] or "0")
+                hq = (row["exchange_qty_half"] or "0") if isinstance(row["exchange_qty_half"], str) else str(row["exchange_qty_half"] or "0")
+                full_qty = float(fq.replace(",", "."))
+                half_qty = float(hq.replace(",", "."))
+
+                if not eff_entry and entries:
+                    eff_entry = float(entries[0]) if entries[0] is not None else None
+                if not full_qty and eff_entry:
+                    full_qty = int(trade_usdt * leverage / eff_entry / 0.1) * 0.1
+                if not half_qty:
+                    half_qty = int(full_qty / 2 / 0.1) * 0.1
+
+                if eff_entry:
+                    if eff_exit is not None:
+                        pnl_usd = sign * (eff_exit - eff_entry) * full_qty
+                    elif result == "SL" and sl_val is not None:
+                        pnl_usd = sign * (sl_val - eff_entry) * full_qty
+                    elif result == "TP1+BE" and tps:
+                        pnl_usd = sign * (float(tps[0]) - eff_entry) * half_qty
+                    elif result == "TP1+TP2" and len(tps) >= 2:
+                        pnl_usd = sign * ((float(tps[0]) - eff_entry) + (float(tps[1]) - eff_entry)) * half_qty
+                    elif result == "TP1+SL" and tps and sl_val is not None:
+                        pnl_usd = sign * (float(tps[0]) - eff_entry) * half_qty + sign * (sl_val - eff_entry) * half_qty
+                    elif result == "TP1" and tps:
+                        pnl_usd = sign * (float(tps[0]) - eff_entry) * full_qty
+                    if pnl_usd is not None:
+                        log.info(f"[db] Setup #{setup_id}: pnl_usd obliczony z fallbacku = {pnl_usd:.4f}")
 
             pnl_pct = None
             if pnl_usd is not None:
@@ -340,8 +382,8 @@ def resolve_setup(
                     result      = %(result)s,
                     avg_entry   = COALESCE(%(avg_entry)s, avg_entry),
                     avg_exit    = COALESCE(%(avg_exit)s, avg_exit),
-                    pnl_usd     = %(pnl_usd)s,
-                    pnl_pct     = %(pnl_pct)s,
+                    pnl_usd     = COALESCE(%(pnl_usd)s, pnl_usd),
+                    pnl_pct     = COALESCE(%(pnl_pct)s, pnl_pct),
                     exit_time   = COALESCE(%(exit_time)s, exit_time),
                     resolved    = TRUE,
                     resolved_at = NOW(),
