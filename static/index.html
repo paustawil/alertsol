@@ -1424,8 +1424,8 @@ function ViewSimulator() {
   const simulation=React.useMemo(()=>{
     if(!trades||trades.length===0) return null;
     let capital=startCapital;
-    let inPosition=false;
     let currentExitTime=null;
+    let blockingId=null;
     const steps=[];
     let wins=0,losses=0,skipped=0;
     let maxCapital=capital,maxDrawdown=0;
@@ -1433,12 +1433,22 @@ function ViewSimulator() {
     for(const t of trades){
       const entryTime=new Date(t.entry_time).getTime();
       const exitTime=new Date(t.exit_time).getTime();
+      const pnlPct=parseFloat(pnlMode==='tp1'?t.tp1_only_pnl_pct:t.pnl_pct);
+      const base={id:t.setup_id,type:t.type,variant:t.variant||'baseline',
+        direction:t.direction,result:t.result,
+        entry_time:t.entry_time,exit_time:t.exit_time,
+        entry_ts:entryTime,exit_ts:exitTime};
+
       if(currentExitTime&&entryTime<currentExitTime){
         skipped++;
+        steps.push({...base,skipped:true,blocked_by:blockingId,
+          pnl_pct:isNaN(pnlPct)?0:pnlPct,pnl_usd:0,
+          capital_before:Math.round(capital*100)/100,
+          capital_after:Math.round(capital*100)/100});
         continue;
       }
       currentExitTime=exitTime;
-      const pnlPct=parseFloat(pnlMode==='tp1'?t.tp1_only_pnl_pct:t.pnl_pct);
+      blockingId=t.setup_id;
       if(isNaN(pnlPct)) continue;
       const pnlUsd=capital*(pnlPct/100);
       const prevCapital=capital;
@@ -1446,16 +1456,11 @@ function ViewSimulator() {
       if(capital>maxCapital) maxCapital=capital;
       const dd=(maxCapital-capital)/maxCapital*100;
       if(dd>maxDrawdown) maxDrawdown=dd;
-      const isWin=pnlPct>0;
-      if(isWin) wins++; else losses++;
-      steps.push({
-        id:t.setup_id,type:t.type,variant:t.variant||'baseline',
-        direction:t.direction,result:t.result,
-        entry_time:t.entry_time,exit_time:t.exit_time,
+      if(pnlPct>0) wins++; else losses++;
+      steps.push({...base,skipped:false,
         pnl_pct:pnlPct,pnl_usd:Math.round(pnlUsd*100)/100,
         capital_before:Math.round(prevCapital*100)/100,
-        capital_after:Math.round(capital*100)/100,
-      });
+        capital_after:Math.round(capital*100)/100});
     }
     return {
       steps,final:Math.round(capital*100)/100,
@@ -1593,33 +1598,48 @@ function ViewSimulator() {
           </div>
         </div>
 
+        <div className="panel" style={{minHeight:120,flexShrink:0}}>
+          <div className="panel-head">
+            <span className="panel-title">Timeline pozycji</span>
+            <span className="panel-badge">{simulation.steps.length} total · {simulation.skipped} pominięte</span>
+          </div>
+          <div style={{padding:16}}>
+            <SimTimeline steps={simulation.steps}/>
+          </div>
+        </div>
+
         <div className="panel" style={{flex:1,minHeight:200}}>
           <div className="panel-head">
             <span className="panel-title">Historia pozycji</span>
-            <span className="panel-badge">{simulation.steps.length}</span>
+            <span className="panel-badge">{simulation.steps.filter(s=>!s.skipped).length} wykonane · {simulation.skipped} pominięte</span>
           </div>
           <div className="panel-body scroll-y">
             <table className="tbl">
               <thead><tr>
-                <th>#</th><th>ID</th><th>Typ</th><th>Kier.</th><th>Wynik</th>
+                <th></th><th>#</th><th>ID</th><th>Typ</th><th>Kier.</th><th>Wynik</th>
                 <th>Wejście</th><th>Wyjście</th>
                 <th>PnL %</th><th>PnL $</th><th>Kapitał po</th>
               </tr></thead>
               <tbody>
-                {simulation.steps.map((s,i)=>(
-                  <tr key={s.id}>
+                {simulation.steps.map((s,i)=>{
+                  const sk=s.skipped;
+                  const opacity=sk?0.35:1;
+                  const rowStyle={opacity};
+                  return (
+                  <tr key={s.id+'-'+i} style={rowStyle}>
+                    <td style={{width:20,textAlign:'center'}}>{sk?<span title={`Pominięta — blokowana przez #${s.blocked_by}`} style={{color:'var(--amber)',fontSize:13,cursor:'help'}}>⏸</span>:<span style={{color:'var(--green)',fontSize:11}}>✓</span>}</td>
                     <td style={{color:'var(--text3)',fontFamily:'var(--mono)'}}>{i+1}</td>
                     <td style={{fontFamily:'var(--mono)',fontWeight:600}}>{s.id}</td>
                     <td style={{fontSize:11}}>{s.type}<span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span></td>
                     <td><span className={`kier-badge ${s.direction}`}>{s.direction}</span></td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:s.result==='SL'?'var(--red)':'var(--green)'}}>{s.result}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:sk?'var(--text3)':s.result==='SL'?'var(--red)':'var(--green)'}}>{s.result}{sk&&<span style={{color:'var(--amber)',fontSize:9,marginLeft:4}}>skip #{s.blocked_by}</span>}</td>
                     <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{fmtD(s.entry_time)}</td>
                     <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{fmtD(s.exit_time)}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pnlC(s.pnl_pct)}}>{s.pnl_pct>0?'+':''}{s.pnl_pct.toFixed(2)}%</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pnlC(s.pnl_usd)}}>{s.pnl_usd>0?'+':''}${s.pnl_usd.toFixed(2)}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pnlC(s.capital_after-s.capital_before)}}>${s.capital_after.toLocaleString('en',{minimumFractionDigits:2})}</td>
-                  </tr>
-                ))}
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:sk?'var(--text3)':pnlC(s.pnl_pct)}}>{sk?'—':`${s.pnl_pct>0?'+':''}${s.pnl_pct.toFixed(2)}%`}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:sk?'var(--text3)':pnlC(s.pnl_usd)}}>{sk?'—':`${s.pnl_usd>0?'+':''}$${s.pnl_usd.toFixed(2)}`}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:sk?'var(--text3)':pnlC(s.capital_after-s.capital_before)}}>${s.capital_after.toLocaleString('en',{minimumFractionDigits:2})}</td>
+                  </tr>);
+                })}
               </tbody>
             </table>
           </div>
@@ -1692,6 +1712,80 @@ function SimChart({steps,startCapital}) {
   },[steps,startCapital]);
 
   return <canvas ref={canvasRef} style={{width:'100%',height:200,display:'block'}}/>;
+}
+
+function SimTimeline({steps}) {
+  const canvasRef=React.useRef(null);
+  const containerRef=React.useRef(null);
+  React.useEffect(()=>{
+    const canvas=canvasRef.current;
+    if(!canvas||steps.length===0) return;
+    const ctx=canvas.getContext('2d');
+    const dpr=window.devicePixelRatio||1;
+    const rect=canvas.parentElement.getBoundingClientRect();
+
+    const ROW_H=18, padL=60, padR=20, padT=24, padB=20;
+    const H=padT+steps.length*ROW_H+padB;
+    const W=rect.width;
+    canvas.width=W*dpr; canvas.height=H*dpr;
+    canvas.style.width=W+'px'; canvas.style.height=H+'px';
+    ctx.scale(dpr,dpr);
+    ctx.clearRect(0,0,W,H);
+
+    const allTs=steps.flatMap(s=>[s.entry_ts,s.exit_ts]);
+    const minT=Math.min(...allTs), maxT=Math.max(...allTs);
+    const rangeT=maxT-minT||1;
+    const cW=W-padL-padR;
+    const toX=(ts)=>padL+(ts-minT)/rangeT*cW;
+
+    ctx.fillStyle='#6b7fa3';ctx.font='9px IBM Plex Mono';ctx.textAlign='center';
+    const tickCount=Math.min(8,Math.floor(cW/80));
+    for(let i=0;i<=tickCount;i++){
+      const ts=minT+rangeT*(i/tickCount);
+      const x=toX(ts);
+      const d=new Date(ts);
+      const label=`${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+      ctx.strokeStyle='#1a284033';ctx.lineWidth=0.5;
+      ctx.beginPath();ctx.moveTo(x,padT);ctx.lineTo(x,H-padB);ctx.stroke();
+      ctx.fillText(label,x,padT-8);
+    }
+
+    steps.forEach((s,i)=>{
+      const y=padT+i*ROW_H+ROW_H/2;
+      const x1=toX(s.entry_ts), x2=toX(s.exit_ts);
+      const barW=Math.max(x2-x1,3);
+
+      if(s.skipped){
+        ctx.fillStyle='#f5a62330';
+        ctx.strokeStyle='#f5a62366';
+        ctx.setLineDash([3,3]);
+      } else {
+        const isWin=s.pnl_pct>0;
+        ctx.fillStyle=isWin?'#00d68f33':'#ff4d6a33';
+        ctx.strokeStyle=isWin?'#00d68f99':'#ff4d6a99';
+        ctx.setLineDash([]);
+      }
+      ctx.fillRect(x1,y-5,barW,10);
+      ctx.strokeRect(x1,y-5,barW,10);
+      ctx.setLineDash([]);
+
+      ctx.fillStyle=s.skipped?'#f5a623':'#8a9bbf';
+      ctx.font='8px IBM Plex Mono';ctx.textAlign='right';
+      ctx.fillText(`#${s.id}`,padL-4,y+3);
+
+      if(barW>30){
+        ctx.fillStyle=s.skipped?'#f5a623aa':'#e8edf5cc';
+        ctx.font='8px IBM Plex Mono';ctx.textAlign='left';
+        const lbl=s.skipped?'skip':`${s.pnl_pct>0?'+':''}${s.pnl_pct.toFixed(1)}%`;
+        ctx.fillText(lbl,x1+3,y+3);
+      }
+    });
+  },[steps]);
+
+  const H=24+steps.length*18+20;
+  return <div ref={containerRef} style={{overflowX:'auto',overflowY:'auto',maxHeight:400}}>
+    <canvas ref={canvasRef} style={{width:'100%',height:H,display:'block',minWidth:400}}/>
+  </div>;
 }
 /* ── Desktop: ViewSettings ── */
 const ALGO2_TYPES = [
