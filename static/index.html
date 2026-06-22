@@ -866,6 +866,7 @@ function ViewSetups() {
     setRows(null);
     fetchRows();
   },[fetchRows]);
+  const StatusResultChip=({r})=>{
     const sk=r.status_key;
     const [editing,setEditing]=useState(false);
     const [saving,setSaving]=useState(false);
