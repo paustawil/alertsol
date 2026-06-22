@@ -2461,7 +2461,7 @@ def _handle_open_invalidation(setup: dict, reason: str, action: str, current_pri
                         cancel_price=round(current_price, 2))
         db.resolve_setup(setup_id, "inwalidacja", avg_entry,
                          round(current_price, 2), move,
-                         int(time.time() * 1000))
+                         int(time.time()))
 
         pnl_str = f"{move:+.2f} USD" if move is not None else "n/d"
         if not setup.get("shadow"):

@@ -198,6 +198,7 @@ const fmtWr = (w) => w == null ? '—' : `${w}%`;
 const fmtSl = (sl) => sl == null ? '—' : Number(sl).toFixed(2);
 const regDir = (rd) => rd === 'up' ? 'up' : 'down';
 const regLabel = (r, rd) => r ? (r.toUpperCase() + (rd === 'up' ? '↑' : '↓')) : 'N/A';
+const fmtTs = (v) => { if (!v) return '—'; const n = typeof v === 'string' && v.includes('-') ? new Date(v) : new Date(Number(v) < 1e12 ? Number(v) * 1000 : Number(v)); if (isNaN(n)) return '—'; return n.toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', ''); };
 const nowPl = () => {
   const d = new Date();
   const m = ['sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru'];
@@ -557,7 +558,7 @@ function ActiveSetupsPanel({ mobile = false }) {
                     {raw.score && <span><span style={{color:'var(--text3)'}}>Score:&nbsp;</span>{Number(raw.score).toFixed(1)}</span>}
                     {raw.trade_usdt!=null && <span><span style={{color:'var(--text3)'}}>Kwota:&nbsp;</span>${Number(raw.trade_usdt).toFixed(0)}</span>}
                     {raw.exchange_qty_full && <span><span style={{color:'var(--text3)'}}>Qty:&nbsp;</span>{raw.exchange_qty_full} SOL</span>}
-                    {raw.alert_time && <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{raw.alert_time}</span>}
+                    {raw.alert_time && <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{fmtTs(raw.alert_time)}</span>}
                     {pot.afterTp1
                       ? <>{pot.realized != null && <span><span style={{color:'var(--text3)'}}>TP1 zreal.:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.realized)}</span></span>}
                           {pot.remaining != null && <span><span style={{color:'var(--text3)'}}>Pot. TP2:&nbsp;</span><span style={{color:'var(--green)'}}>{fU(pot.remaining)}</span></span>}
@@ -814,7 +815,6 @@ function ViewSetups() {
   const fmtP=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}%`;
   const fmtPrice=(v)=>v==null?'—':`$${Number(v).toFixed(2)}`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
-  const fmtTs=(v)=>{if(!v)return'—';const n=typeof v==='string'&&v.includes('-')?new Date(v):new Date(Number(v)<1e12?Number(v)*1000:Number(v));if(isNaN(n))return'—';return n.toLocaleString('pl-PL',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).replace(',','');};
   const inpStyle={background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'3px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10};
   const toggleRow=(id)=>setExpandedRows(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
   const calcLivePnl=(r)=>{if(!currentPrice||!r.avg_entry)return null;const sign=r.kier==='LONG'?1:-1;const fullQty=r.exchange_qty_full?parseFloat(r.exchange_qty_full):Math.floor(100*20/r.avg_entry/0.1)*0.1;if(!fullQty||fullQty<=0)return null;const isAfterTp1=r.exchange_tp1_done||r.status_key==='after_tp1';const qty=isAfterTp1?(r.exchange_qty_half?parseFloat(r.exchange_qty_half):fullQty/2):fullQty;return sign*qty*(currentPrice-r.avg_entry);};
