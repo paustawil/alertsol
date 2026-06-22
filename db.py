@@ -676,19 +676,22 @@ def get_summary_stats(period_days: int | None = None) -> dict:
             row["win_rate_pct"] = round(wins / total * 100, 1) if total > 0 else None
 
             # Per-model breakdown
+            _entry_m = "COALESCE(avg_entry,(entries->>0)::numeric)"
+            _full_qty_m = f"""COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                   FLOOR({_tu}*{leverage}/{_entry_m}/0.1)*0.1)"""
             tp1_only_calc = f"""
                 CASE
-                    WHEN result = 'SL' THEN {pnl_calc}
+                    WHEN result = 'SL' AND sl IS NOT NULL AND {_entry_m} IS NOT NULL
+                    THEN CASE direction WHEN 'long'
+                         THEN (sl - {_entry_m}) * ({_full_qty_m})
+                         ELSE ({_entry_m} - sl) * ({_full_qty_m})
+                         END
                     WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
                          AND (tps->>0) IS NOT NULL
-                         AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+                         AND {_entry_m} IS NOT NULL
                     THEN CASE direction WHEN 'long'
-                         THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                         ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                         THEN ((tps->>0)::numeric - {_entry_m}) * ({_full_qty_m})
+                         ELSE ({_entry_m} - (tps->>0)::numeric) * ({_full_qty_m})
                          END
                 END"""
             tp1_only_pct_calc = f"({tp1_only_calc}) / NULLIF({_tu}, 0) * 100"
@@ -702,10 +705,14 @@ def get_summary_stats(period_days: int | None = None) -> dict:
                            AND {trading_filter})::numeric, 2)                AS pnl_usd,
                        ROUND(SUM({tp1_only_calc}) FILTER (WHERE resolved = TRUE
                            AND {trading_filter})::numeric, 2)                AS tp1_only_pnl_usd,
-                       ROUND(AVG({pnl_pct_calc}) FILTER (WHERE resolved = TRUE
-                           AND {trading_filter})::numeric, 1)                AS avg_pnl_pct,
-                       ROUND(AVG({tp1_only_pct_calc}) FILTER (WHERE resolved = TRUE
-                           AND {trading_filter})::numeric, 1)                AS avg_tp1only_pct,
+                       ROUND((SUM({pnl_pct_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})
+                           / NULLIF(COUNT(*) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter}), 0))::numeric, 1)           AS avg_pnl_pct,
+                       ROUND((SUM({tp1_only_pct_calc}) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter})
+                           / NULLIF(COUNT(*) FILTER (WHERE resolved = TRUE
+                           AND {trading_filter}), 0))::numeric, 1)           AS avg_tp1only_pct,
                        ROUND(SUM({pnl_pct_calc}) FILTER (WHERE resolved = TRUE
                            AND {trading_filter})::numeric, 2)                AS sum_pnl_pct,
                        ROUND(SUM({tp1_only_pct_calc}) FILTER (WHERE resolved = TRUE
@@ -780,19 +787,22 @@ def get_period_stats(period: str) -> dict:
                     END
                 )"""
             pnl_pct_calc = f"({pnl_calc}) / NULLIF({_tu}, 0) * 100"
+            _entry_p = "COALESCE(avg_entry,(entries->>0)::numeric)"
+            _full_qty_p = f"""COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                                   FLOOR({_tu}*{leverage}/{_entry_p}/0.1)*0.1)"""
             tp1_only_calc_period = f"""
                 CASE
-                    WHEN result = 'SL' THEN {pnl_calc}
+                    WHEN result = 'SL' AND sl IS NOT NULL AND {_entry_p} IS NOT NULL
+                    THEN CASE direction WHEN 'long'
+                         THEN (sl - {_entry_p}) * ({_full_qty_p})
+                         ELSE ({_entry_p} - sl) * ({_full_qty_p})
+                         END
                     WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
                          AND (tps->>0) IS NOT NULL
-                         AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+                         AND {_entry_p} IS NOT NULL
                     THEN CASE direction WHEN 'long'
-                         THEN ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric)) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
-                         ELSE (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric) *
-                              COALESCE(NULLIF(exchange_qty_full,'')::numeric,
-                                   FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                         THEN ((tps->>0)::numeric - {_entry_p}) * ({_full_qty_p})
+                         ELSE ({_entry_p} - (tps->>0)::numeric) * ({_full_qty_p})
                          END
                 END"""
             tp1_only_pct_calc = f"({tp1_only_calc_period}) / NULLIF({_tu}, 0) * 100"
@@ -1022,7 +1032,8 @@ def get_resolved_filtered(
     pnl_pct_calc_f = f"({pnl_calc_f}) / NULLIF({_tu}, 0) * 100"
     tp1_only_calc_f = f"""
         CASE
-            WHEN result = 'SL' THEN {pnl_calc_f}
+            WHEN result = 'SL' AND sl IS NOT NULL AND {_entry} IS NOT NULL
+            THEN ({_sign}) * (sl - {_entry}) * ({_full_qty})
             WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
                  AND (tps->>0) IS NOT NULL
                  AND {_entry} IS NOT NULL
@@ -1345,8 +1356,11 @@ def get_algo2_variant_summary(period_days: int | None = None, pairs: list[tuple[
                     / 0.1) * 0.1, 0.1)"""
     tp1_only = f"""
         CASE
-            WHEN result = 'SL'
-                THEN pnl_usd
+            WHEN result = 'SL' AND sl IS NOT NULL AND {_entry} IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN (sl - {_entry}) * ({_full_qty})
+                 ELSE ({_entry} - sl) * ({_full_qty})
+                 END
             WHEN {wins_filter}
                  AND (tps->>0) IS NOT NULL
                  AND {_entry} IS NOT NULL
@@ -1433,8 +1447,10 @@ def get_algo2_variant_summary(period_days: int | None = None, pairs: list[tuple[
                     ROUND(AVG({_tu}) FILTER (WHERE {trading_filter})::numeric, 2)          AS avg_trade_usdt,
                     ROUND(SUM(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS sum_pct_tp1,
                     ROUND(SUM(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS sum_pct_tp12,
-                    ROUND(AVG(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS avg_pct_tp1,
-                    ROUND(AVG(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 2) AS avg_pct_tp12,
+                    ROUND((SUM(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})
+                          / NULLIF(COUNT(*) FILTER (WHERE {trading_filter}), 0))::numeric, 2) AS avg_pct_tp1,
+                    ROUND((SUM(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})
+                          / NULLIF(COUNT(*) FILTER (WHERE {trading_filter}), 0))::numeric, 2) AS avg_pct_tp12,
                     COUNT(DISTINCT (COALESCE(exit_time, resolved_at, alert_time) AT TIME ZONE 'Europe/Warsaw')::date)
                         FILTER (WHERE {trading_filter})                                    AS trading_days
                 FROM setups
@@ -1470,8 +1486,11 @@ def get_algo2_daily_stats(
                     / 0.1) * 0.1, 0.1)"""
     tp1_only = f"""
         CASE
-            WHEN result = 'SL'
-                THEN pnl_usd
+            WHEN result = 'SL' AND sl IS NOT NULL AND {_entry} IS NOT NULL
+            THEN CASE direction WHEN 'long'
+                 THEN (sl - {_entry}) * ({_full_qty})
+                 ELSE ({_entry} - sl) * ({_full_qty})
+                 END
             WHEN {wins_filter}
                  AND (tps->>0) IS NOT NULL
                  AND {_entry} IS NOT NULL
@@ -1543,8 +1562,10 @@ def get_algo2_daily_stats(
                     ROUND(COUNT(*) FILTER (WHERE {wins_filter})::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0)
                           * 100, 1)                                                        AS win_rate,
-                    ROUND(AVG(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 1) AS avg_pct_tp1,
-                    ROUND(AVG(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})::numeric, 1) AS avg_pct_tp12
+                    ROUND((SUM(({tp1_only}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})
+                          / NULLIF(COUNT(*) FILTER (WHERE {trading_filter}), 0))::numeric, 1) AS avg_pct_tp1,
+                    ROUND((SUM(({tp1tp2_calc}) / NULLIF({_tu}, 0) * 100) FILTER (WHERE {trading_filter})
+                          / NULLIF(COUNT(*) FILTER (WHERE {trading_filter}), 0))::numeric, 1) AS avg_pct_tp12
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
@@ -1824,7 +1845,8 @@ def get_all_setups_filtered(
         )"""
     tp1_only_calc_f = f"""
         CASE
-            WHEN result = 'SL' THEN {pnl_calc_f}
+            WHEN result = 'SL' AND sl IS NOT NULL AND {_entry} IS NOT NULL
+            THEN {_sign} * (sl - {_entry}) * ({_qty_full})
             WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
                  AND (tps->>0) IS NOT NULL AND {_entry} IS NOT NULL
             THEN {_sign} * ({_qty_full}) * ((tps->>0)::numeric - {_entry})
