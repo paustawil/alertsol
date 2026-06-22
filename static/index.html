@@ -815,7 +815,7 @@ function ViewSetups() {
     fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
-  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
+  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter,refetchKey]);
   useEffect(()=>{
     const fetchP=()=>{fetch('/api/dashboard/price').then(r=>r.ok?r.json():{}).then(d=>{if(d.price!=null)setCurrentPrice(d.price);}).catch(()=>{});};
     fetchP();
@@ -862,6 +862,7 @@ function ViewSetups() {
     if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
     return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
   };
+  const [refetchKey,setRefetchKey]=useState(0);
   const StatusResultChip=({r})=>{
     const sk=r.status_key;
     const [editing,setEditing]=useState(false);
@@ -894,7 +895,7 @@ function ViewSetups() {
         const qty=parseFloat(editQty);
         if(qty>0) body.qty_full=qty;
         const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        if(resp.ok){setEditing(false);location.reload();}
+        if(resp.ok){setEditing(false);setRefetchKey(k=>k+1);}
       }catch(e){}
       setSaving(false);
     };
@@ -1614,6 +1615,7 @@ function TabSetups() {
   const [settingsFilter,setSettingsFilter]=useState(null); // null = ładowanie
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
+  const [refetchKey,setRefetchKey]=useState(0);
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   // Załaduj enabled types z ustawień — tak samo jak desktop ViewSetups
@@ -1639,7 +1641,7 @@ function TabSetups() {
     fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
-  },[statusFilters,shadowFilter,settingsFilter]);
+  },[statusFilters,shadowFilter,settingsFilter,refetchKey]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
@@ -1663,7 +1665,7 @@ function TabSetups() {
           const RES_OPTS=['TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL','nieokreslone'];
           const saveR=async(nr)=>{
             setSaving(true);
-            try{const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:nr})});if(resp.ok)location.reload();}catch(e){}
+            try{const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:nr})});if(resp.ok)setRefetchKey(k=>k+1);}catch(e){}
             setSaving(false);
           };
           if(!r.result) return <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{r.status}</span>;
