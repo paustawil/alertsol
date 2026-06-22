@@ -1100,6 +1100,77 @@ def get_all_resolved_for_calc() -> list[dict]:
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
+def get_simulator_trades(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    variants: list[str] | None = None,
+) -> list[dict]:
+    """Zwraca zamknięte setupy z entry_hit_at, exit_time, pnl_pct — do symulatora portfela."""
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage = 20
+    _tu = f"COALESCE(trade_usdt, {trade_usdt})"
+    _entry = "COALESCE(avg_entry,(entries->>0)::numeric)"
+    _full_qty = f"""COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                    FLOOR({_tu}*{leverage}/{_entry}/0.1)*0.1)"""
+    _half_qty = f"""COALESCE(NULLIF(exchange_qty_half,'')::numeric,
+                    FLOOR({_full_qty}/2/0.1)*0.1)"""
+    _sign = "CASE direction WHEN 'long' THEN 1 ELSE -1 END"
+    pnl_calc = f"""
+        COALESCE(pnl_usd,
+            CASE WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                      AND {_entry} IS NOT NULL
+            THEN CASE
+                WHEN avg_exit IS NOT NULL
+                THEN ({_sign}) * (avg_exit - {_entry}) * ({_full_qty})
+                WHEN result = 'TP1+BE' AND (tps->>0) IS NOT NULL
+                THEN ({_sign}) * ((tps->>0)::numeric - {_entry}) * ({_half_qty})
+                WHEN result = 'SL' AND sl IS NOT NULL
+                THEN ({_sign}) * (sl - {_entry}) * ({_full_qty})
+                WHEN result = 'TP1+TP2' AND (tps->>0) IS NOT NULL AND (tps->>1) IS NOT NULL
+                THEN ({_sign}) * (((tps->>0)::numeric - {_entry}) + ((tps->>1)::numeric - {_entry})) * ({_half_qty})
+                WHEN result = 'TP1+SL' AND (tps->>0) IS NOT NULL AND sl IS NOT NULL
+                THEN ({_sign}) * ((tps->>0)::numeric - {_entry}) * ({_half_qty})
+                   + ({_sign}) * (sl - {_entry}) * ({_half_qty})
+            END
+            END
+        )"""
+    pnl_pct_calc = f"({pnl_calc}) / NULLIF({_tu}, 0) * 100"
+
+    where = ["resolved = TRUE", "entry_hit_at IS NOT NULL",
+             "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"]
+    params: dict = {}
+
+    if variants:
+        where.append("COALESCE(variant, 'baseline') = ANY(%(variants)s)")
+        params["variants"] = variants
+    if date_from:
+        where.append("resolved_at >= %(date_from)s::date")
+        params["date_from"] = date_from
+    if date_to:
+        where.append("resolved_at < (%(date_to)s::date + interval '1 day')")
+        params["date_to"] = date_to
+
+    where_sql = " AND ".join(where)
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT setup_id, type, variant, direction, result,
+                       to_timestamp(entry_hit_at) AT TIME ZONE 'UTC' AS entry_time,
+                       COALESCE(exit_time, resolved_at) AS exit_time,
+                       {_entry} AS avg_entry,
+                       avg_exit,
+                       ROUND(({pnl_pct_calc})::numeric, 4) AS pnl_pct
+                FROM setups
+                WHERE {where_sql}
+                ORDER BY entry_hit_at ASC
+                """,
+                params,
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
 def save_hypo_result(setup_id: int, hypo_result: str, hypo_pnl_usd: float | None) -> None:
     """Zapisuje hipotetyczny wynik dla setupu który nie weszął."""
     with _conn() as conn:

@@ -652,6 +652,7 @@ function Icon({ name, active }) {
   if(name==='setups') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><polyline points="1.5,12 5,8 8,10 12,5 14.5,7"/><circle cx="14.5" cy="7" r="1.5" fill={c} stroke="none"/></svg>;
   if(name==='algo') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><circle cx="8" cy="8" r="2.5"/><circle cx="8" cy="8" r="5.5" strokeDasharray="2,2"/><line x1="8" y1="2.5" x2="8" y2="1"/><line x1="8" y1="13.5" x2="8" y2="15"/><line x1="2.5" y1="8" x2="1" y2="8"/><line x1="13.5" y1="8" x2="15" y2="8"/></svg>;
   if(name==='hist') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><rect x="2.5" y="1.5" width="11" height="13" rx="1.5"/><line x1="5" y1="5.5" x2="11" y2="5.5"/><line x1="5" y1="8.5" x2="11" y2="8.5"/><line x1="5" y1="11.5" x2="8" y2="11.5"/></svg>;
+  if(name==='sim') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><path d="M2 12 L5 6 L8 9 L11 3 L14 7"/><line x1="2" y1="14" x2="14" y2="14"/><circle cx="2" cy="12" r="1" fill={c} stroke="none"/><circle cx="14" cy="7" r="1" fill={c} stroke="none"/></svg>;
   return null;
 }
 /* ── Mobile nav icons ── */
@@ -660,6 +661,7 @@ const NAV_ICONS = {
   setups: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><polyline points="3,16 7,11 11,13 16,7 19,9"/><circle cx="19" cy="9" r="2" fill={a?'#4a9eff':'#8a9bbf'} stroke="none"/></svg>,
   algo: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><circle cx="11" cy="11" r="3"/><circle cx="11" cy="11" r="7" strokeDasharray="2,2"/><line x1="11" y1="4" x2="11" y2="2"/><line x1="11" y1="18" x2="11" y2="20"/><line x1="4" y1="11" x2="2" y2="11"/><line x1="18" y1="11" x2="20" y2="11"/></svg>,
   hist: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><rect x="4" y="3" width="14" height="16" rx="2"/><line x1="7" y1="8" x2="15" y2="8"/><line x1="7" y1="12" x2="15" y2="12"/><line x1="7" y1="16" x2="11" y2="16"/></svg>,
+  sim: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><path d="M3 17 L7 9 L11 13 L15 5 L19 10"/><line x1="3" y1="19" x2="19" y2="19"/><circle cx="3" cy="17" r="1.5" fill={a?'#4a9eff':'#8a9bbf'} stroke="none"/><circle cx="19" cy="10" r="1.5" fill={a?'#4a9eff':'#8a9bbf'} stroke="none"/></svg>,
   settings: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><circle cx="11" cy="11" r="3"/><path d="M11 2v2M11 18v2M2 11h2M18 11h2M4.93 4.93l1.41 1.41M15.66 15.66l1.41 1.41M4.93 17.07l1.41-1.41M15.66 6.34l1.41-1.41"/></svg>,
 };
 /* ── Budget bar ── */
@@ -1332,6 +1334,358 @@ function ViewAlgo() {
 function ViewHistoria() {
   return <ViewSetups/>;
 }
+/* ── Simulator ── */
+function ViewSimulator() {
+  const [filterTree,setFilterTree]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState(null);
+  const [settingsFilter,setSettingsFilter]=useState(null);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
+  const [periodMode,setPeriodMode]=useState('7d');
+  const [dateFrom,setDateFrom]=useState('');
+  const [dateTo,setDateTo]=useState('');
+  const [startCapital,setStartCapital]=useState(1000);
+  const [trades,setTrades]=useState(null);
+  const [loading,setLoading]=useState(false);
+
+  useEffect(()=>{
+    fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
+      const cfg=d.type_configs||{};
+      const enabledKeys=Object.entries(cfg).filter(([,v])=>v.enabled===true).map(([k])=>k);
+      if(enabledKeys.length===0){setSettingsFilter({pairs:[]});return;}
+      const pairs=enabledKeys.map(k=>{const[t,v]=k.split('__');return`${t}:${v||'baseline'}`;});
+      setSettingsFilter({pairs});
+    }).catch(()=>setSettingsFilter({pairs:[]}));
+  },[]);
+
+  useEffect(()=>{
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[])
+      .then(tree=>{
+        setFilterTree(tree);
+        setSelectedPairs(prev=>{
+          if(prev!==null) return prev;
+          if(settingsFilter&&settingsFilter.pairs.length>0){
+            const treeSet=new Set(tree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)));
+            return settingsFilter.pairs.filter(p=>treeSet.has(p));
+          }
+          return tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`));
+        });
+      }).catch(()=>{});
+  },[settingsFilter]);
+
+  useEffect(()=>{
+    if(settingsFilter===null||filterTree.length===0||selectedPairs!==null) return;
+    const treeSet=new Set(filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)));
+    if(settingsFilter.pairs.length>0)
+      setSelectedPairs(settingsFilter.pairs.filter(p=>treeSet.has(p)));
+    else
+      setSelectedPairs(filterTree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
+  },[settingsFilter,filterTree,selectedPairs]);
+
+  const allTreePairs=React.useMemo(()=>filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)),[filterTree]);
+  const pairsFiltered=selectedPairs!==null&&allTreePairs.length>0&&selectedPairs.length<allTreePairs.length;
+
+  const runSim=React.useCallback(()=>{
+    if(selectedPairs===null) return;
+    setLoading(true);
+    const p=new URLSearchParams();
+    if(selectedPairs.length>0&&selectedPairs.length<allTreePairs.length){
+      const vs=[...new Set(selectedPairs.map(x=>x.split(':')[1]||'baseline'))];
+      p.set('variants',vs.join(','));
+    }
+    if(periodMode==='custom'){
+      if(dateFrom) p.set('date_from',dateFrom);
+      if(dateTo) p.set('date_to',dateTo);
+    } else {
+      const days={'7d':7,'14d':14,'30d':30,'90d':90,'6m':180,'12m':365,'all':0}[periodMode]||30;
+      if(days>0){
+        const d=new Date(); d.setDate(d.getDate()-days);
+        p.set('date_from',d.toISOString().slice(0,10));
+      }
+    }
+    fetch('/api/simulator?'+p.toString())
+      .then(r=>r.ok?r.json():[])
+      .then(data=>{
+        const selectedTypes=new Set(selectedPairs.map(x=>x.split(':')[0]));
+        const selectedVars=new Set(selectedPairs.map(x=>x.split(':')[1]||'baseline'));
+        const filtered=data.filter(t=>{
+          const tp=t.type||'';
+          const vr=t.variant||'baseline';
+          return selectedTypes.has(tp)&&selectedVars.has(vr);
+        });
+        setTrades(filtered);
+      })
+      .catch(()=>setTrades([]))
+      .finally(()=>setLoading(false));
+  },[selectedPairs,allTreePairs,periodMode,dateFrom,dateTo]);
+
+  useEffect(()=>{runSim();},[selectedPairs,periodMode,dateFrom,dateTo]);
+
+  const simulation=React.useMemo(()=>{
+    if(!trades||trades.length===0) return null;
+    let capital=startCapital;
+    let inPosition=false;
+    let currentExitTime=null;
+    const steps=[];
+    let wins=0,losses=0,skipped=0;
+    let maxCapital=capital,maxDrawdown=0;
+
+    for(const t of trades){
+      const entryTime=new Date(t.entry_time).getTime();
+      const exitTime=new Date(t.exit_time).getTime();
+      if(inPosition&&entryTime<currentExitTime){
+        skipped++;
+        continue;
+      }
+      inPosition=true;
+      currentExitTime=exitTime;
+      const pnlPct=parseFloat(t.pnl_pct);
+      if(isNaN(pnlPct)) continue;
+      const pnlUsd=capital*(pnlPct/100);
+      const prevCapital=capital;
+      capital=capital+pnlUsd;
+      if(capital>maxCapital) maxCapital=capital;
+      const dd=(maxCapital-capital)/maxCapital*100;
+      if(dd>maxDrawdown) maxDrawdown=dd;
+      const isWin=pnlPct>0;
+      if(isWin) wins++; else losses++;
+      steps.push({
+        id:t.setup_id,type:t.type,variant:t.variant||'baseline',
+        direction:t.direction,result:t.result,
+        entry_time:t.entry_time,exit_time:t.exit_time,
+        pnl_pct:pnlPct,pnl_usd:Math.round(pnlUsd*100)/100,
+        capital_before:Math.round(prevCapital*100)/100,
+        capital_after:Math.round(capital*100)/100,
+      });
+      inPosition=false;
+    }
+    return {
+      steps,final:Math.round(capital*100)/100,
+      totalReturn:Math.round((capital-startCapital)/startCapital*10000)/100,
+      wins,losses,skipped,maxDrawdown:Math.round(maxDrawdown*100)/100,
+    };
+  },[trades,startCapital]);
+
+  const fmtD=(s)=>s?String(s).replace('T',' ').slice(0,16):'—';
+  const pnlC=(v)=>v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+
+  return (
+    <>
+      <div className="panel" style={{flexShrink:0}}>
+        <div className="panel-head">
+          <span className="panel-title">Symulator portfela</span>
+          <span className="panel-badge">Co by było gdyby…</span>
+        </div>
+        <div style={{padding:'12px 16px',display:'flex',flexDirection:'column',gap:10}}>
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Okres:</span>
+            <div className="seg-tabs">
+              {['7d','14d','30d','90d','6m','12m','all','custom'].map(p=>
+                <div key={p} className={`seg-tab ${periodMode===p?'active':''}`}
+                  onClick={()=>setPeriodMode(p)}>{p==='custom'?'daty':p}</div>
+              )}
+            </div>
+          </div>
+          {periodMode==='custom'&&<div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Od:</span>
+            <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)}
+              style={{background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12}}/>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Do:</span>
+            <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)}
+              style={{background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12}}/>
+          </div>}
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Kapitał:</span>
+            <div style={{display:'flex',gap:4}}>
+              {[500,1000,2000,5000].map(v=>
+                <div key={v} className={`filter-chip ${startCapital===v?'active':''}`}
+                  onClick={()=>setStartCapital(v)}>${v}</div>
+              )}
+            </div>
+            <input type="number" value={startCapital} onChange={e=>setStartCapital(Math.max(1,Number(e.target.value)||1))}
+              style={{width:80,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+            <span style={{fontSize:10,color:'var(--text3)'}}>USDT</span>
+          </div>
+          {filterTree.length>0&&selectedPairs!==null&&<div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Typy:</span>
+            <div className={`filter-chip ${showTypeFilter?'active':''}`} style={{fontFamily:'var(--mono)',fontSize:9}} onClick={()=>setShowTypeFilter(p=>!p)}>
+              Typ/Wariant{pairsFiltered?' (filtr)':''} {showTypeFilter?'▴':'▾'}
+            </div>
+            {pairsFiltered&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>setSelectedPairs(allTreePairs)}>✕ wyczyść</span>}
+          </div>}
+          {showTypeFilter&&filterTree.length>0&&selectedPairs!==null&&<div style={{padding:'6px 0',borderTop:'1px solid var(--border)',maxHeight:280,overflowY:'auto'}}>
+            <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+              {settingsFilter&&settingsFilter.pairs.length>0&&<span className="filter-chip" style={{fontSize:10}} onClick={()=>{const s=new Set(settingsFilter.pairs);setSelectedPairs(allTreePairs.filter(p=>s.has(p)));}}>tylko włączone</span>}
+              <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>setSelectedPairs(allTreePairs)}>wszystkie</span>
+              <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>setSelectedPairs([])}>✕ wyczyść</span>
+            </div>
+            {filterTree.map(sc=><div key={sc.name} style={{marginBottom:6}}>
+              <div style={{fontSize:10,fontWeight:700,color:'var(--text2)',fontFamily:'var(--mono)',marginBottom:3,padding:'0 4px'}}>{sc.name}</div>
+              <div style={{display:'flex',gap:4,flexWrap:'wrap',paddingLeft:8}}>
+                {sc.variants.map(v=>{
+                  const pair=`${sc.name}:${v.name}`;
+                  const sel=selectedPairs.includes(pair);
+                  return <div key={v.name} className={`filter-chip ${sel?'active':''}`} style={{fontSize:10,opacity:v.active?1:.4}}
+                    onClick={()=>setSelectedPairs(p=>sel?p.filter(x=>x!==pair):[...p,pair])}>{v.name}</div>;
+                })}
+              </div>
+            </div>)}
+          </div>}
+        </div>
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
+
+      {simulation&&!loading&&<>
+        <div className="panel" style={{flexShrink:0}}>
+          <div className="panel-head">
+            <span className="panel-title">Wynik symulacji</span>
+            <span className="panel-badge">{simulation.steps.length} pozycji</span>
+          </div>
+          <div className="quick-stat-grid">
+            <div className="qs-cell">
+              <div className="qs-val" style={{color:pnlC(simulation.final-startCapital)}}>${simulation.final.toLocaleString('en',{minimumFractionDigits:2})}</div>
+              <div className="qs-lbl">Kapitał końcowy</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val" style={{color:pnlC(simulation.totalReturn)}}>{simulation.totalReturn>0?'+':''}{simulation.totalReturn}%</div>
+              <div className="qs-lbl">Zwrot</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val" style={{color:'var(--green)'}}>{simulation.wins}</div>
+              <div className="qs-lbl">Wygrane</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val" style={{color:'var(--red)'}}>{simulation.losses}</div>
+              <div className="qs-lbl">Przegrane</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val" style={{color:'var(--text1)'}}>{simulation.wins+simulation.losses>0?Math.round(simulation.wins/(simulation.wins+simulation.losses)*100):0}%</div>
+              <div className="qs-lbl">Win Rate</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val" style={{color:'var(--red)'}}>{simulation.maxDrawdown>0?`-${simulation.maxDrawdown}%`:'0%'}</div>
+              <div className="qs-lbl">Max Drawdown</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val dim">{simulation.skipped}</div>
+              <div className="qs-lbl">Pominięte (zajęta poz.)</div>
+            </div>
+            <div className="qs-cell">
+              <div className="qs-val" style={{color:pnlC(simulation.final-startCapital)}}>{simulation.final>=startCapital?'+':''}${(simulation.final-startCapital).toFixed(2)}</div>
+              <div className="qs-lbl">Zysk / Strata $</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="panel" style={{minHeight:120,flexShrink:0}}>
+          <div className="panel-head">
+            <span className="panel-title">Krzywa kapitału</span>
+          </div>
+          <div style={{padding:16}}>
+            <SimChart steps={simulation.steps} startCapital={startCapital}/>
+          </div>
+        </div>
+
+        <div className="panel" style={{flex:1,minHeight:200}}>
+          <div className="panel-head">
+            <span className="panel-title">Historia pozycji</span>
+            <span className="panel-badge">{simulation.steps.length}</span>
+          </div>
+          <div className="panel-body scroll-y">
+            <table className="tbl">
+              <thead><tr>
+                <th>#</th><th>ID</th><th>Typ</th><th>Kier.</th><th>Wynik</th>
+                <th>Wejście</th><th>Wyjście</th>
+                <th>PnL %</th><th>PnL $</th><th>Kapitał po</th>
+              </tr></thead>
+              <tbody>
+                {simulation.steps.map((s,i)=>(
+                  <tr key={s.id}>
+                    <td style={{color:'var(--text3)',fontFamily:'var(--mono)'}}>{i+1}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600}}>{s.id}</td>
+                    <td style={{fontSize:11}}>{s.type}<span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span></td>
+                    <td><span className={`kier-badge ${s.direction}`}>{s.direction}</span></td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:s.result==='SL'?'var(--red)':'var(--green)'}}>{s.result}</td>
+                    <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{fmtD(s.entry_time)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{fmtD(s.exit_time)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pnlC(s.pnl_pct)}}>{s.pnl_pct>0?'+':''}{s.pnl_pct.toFixed(2)}%</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pnlC(s.pnl_usd)}}>{s.pnl_usd>0?'+':''}${s.pnl_usd.toFixed(2)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pnlC(s.capital_after-s.capital_before)}}>${s.capital_after.toLocaleString('en',{minimumFractionDigits:2})}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </>}
+
+      {simulation&&simulation.steps.length===0&&!loading&&
+        <div style={{textAlign:'center',padding:40,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>
+          Brak zamkniętych pozycji w wybranym okresie i wariantach.
+        </div>
+      }
+    </>
+  );
+}
+
+function SimChart({steps,startCapital}) {
+  const canvasRef=React.useRef(null);
+  React.useEffect(()=>{
+    const canvas=canvasRef.current;
+    if(!canvas||steps.length===0) return;
+    const ctx=canvas.getContext('2d');
+    const dpr=window.devicePixelRatio||1;
+    const rect=canvas.parentElement.getBoundingClientRect();
+    const W=rect.width, H=200;
+    canvas.width=W*dpr; canvas.height=H*dpr;
+    canvas.style.width=W+'px'; canvas.style.height=H+'px';
+    ctx.scale(dpr,dpr);
+    ctx.clearRect(0,0,W,H);
+
+    const points=[startCapital,...steps.map(s=>s.capital_after)];
+    const minV=Math.min(...points)*0.98;
+    const maxV=Math.max(...points)*1.02;
+    const range=maxV-minV||1;
+    const padL=50,padR=16,padT=12,padB=24;
+    const cW=W-padL-padR, cH=H-padT-padB;
+    const xStep=cW/(points.length-1||1);
+
+    ctx.strokeStyle='var(--border2)';ctx.lineWidth=0.5;
+    ctx.fillStyle='var(--text3)';ctx.font='9px IBM Plex Mono';ctx.textAlign='right';
+    for(let i=0;i<=4;i++){
+      const y=padT+cH*(1-i/4);
+      const v=minV+range*(i/4);
+      ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();
+      ctx.fillText('$'+v.toFixed(0),padL-4,y+3);
+    }
+
+    ctx.beginPath();
+    ctx.strokeStyle='#4a9eff';ctx.lineWidth=2;
+    points.forEach((v,i)=>{
+      const x=padL+i*xStep;
+      const y=padT+cH*(1-(v-minV)/range);
+      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    ctx.beginPath();
+    const last=points[points.length-1];
+    ctx.strokeStyle=last>=startCapital?'#00d68f44':'#ff4d6a44';
+    ctx.setLineDash([4,4]);ctx.lineWidth=1;
+    const baseY=padT+cH*(1-(startCapital-minV)/range);
+    ctx.moveTo(padL,baseY);ctx.lineTo(W-padR,baseY);ctx.stroke();
+    ctx.setLineDash([]);
+
+    points.forEach((v,i)=>{
+      const x=padL+i*xStep;
+      const y=padT+cH*(1-(v-minV)/range);
+      ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);
+      ctx.fillStyle=v>=startCapital?'#00d68f':'#ff4d6a';ctx.fill();
+    });
+  },[steps,startCapital]);
+
+  return <canvas ref={canvasRef} style={{width:'100%',height:200,display:'block'}}/>;
+}
 /* ── Desktop: ViewSettings ── */
 const ALGO2_TYPES = [
   { key: 'trend_pullback_long__baseline',      label: 'Trend Pullback Long',        variant: 'baseline' },
@@ -1525,7 +1879,7 @@ function ViewSettings() {
 function Sidebar({ tab, setTab }) {
   const {price, setups} = useDash();
   const p = price || {};
-  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Setups'},{id:'algo',label:'Analityka Algo'},{id:'settings',label:'Ustawienia'}];
+  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Setups'},{id:'algo',label:'Analityka Algo'},{id:'sim',label:'Symulator'},{id:'settings',label:'Ustawienia'}];
   return (
     <div className="sidebar">
       <div className="sidebar-logo"><div className="sidebar-brand">AlertSol</div><div className="sidebar-sub">Dashboard v2</div></div>
@@ -1584,6 +1938,7 @@ function DesktopApp() {
           {tab==='dash' && <ViewDashboard/>}
           {tab==='setups' && <ViewSetups/>}
           {tab==='algo' && <ViewAlgo/>}
+          {tab==='sim' && <ViewSimulator/>}
           {tab==='settings' && <ViewSettings/>}
         </div>
       </div>
@@ -1890,8 +2245,8 @@ function MobileApp() {
   const [tab,setTab]=useState(0);
   const {price, stats, market, setups, statsPeriod, setStatsPeriod} = useDash();
   const p = price || {}, s = stats || {}, m = market || {};
-  const tabs=['dash','setups','algo','settings'];
-  const labels=['Dashboard','Setups','Algo','Settings'];
+  const tabs=['dash','setups','algo','sim','settings'];
+  const labels=['Dashboard','Setups','Algo','Sym','Settings'];
   return (
     <div className="m-root">
       <div className="phone-wrap">
@@ -1934,7 +2289,8 @@ function MobileApp() {
           {tab===0 && <TabDashboard/>}
           {tab===1 && <TabSetups/>}
           {tab===2 && <TabAlgo/>}
-          {tab===3 && <ViewSettings/>}
+          {tab===3 && <ViewSimulator/>}
+          {tab===4 && <ViewSettings/>}
         </div>
         <div className="bottom-nav">
           {tabs.map((t,i)=>(

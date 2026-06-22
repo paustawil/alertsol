@@ -3263,6 +3263,17 @@ def api_algo2_daily_stats(period: int | None = None):
     return db.get_algo2_daily_stats(period)
 
 
+@app.get("/api/simulator")
+def api_simulator(
+    variants: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    """Dane do symulatora portfela: zamknięte setupy z entry/exit time i pnl_pct."""
+    variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
+    return db.get_simulator_trades(date_from, date_to, variant_list)
+
+
 @app.get("/api/analytics/export")
 def api_analytics_export(
     days: int | None = None,
