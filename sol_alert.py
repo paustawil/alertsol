@@ -941,7 +941,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 entry_mid = (fib_lo + fib_hi) / 2
                 w   = round(swing_low + entry_mid * swing_range, 2)
                 sl  = round(swing_low + fib_sl * swing_range + atr * atr_sl, 2)
-                tp1 = round(swing_low, 2)
+                tp1 = round(swing_low + swing_range * 0.02, 2)
                 tp2 = round(swing_low - swing_range * 0.3, 2)
                 rr_ok     = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5
                 above_price = w > current_price * 1.003
@@ -1092,7 +1092,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 entry_mid = (fib_lo + fib_hi) / 2
                 w   = round(swing_high - entry_mid * swing_range, 2)
                 sl  = round(swing_high - fib_sl * swing_range - atr * atr_sl, 2)
-                tp1 = round(swing_high, 2)
+                tp1 = round(swing_high - swing_range * 0.02, 2)
                 tp2 = round(swing_high + swing_range * 0.3, 2)
                 rr_ok      = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5
                 below_price = w < current_price * 0.997
