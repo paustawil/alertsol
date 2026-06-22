@@ -1415,9 +1415,16 @@ def get_algo2_daily_stats(
     _full_qty = f"""COALESCE(NULLIF(exchange_qty_full,'')::numeric,
                            FLOOR({_tu}*{leverage}/{_entry}/0.1)*0.1)"""
     _sign = "CASE direction WHEN 'long' THEN 1 ELSE -1 END"
+    pnl_pct_calc = f"""
+        COALESCE(pnl_pct,
+            CASE WHEN {trading_filter}
+                      AND {_entry} IS NOT NULL AND avg_exit IS NOT NULL
+            THEN ({_sign}) * (avg_exit - {_entry}) * ({_full_qty})
+                 / NULLIF({_tu}, 0) * 100
+            END)"""
     tp1_only_pct = f"""
         CASE
-            WHEN result = 'SL' THEN pnl_pct
+            WHEN result = 'SL' THEN {pnl_pct_calc}
             WHEN {wins_filter}
                  AND (tps->>0) IS NOT NULL
                  AND {_entry} IS NOT NULL
@@ -1451,8 +1458,10 @@ def get_algo2_daily_stats(
                           * 100, 1)                                                        AS win_rate,
                     ROUND((SUM({tp1_only_pct}) FILTER (WHERE {trading_filter})
                           / NULLIF(COUNT(*) FILTER (WHERE {trading_filter}), 0))::numeric, 1) AS avg_pct_tp1,
-                    ROUND((SUM(pnl_pct) FILTER (WHERE {trading_filter})
-                          / NULLIF(COUNT(*) FILTER (WHERE {trading_filter}), 0))::numeric, 1) AS avg_pct_tp12
+                    ROUND((SUM({pnl_pct_calc}) FILTER (WHERE {trading_filter})
+                          / NULLIF(COUNT(*) FILTER (WHERE {trading_filter}), 0))::numeric, 1) AS avg_pct_tp12,
+                    ROUND(SUM({tp1_only_pct}) FILTER (WHERE {trading_filter})::numeric, 1) AS sum_pct_tp1,
+                    ROUND(SUM({pnl_pct_calc}) FILTER (WHERE {trading_filter})::numeric, 1) AS sum_pct_tp12
                 FROM setups
                 WHERE model = 'Algo2'
                   {time_sql}
