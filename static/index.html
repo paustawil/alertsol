@@ -803,20 +803,6 @@ function ViewSetups() {
   const pairsFiltered=selectedPairs!==null&&filterTree.length>0&&
     selectedPairs.length<filterTree.flatMap(m=>m.types.flatMap(t=>t.variants)).length;
   useEffect(()=>{
-    if(settingsFilter===null) return; // czekaj aż ustawienia się załadują
-    setRows(null);
-    const p=new URLSearchParams({limit:200,shadow_filter:shadowFilter});
-    if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
-    if(modelFilters.length>0) p.set('models',modelFilters.join(','));
-    if(typeFilters.length>0) p.set('types',typeFilters.join(','));
-    if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
-    if(dateFrom) p.set('date_from',dateFrom);
-    if(dateTo) p.set('date_to',dateTo);
-    fetch(`/api/dashboard/all-setups?${p}`)
-      .then(r=>r.ok?r.json():{rows:[],total:0})
-      .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
-  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter,refetchKey]);
-  useEffect(()=>{
     const fetchP=()=>{fetch('/api/dashboard/price').then(r=>r.ok?r.json():{}).then(d=>{if(d.price!=null)setCurrentPrice(d.price);}).catch(()=>{});};
     fetchP();
     const iv=setInterval(fetchP,15000);
@@ -862,8 +848,24 @@ function ViewSetups() {
     if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
     return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
   };
-  const [refetchKey,setRefetchKey]=useState(0);
-  const StatusResultChip=({r})=>{
+  const fetchRows=React.useCallback(()=>{
+    if(settingsFilter===null) return;
+    const p=new URLSearchParams({limit:200,shadow_filter:shadowFilter});
+    if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
+    if(modelFilters.length>0) p.set('models',modelFilters.join(','));
+    if(typeFilters.length>0) p.set('types',typeFilters.join(','));
+    if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
+    if(dateFrom) p.set('date_from',dateFrom);
+    if(dateTo) p.set('date_to',dateTo);
+    return fetch(`/api/dashboard/all-setups?${p}`)
+      .then(r=>r.ok?r.json():{rows:[],total:0})
+      .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>{});
+  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
+  useEffect(()=>{
+    if(settingsFilter===null) return;
+    setRows(null);
+    fetchRows();
+  },[fetchRows]);
     const sk=r.status_key;
     const [editing,setEditing]=useState(false);
     const [saving,setSaving]=useState(false);
@@ -895,8 +897,8 @@ function ViewSetups() {
         const qty=parseFloat(editQty);
         if(qty>0) body.qty_full=qty;
         const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        if(resp.ok){setEditing(false);setRefetchKey(k=>k+1);}
-      }catch(e){}
+        if(resp.ok){setEditing(false);await fetchRows();}
+      }catch(e){console.error('saveResult error',e);}
       setSaving(false);
     };
     if(['zamkniete','anulowane','nie_weszlo'].includes(sk)){
@@ -1615,10 +1617,8 @@ function TabSetups() {
   const [settingsFilter,setSettingsFilter]=useState(null); // null = ładowanie
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
-  const [refetchKey,setRefetchKey]=useState(0);
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
-  // Załaduj enabled types z ustawień — tak samo jak desktop ViewSetups
   useEffect(()=>{
     fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
       const cfg=d.type_configs||{};
@@ -1629,19 +1629,23 @@ function TabSetups() {
       setSettingsFilter({types,variants});
     }).catch(()=>setSettingsFilter({types:[],variants:[]}));
   },[]);
-  useEffect(()=>{
-    if(settingsFilter===null) return; // czekaj na settings
-    setRows(null);
+  const fetchRowsMobile=React.useCallback(()=>{
+    if(settingsFilter===null) return;
     const p=new URLSearchParams({limit:100,shadow_filter:shadowFilter});
     if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
     if(settingsFilter.types.length>0) p.set('types',settingsFilter.types.join(','));
     if(settingsFilter.variants.length>0) p.set('variants',settingsFilter.variants.join(','));
     const d=new Date();d.setDate(d.getDate()-30);
     p.set('date_from',d.toISOString().split('T')[0]);
-    fetch(`/api/dashboard/all-setups?${p}`)
+    return fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
-      .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>setRows([]));
-  },[statusFilters,shadowFilter,settingsFilter,refetchKey]);
+      .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>{});
+  },[statusFilters,shadowFilter,settingsFilter]);
+  useEffect(()=>{
+    if(settingsFilter===null) return;
+    setRows(null);
+    fetchRowsMobile();
+  },[fetchRowsMobile]);
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
@@ -1665,7 +1669,7 @@ function TabSetups() {
           const RES_OPTS=['TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL','nieokreslone'];
           const saveR=async(nr)=>{
             setSaving(true);
-            try{const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:nr})});if(resp.ok)setRefetchKey(k=>k+1);}catch(e){}
+            try{const resp=await fetch(`/api/update-result/${r.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({result:nr})});if(resp.ok)await fetchRowsMobile();}catch(e){console.error('saveR error',e);}
             setSaving(false);
           };
           if(!r.result) return <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>{r.status}</span>;
