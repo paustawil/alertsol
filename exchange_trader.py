@@ -1080,6 +1080,8 @@ def _check_after_tp1_positions(client: BitgetClient) -> None:
 
 _sync_lock = threading.Lock()
 _exchange_configured = False
+_plan_unknown_counts: dict[int, int] = {}
+_PLAN_UNKNOWN_THRESHOLD = 3
 
 def sync():
     """
@@ -1315,7 +1317,10 @@ def _sync_inner():
             status1 = _plan_order_status(client, plan_oid)
             print(f"[exchange] {label}: plan1 status = {status1}")
 
-            if status1 == "cancelled":
+            if status1 == "live":
+                _plan_unknown_counts.pop(int(sid) if sid and sid != "?" else 0, None)
+
+            elif status1 == "cancelled":
                 print(f"[exchange] {label}: plan1 anulowany z zewnątrz — anuluję plan2 i zamykam setup")
                 if plan2_oid:
                     _cancel_order(client, plan2_oid, "normal_plan")
@@ -1323,6 +1328,25 @@ def _sync_inner():
                 s["exchange_plan2_oid"] = None
                 s["exchange_done"]      = True
                 modified = True
+                _plan_unknown_counts.pop(int(sid), None)
+
+            elif status1 == "unknown":
+                unk_key = int(sid) if sid and sid != "?" else 0
+                cnt = _plan_unknown_counts.get(unk_key, 0) + 1
+                _plan_unknown_counts[unk_key] = cnt
+                print(f"[exchange] {label}: plan1 unknown ({cnt}/{_PLAN_UNKNOWN_THRESHOLD})")
+                if cnt >= _PLAN_UNKNOWN_THRESHOLD:
+                    log.warning(f"[exchange] {label}: plan order zniknął z Bitget "
+                                f"({_PLAN_UNKNOWN_THRESHOLD}x unknown) — traktuję jako anulowany")
+                    if plan2_oid:
+                        status2 = _plan_order_status(client, plan2_oid)
+                        if status2 == "live":
+                            _cancel_order(client, plan2_oid, "normal_plan")
+                    s["exchange_plan_oid"]  = None
+                    s["exchange_plan2_oid"] = None
+                    s["exchange_done"]      = True
+                    modified = True
+                    _plan_unknown_counts.pop(unk_key, None)
 
             elif status1 == "executed":
                 # Plan1 wykonany — sprawdź plan2 (ten sam trigger, powinien być executed)
