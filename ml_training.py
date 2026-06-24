@@ -27,13 +27,13 @@ from sklearn.metrics import (
 try:
     import lightgbm as lgb
 except ImportError:
-    sys.exit("lightgbm not installed — run: pip install lightgbm>=4.0.0")
+    lgb = None
 
 try:
     import psycopg2
     import psycopg2.extras
 except ImportError:
-    sys.exit("psycopg2 not installed")
+    psycopg2 = None
 
 
 WIN_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2"}
@@ -273,6 +273,10 @@ def save_model(model, meta: dict, model_path: str, meta_path: str):
 
 def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb") -> dict:
     """Uruchamia trening i zwraca wyniki jako dict (do API)."""
+    if lgb is None:
+        return {"error": "lightgbm not installed — run: pip install lightgbm>=4.0.0"}
+    if psycopg2 is None:
+        return {"error": "psycopg2 not installed — run: pip install psycopg2-binary"}
     db_url = db_url or os.getenv("DATABASE_URL")
     if not db_url:
         return {"error": "Brak DATABASE_URL."}
@@ -344,6 +348,11 @@ def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb")
 
 
 def main():
+    if lgb is None:
+        sys.exit("lightgbm not installed — run: pip install lightgbm>=4.0.0")
+    if psycopg2 is None:
+        sys.exit("psycopg2 not installed — run: pip install psycopg2-binary")
+
     parser = argparse.ArgumentParser(description="Train ML model for setup scoring")
     parser.add_argument("--db-url", default=os.getenv("DATABASE_URL"),
                         help="PostgreSQL connection string (default: $DATABASE_URL)")

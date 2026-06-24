@@ -3343,7 +3343,7 @@ def api_ml_train():
                         result.get("model_quality", {}).get("accuracy", 0),
                         result.get("model_quality", {}).get("auc", 0))
         return result
-    except Exception as e:
+    except BaseException as e:
         logger.exception("[ML] Training exception: %s", e)
         return {"status": "error", "message": str(e)}
     finally:
