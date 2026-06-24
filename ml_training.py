@@ -42,12 +42,12 @@ WIN_RESULTS = {"TP1", "TP2", "TP1+BE", "TP1+SL", "TP1+TP2"}
 LOSS_RESULTS = {"SL"}
 
 
-def export_training_data(db_url: str) -> pd.DataFrame:
+def export_training_data(db_url: str, cutoff_date: str = None) -> pd.DataFrame:
     """Pobiera resolved setupy z bazy jako DataFrame."""
     conn = psycopg2.connect(db_url)
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("""
+            query = """
                 SELECT setup_id, alert_time, model, type, direction, score,
                        variant, rr, entry_trigger, entries, tps, sl, sl_after_tp1,
                        result, hypo_result, pnl_usd, hypo_pnl_usd, pnl_pct,
@@ -56,8 +56,13 @@ def export_training_data(db_url: str) -> pd.DataFrame:
                 FROM setups
                 WHERE resolved = TRUE
                   AND (result IS NOT NULL OR hypo_result IS NOT NULL)
-                ORDER BY alert_time ASC
-            """)
+            """
+            params = []
+            if cutoff_date:
+                query += "  AND alert_time >= %s\n"
+                params.append(cutoff_date)
+            query += "ORDER BY alert_time ASC"
+            cur.execute(query, params or None)
             rows = cur.fetchall()
     finally:
         conn.close()
@@ -278,7 +283,8 @@ def save_model(model, meta: dict, model_path: str, meta_path: str):
     print(f"Meta saved:  {meta_path}")
 
 
-def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb") -> dict:
+def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb",
+                  cutoff_date: str = None) -> dict:
     """Uruchamia trening i zwraca wyniki jako dict (do API)."""
     if lgb is None:
         return {"error": f"lightgbm niedostępny: {_lgb_error}"}
@@ -288,7 +294,7 @@ def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb")
     if not db_url:
         return {"error": "Brak DATABASE_URL."}
 
-    df = export_training_data(db_url)
+    df = export_training_data(db_url, cutoff_date=cutoff_date)
     if df.empty:
         return {"error": "Brak resolved setupów w bazie."}
 
