@@ -228,6 +228,10 @@ def insert_setup(row: dict) -> int | None:
         "trade_usdt":      row.get("trade_usdt") or float(os.getenv("BITGET_TRADE_USDT", "100")),
         "variant":         row.get("variant", "baseline"),
         "status":          row.get("status", "pending"),
+        "market_context":  json.dumps(row["market_context"]) if row.get("market_context") else None,
+        "ml_data_only":    row.get("ml_data_only", False),
+        "ml_score":        row.get("ml_score"),
+        "ml_composite":    row.get("ml_composite"),
     }
 
     with _conn() as conn:
@@ -246,7 +250,8 @@ def insert_setup(row: dict) -> int | None:
                     entry_trigger, reasoning, llm_scores,
                     entries, tps, sl, sl_after_tp1, rr,
                     entry_hit_at, entries_hit, sl_adjusted, shadow,
-                    trade_usdt, variant, status
+                    trade_usdt, variant, status,
+                    market_context, ml_data_only, ml_score, ml_composite
                 )
                 SELECT
                     %(alert_time)s, %(alert_timestamp)s, %(model)s, %(rejection)s, %(type)s,
@@ -254,7 +259,8 @@ def insert_setup(row: dict) -> int | None:
                     %(entry_trigger)s, %(reasoning)s, %(llm_scores)s,
                     %(entries)s, %(tps)s, %(sl)s, %(sl_after_tp1)s, %(rr)s,
                     %(entry_hit_at)s, %(entries_hit)s, %(sl_adjusted)s, %(shadow)s,
-                    %(trade_usdt)s, %(variant)s, %(status)s
+                    %(trade_usdt)s, %(variant)s, %(status)s,
+                    %(market_context)s, %(ml_data_only)s, %(ml_score)s, %(ml_composite)s
                 WHERE NOT EXISTS (
                     SELECT 1 FROM setups
                     WHERE resolved = FALSE
@@ -284,7 +290,7 @@ def update_setup(setup_id: int, **fields: Any) -> None:
     if not fields:
         return
 
-    _JSONB = {"entries", "tps", "llm_scores"}
+    _JSONB = {"entries", "tps", "llm_scores", "market_context"}
     set_parts = []
     values: dict[str, Any] = {}
     for key, val in fields.items():
@@ -705,7 +711,7 @@ def get_summary_stats(period_days: int | None = None) -> dict:
                     COUNT(*) FILTER (WHERE resolved = TRUE
                         AND result = 'SL')                               AS losses
                 FROM setups
-                WHERE TRUE {time_sql}
+                WHERE COALESCE(ml_data_only, FALSE) = FALSE {time_sql}
                 """,
                 time_params,
             )
@@ -797,7 +803,7 @@ def get_period_stats(period: str) -> dict:
 
             # Total setups in period
             cur.execute(
-                f"SELECT COUNT(*) AS total FROM setups WHERE {time_filter}",
+                f"SELECT COUNT(*) AS total FROM setups WHERE COALESCE(ml_data_only, FALSE) = FALSE AND {time_filter}",
                 time_params,
             )
             total_setups = cur.fetchone()["total"] or 0
@@ -847,7 +853,7 @@ def get_period_stats(period: str) -> dict:
                     COALESCE(ROUND(SUM({tp1_only_pct_p}) FILTER (WHERE resolved = TRUE
                         AND {_trading})::numeric, 1), 0) AS tp1_only_income_pct
                 FROM setups
-                WHERE {time_filter}
+                WHERE COALESCE(ml_data_only, FALSE) = FALSE AND {time_filter}
                 """,
                 time_params,
             )
@@ -983,7 +989,7 @@ def get_resolved_filtered(
     result_cats: list[str] | None = None,
 ) -> dict:
     """Zwraca zamknięte setupy z filtrami + total count."""
-    where = ["resolved = TRUE"]
+    where = ["resolved = TRUE", "COALESCE(ml_data_only, FALSE) = FALSE"]
     params: dict = {}
 
     if results:
@@ -1314,7 +1320,7 @@ def get_dashboard_stats(period: str = "30d") -> dict:
                         WHERE resolved = TRUE AND {trading} AND {tf_closed}
                     )::numeric, 2)                                                        AS pnl
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model = 'Algo2' AND COALESCE(ml_data_only, FALSE) = FALSE
                 {type_filter}
                 """,
                 params,
@@ -1387,7 +1393,7 @@ def get_algo2_type_stats(period_days: int | None = None) -> list[dict]:
                              THEN EXTRACT(EPOCH FROM exit_time - to_timestamp(entry_hit_at)) / 3600.0 END
                     )::numeric, 1)                                                        AS avg_hold_h
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model = 'Algo2' AND COALESCE(ml_data_only, FALSE) = FALSE
                   {time_sql}
                 GROUP BY type, direction
                 ORDER BY type, direction
@@ -1441,7 +1447,7 @@ def get_algo2_variant_stats(period_days: int | None = None) -> list[dict]:
                         END
                     )::numeric, 1)                                                         AS avg_hold_h
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model = 'Algo2' AND COALESCE(ml_data_only, FALSE) = FALSE
                   AND type LIKE 'trend_pullback%'
                   {time_sql}
                 GROUP BY variant, type, direction
@@ -1517,7 +1523,7 @@ def get_algo2_variant_summary(period_days: int | None = None, pairs: list[tuple[
                     COUNT(DISTINCT (COALESCE(exit_time, resolved_at, alert_time) AT TIME ZONE 'Europe/Warsaw')::date)
                         FILTER (WHERE {trading_filter})                                    AS trading_days
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model = 'Algo2' AND COALESCE(ml_data_only, FALSE) = FALSE
                   {time_sql}
                   {pair_sql}
                 GROUP BY type, variant
@@ -1593,7 +1599,7 @@ def get_algo2_daily_stats(
                     ROUND(SUM({tp1_only_pct}) FILTER (WHERE {trading_filter})::numeric, 1) AS sum_pct_tp1,
                     ROUND(SUM({pnl_pct_calc}) FILTER (WHERE {trading_filter})::numeric, 1) AS sum_pct_tp12
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model = 'Algo2' AND COALESCE(ml_data_only, FALSE) = FALSE
                   {time_sql}
                   {pair_sql}
                 GROUP BY day
@@ -1627,7 +1633,7 @@ def get_algo2_time_heatmap(period_days: int | None = None) -> list[dict]:
                           / NULLIF(COUNT(*) FILTER (WHERE {wins_filter})
                                  + COUNT(*) FILTER (WHERE result = 'SL'), 0) * 100, 1) AS win_rate
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model = 'Algo2' AND COALESCE(ml_data_only, FALSE) = FALSE
                   {time_sql}
                 GROUP BY hour
                 ORDER BY hour
@@ -1664,7 +1670,7 @@ def get_algo2_rr_analysis(period_days: int | None = None) -> list[dict]:
                     ROUND(COUNT(*) FILTER (WHERE result = 'SL')::numeric
                           / NULLIF(COUNT(*) FILTER (WHERE entry_hit_at IS NOT NULL), 0) * 100, 1) AS sl_rate
                 FROM setups
-                WHERE model = 'Algo2'
+                WHERE model = 'Algo2' AND COALESCE(ml_data_only, FALSE) = FALSE
                   {time_sql}
                 GROUP BY type, direction
                 ORDER BY type, direction

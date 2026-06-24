@@ -171,6 +171,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 INSERT INTO app_settings (id, data) VALUES (1, '{}'::jsonb) ON CONFLICT DO NOTHING;
 
+-- ML: kontekst rynkowy + flaga danych treningowych + scoring
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS market_context    JSONB;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS ml_data_only      BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS ml_score          NUMERIC(5,4);
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS ml_composite      NUMERIC(5,4);
+CREATE INDEX IF NOT EXISTS idx_setups_market_context ON setups USING GIN (market_context);
+CREATE INDEX IF NOT EXISTS idx_setups_ml_data ON setups (ml_data_only) WHERE ml_data_only = TRUE;
+
 -- Log zdarzeń exchange (modyfikacje SL, fallbacki, błędy)
 CREATE TABLE IF NOT EXISTS exchange_events (
     id         SERIAL PRIMARY KEY,
