@@ -3263,6 +3263,84 @@ def api_algo2_daily_stats(period: int | None = None):
     return db.get_algo2_daily_stats(period)
 
 
+# ── ML Model ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/ml/model-info")
+def api_ml_model_info():
+    """Informacje o aktualnym modelu ML."""
+    try:
+        import ml_scorer
+        info = ml_scorer.get_model_info()
+        if info is None:
+            return {"status": "no_model", "message": "Model nie został jeszcze wytrenowany."}
+        return {
+            "status": "ok",
+            "trained_at": info.get("trained_at"),
+            "n_samples": info.get("n_samples"),
+            "n_wins": info.get("n_wins"),
+            "n_losses": info.get("n_losses"),
+            "features": len(info.get("feature_cols", [])),
+            "has_market_context": info.get("has_market_context", False),
+            "avg_metrics": info.get("avg_metrics"),
+            "feature_importances": info.get("feature_importances"),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/ml/training-data-status")
+def api_ml_training_data_status():
+    """Ile danych jest dostępnych do treningu ML."""
+    try:
+        with db._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE resolved = TRUE AND (result IS NOT NULL OR hypo_result IS NOT NULL)) AS total_resolved,
+                        COUNT(*) FILTER (WHERE resolved = TRUE AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')) AS wins,
+                        COUNT(*) FILTER (WHERE resolved = TRUE AND result = 'SL') AS losses,
+                        COUNT(*) FILTER (WHERE resolved = TRUE AND hypo_result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')) AS hypo_wins,
+                        COUNT(*) FILTER (WHERE resolved = TRUE AND hypo_result = 'SL') AS hypo_losses,
+                        COUNT(*) FILTER (WHERE resolved = TRUE AND market_context IS NOT NULL) AS with_market_context,
+                        COUNT(*) FILTER (WHERE ml_data_only = TRUE) AS ml_data_only_count
+                    FROM setups
+                    WHERE model = 'Algo2'
+                """)
+                row = cur.fetchone()
+        return {
+            "total_resolved": row[0],
+            "real_wins": row[1],
+            "real_losses": row[2],
+            "hypo_wins": row[3],
+            "hypo_losses": row[4],
+            "trainable": row[1] + row[2] + row[3] + row[4],
+            "with_market_context": row[5],
+            "ml_data_only": row[6],
+            "ready": (row[1] + row[2] + row[3] + row[4]) >= 30,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+_ml_training_lock = False
+
+@app.post("/api/ml/train")
+def api_ml_train():
+    """Uruchamia trening modelu ML. Zwraca wyniki."""
+    global _ml_training_lock
+    if _ml_training_lock:
+        raise HTTPException(status_code=409, detail="Trening już trwa.")
+    _ml_training_lock = True
+    try:
+        import ml_training
+        result = ml_training.run_training()
+        return result
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        _ml_training_lock = False
+
+
 @app.get("/api/simulator")
 def api_simulator(
     variants: str | None = None,

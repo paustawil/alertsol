@@ -271,6 +271,78 @@ def save_model(model, meta: dict, model_path: str, meta_path: str):
     print(f"Meta saved:  {meta_path}")
 
 
+def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb") -> dict:
+    """Uruchamia trening i zwraca wyniki jako dict (do API)."""
+    db_url = db_url or os.getenv("DATABASE_URL")
+    if not db_url:
+        return {"error": "Brak DATABASE_URL."}
+
+    df = export_training_data(db_url)
+    if df.empty:
+        return {"error": "Brak resolved setupów w bazie."}
+
+    n_total = len(df)
+    X, y, meta = build_features(df)
+    if X.empty:
+        return {"error": "Brak setupów z wynikiem win/loss do treningu.",
+                "total_resolved": n_total}
+
+    model, meta = train_model(X, y, meta)
+
+    meta_path = model_path.replace(".lgb", "_meta.json")
+    save_model(model, meta, model_path, meta_path)
+
+    try:
+        import ml_scorer
+        ml_scorer._loaded = False
+    except ImportError:
+        pass
+
+    feature_names_pl = {
+        "rr": "Risk:Reward",
+        "score": "Siła reżimu",
+        "type_enc": "Typ setupu",
+        "direction_enc": "Kierunek (long/short)",
+        "variant_enc": "Wariant",
+        "trigger_enc": "Entry trigger",
+        "hour": "Godzina",
+        "day_of_week": "Dzień tygodnia",
+        "sl_distance": "Odległość SL",
+        "tp1_distance": "Odległość TP1",
+        "sl_after_tp1_dist": "Odległość SL po TP1",
+    }
+
+    importances = meta.get("feature_importances", {})
+    sorted_imp = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+    top_features = [
+        {"name": feature_names_pl.get(k, k), "key": k, "importance": v}
+        for k, v in sorted_imp[:10]
+    ]
+
+    avg = meta.get("avg_metrics", {})
+    return {
+        "status": "ok",
+        "training_data": {
+            "total_resolved": n_total,
+            "used_for_training": meta["n_samples"],
+            "wins": meta["n_wins"],
+            "losses": meta["n_losses"],
+            "win_rate": round(meta["n_wins"] / meta["n_samples"] * 100, 1),
+        },
+        "model_quality": {
+            "accuracy": round(avg.get("accuracy", 0) * 100, 1),
+            "precision": round(avg.get("precision", 0) * 100, 1),
+            "recall": round(avg.get("recall", 0) * 100, 1),
+            "f1": round(avg.get("f1", 0) * 100, 1),
+            "auc": round(avg.get("auc", 0), 3),
+        },
+        "top_features": top_features,
+        "has_market_context": meta.get("has_market_context", False),
+        "cv_folds": len(meta.get("cv_results", [])),
+        "model_path": model_path,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train ML model for setup scoring")
     parser.add_argument("--db-url", default=os.getenv("DATABASE_URL"),
@@ -282,22 +354,14 @@ def main():
     if not args.db_url:
         sys.exit("ERROR: No DATABASE_URL. Use --db-url or set DATABASE_URL env var.")
 
-    print("Exporting training data...")
-    df = export_training_data(args.db_url)
-    if df.empty:
-        sys.exit("ERROR: No resolved setups found in database.")
+    result = run_training(args.db_url, args.out)
+    if result.get("error"):
+        sys.exit(f"ERROR: {result['error']}")
 
-    print(f"Exported {len(df)} resolved setups")
-
-    X, y, meta = build_features(df)
-    if X.empty:
-        sys.exit("ERROR: No setups with win/loss results for training.")
-
-    model, meta = train_model(X, y, meta)
-
-    model_path = args.out
-    meta_path = model_path.replace(".lgb", "_meta.json")
-    save_model(model, meta, model_path, meta_path)
+    print(f"\nTraining complete:")
+    print(f"  Samples: {result['training_data']['used_for_training']}")
+    print(f"  Accuracy: {result['model_quality']['accuracy']}%")
+    print(f"  AUC: {result['model_quality']['auc']}")
 
 
 if __name__ == "__main__":
