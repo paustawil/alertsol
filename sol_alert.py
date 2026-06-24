@@ -1064,6 +1064,19 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "market_context": _setup_ctx(w, sl, swing_h=swing_high, swing_l=swing_low),
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
+                else:
+                    _rej = []
+                    if not rr_ok: _rej.append("RR<1.5")
+                    if not dist_ok: _rej.append(f"dist>{max_entry_dist}")
+                    log_lines.append(f"    ✗ REJECTED: {', '.join(_rej)}")
+                    setups.append({
+                        "type": "impulse_continuation_short", "direction": "short",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1) if (sl - w) > 0 else 0,
+                        "score": strength, "variant": "baseline",
+                        "market_context": _setup_ctx(w, sl, swing_h=swing_high, swing_l=swing_low),
+                        "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
+                    })
 
         # impulse_aggressive_short — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
         if regime_name.startswith("IMPULSE_"):
@@ -1098,6 +1111,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         })
                     else:
                         log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
+                        setups.append({
+                            "type": "impulse_aggressive_short", "direction": "short",
+                            "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                            "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1) if (_sl - w) > 0 else 0,
+                            "score": strength, "variant": _vname,
+                            "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                            "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                        })
 
         # impulse_aggressive_short (trend_boost) — lokalny impuls w TREND_DOWN bez vol_ratio
         if regime_name == "TREND_DOWN":
@@ -1130,6 +1151,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     })
                 else:
                     log_lines.append(f"    ✗ REJECTED [trend_boost]: RR<1.5")
+                    setups.append({
+                        "type": "impulse_aggressive_short", "direction": "short",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1) if (_sl - w) > 0 else 0,
+                        "score": strength, "variant": "trend_boost",
+                        "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                    })
             else:
                 reasons = []
                 if _c2h > -2.0: reasons.append(f"c2h={_c2h:+.1f}%>-2%")
@@ -1230,6 +1259,19 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "market_context": _setup_ctx(w, sl, swing_h=swing_high, swing_l=swing_low),
                         "reasoning": f"{regime_name}({strength}); pullback M15 cont",
                     })
+                else:
+                    _rej = []
+                    if not rr_ok: _rej.append("RR<1.5")
+                    if not dist_ok: _rej.append(f"dist>{max_entry_dist}")
+                    log_lines.append(f"    ✗ REJECTED: {', '.join(_rej)}")
+                    setups.append({
+                        "type": "impulse_continuation_long", "direction": "long",
+                        "entries": [w], "sl": sl, "sl_after_tp1": w,
+                        "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1) if (w - sl) > 0 else 0,
+                        "score": strength, "variant": "baseline",
+                        "market_context": _setup_ctx(w, sl, swing_h=swing_high, swing_l=swing_low),
+                        "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
+                    })
 
         # impulse_aggressive_long — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
         if regime_name.startswith("IMPULSE_"):
@@ -1264,6 +1306,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         })
                     else:
                         log_lines.append(f"    ✗ REJECTED [{_vname}]: RR<1.5")
+                        setups.append({
+                            "type": "impulse_aggressive_long", "direction": "long",
+                            "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                            "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1) if (w - _sl) > 0 else 0,
+                            "score": strength, "variant": _vname,
+                            "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                            "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                        })
 
         # impulse_aggressive_long (trend_boost) — lokalny impuls w TREND_UP bez vol_ratio
         if regime_name == "TREND_UP":
@@ -1296,6 +1346,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     })
                 else:
                     log_lines.append(f"    ✗ REJECTED [trend_boost]: RR<1.5")
+                    setups.append({
+                        "type": "impulse_aggressive_long", "direction": "long",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1) if (w - _sl) > 0 else 0,
+                        "score": strength, "variant": "trend_boost",
+                        "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                    })
             else:
                 reasons = []
                 if _c2h < 2.0: reasons.append(f"c2h={_c2h:+.1f}%<2%")
@@ -1344,6 +1402,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_str = f"${ma60_s2:.2f}" if ma60_s2 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_str} MA60={ma60_str} → {'OK' if ma_ok_s else 'BLOCKED (bullish MA)'}")
 
+            _rr_s = round((w - tp1) / (sl - w), 1) if (sl - w) > 0 else 0
             if (sl - w) > 0 and (w - tp1) / (sl - w) >= 1.5 and dist_ok and momentum_ok_s and touches_ok_s and ma_ok_s:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
@@ -1352,11 +1411,29 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "entries": [round(w, 2)], "sl": round(sl, 2),
                     "sl_after_tp1": round(w, 2),
                     "tps": [round(tp1, 2), round(tp2, 2)],
-                    "rr": round((w - tp1) / (sl - w), 1),
+                    "rr": _rr_s,
                     "score": 0,
                     "tp_strategy": "tp1_only",
                     "market_context": _setup_ctx(round(w, 2), round(sl, 2)),
                     "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={r_touches}",
+                })
+            else:
+                _rej = []
+                if not ((sl - w) > 0 and (w - tp1) / (sl - w) >= 1.5 if (sl - w) > 0 else False): _rej.append(f"RR<1.5({_rr_s})")
+                if not dist_ok: _rej.append("dist")
+                if not momentum_ok_s: _rej.append("momentum")
+                if not touches_ok_s: _rej.append(f"r_touches<2({r_touches})")
+                if not ma_ok_s: _rej.append("bullish_MA")
+                log_lines.append(f"    ✗ REJECTED: {', '.join(_rej)}")
+                setups.append({
+                    "type": "range_resistance_short", "direction": "short",
+                    "variant": "baseline",
+                    "entries": [round(w, 2)], "sl": round(sl, 2),
+                    "sl_after_tp1": round(w, 2),
+                    "tps": [round(tp1, 2), round(tp2, 2)],
+                    "rr": _rr_s, "score": 0,
+                    "market_context": _setup_ctx(round(w, 2), round(sl, 2)),
+                    "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
                 })
             # range_support_long
             w = sup + rng_size * 0.1
@@ -1391,6 +1468,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ma60_s = f"${ma60:.2f}" if ma60 else "N/A"
             log_lines.append(f"    MA filter: price=${current_price:.2f} MA30={ma30_s} MA60={ma60_s} → {'OK' if ma_ok else 'BLOCKED (bearish MA)'}")
 
+            _rr_l = round((tp1 - w) / (w - sl), 1) if (w - sl) > 0 else 0
             if (w - sl) > 0 and (tp1 - w) / (w - sl) >= 1.5 and dist_ok and momentum_ok and touches_ok and ma_ok:
                 log_lines.append(f"    ✓ ACCEPTED")
                 setups.append({
@@ -1399,11 +1477,29 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "entries": [round(w, 2)], "sl": round(sl, 2),
                     "sl_after_tp1": round(w, 2),
                     "tps": [round(tp1, 2), round(tp2, 2)],
-                    "rr": round((tp1 - w) / (w - sl), 1),
+                    "rr": _rr_l,
                     "score": 0,
                     "tp_strategy": "tp1_only",
                     "market_context": _setup_ctx(round(w, 2), round(sl, 2)),
                     "reasoning": f"RANGE; S=${sup:.2f} R=${res:.2f} touches={s_touches}",
+                })
+            else:
+                _rej = []
+                if not ((w - sl) > 0 and (tp1 - w) / (w - sl) >= 1.5 if (w - sl) > 0 else False): _rej.append(f"RR<1.5({_rr_l})")
+                if not dist_ok: _rej.append("dist")
+                if not momentum_ok: _rej.append("momentum")
+                if not touches_ok: _rej.append(f"s_touches<2({s_touches})")
+                if not ma_ok: _rej.append("bearish_MA")
+                log_lines.append(f"    ✗ REJECTED: {', '.join(_rej)}")
+                setups.append({
+                    "type": "range_support_long", "direction": "long",
+                    "variant": "baseline",
+                    "entries": [round(w, 2)], "sl": round(sl, 2),
+                    "sl_after_tp1": round(w, 2),
+                    "tps": [round(tp1, 2), round(tp2, 2)],
+                    "rr": _rr_l, "score": 0,
+                    "market_context": _setup_ctx(round(w, 2), round(sl, 2)),
+                    "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
                 })
     else:
         log_lines.append(f"  Brak setupów dla direction={direction}")
@@ -1974,8 +2070,9 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
     # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     # Algo2 shadow mode — dedup aktywny nawet gdy shadow=True (obserwacja w warunkach live).
+    # ml_data_only — brak deduplikacji (dane treningowe, każda obserwacja wartościowa).
     new_variant = setup.get("variant", "baseline")
-    if not shadow or model == "Algo2":
+    if not ml_data_only and (not shadow or model == "Algo2"):
         for p in db.get_active_setups():
             if (p["direction"] == direction and p["model"] == model
                     and p.get("variant", "baseline") == new_variant):
@@ -2777,14 +2874,13 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     except Exception as _e:
         print(f"[algo2] ML scoring error: {_e}")
 
-    # ── Rejected setups — zapis jako ml_data_only ────────────────────────────
+    # ── Rejected setups — zapis jako ml_data_only (bez validate_setup — to dane treningowe) ──
     for s in rejected_setups:
         s["reasoning"] = algo2_log
-        if not validate_setup(s, "Algo2"):
-            save_pending(s, "Algo2", "", current, shadow=True, ml_data_only=True)
-            if s.get("setup_id"):
-                print(f"[algo2] ML data: {s['type']} [{s.get('variant','?')}] #{s['setup_id']} "
-                      f"RR={s.get('rr',0)} reasons={s.get('filter_reasons','')}")
+        save_pending(s, "Algo2", "", current, shadow=True, ml_data_only=True)
+        if s.get("setup_id"):
+            print(f"[algo2] ML data: {s['type']} [{s.get('variant','?')}] #{s['setup_id']} "
+                  f"RR={s.get('rr',0)} reasons={s.get('filter_reasons','')}")
 
     # ── Force-shadow setups — zapis bez GPT3 ─────────────────────────────────
     for s in force_shadow_setups:
