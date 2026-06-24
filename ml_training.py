@@ -66,6 +66,11 @@ def export_training_data(db_url: str) -> pd.DataFrame:
     if df.empty:
         return df
 
+    numeric_cols = ["sl", "sl_after_tp1", "rr", "score", "pnl_usd", "hypo_pnl_usd", "pnl_pct"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     df["effective_result"] = df.apply(
         lambda r: r["hypo_result"] if r["ml_data_only"] and r["hypo_result"] else r["result"],
         axis=1,
