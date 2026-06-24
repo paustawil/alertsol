@@ -24,10 +24,12 @@ from sklearn.metrics import (
     classification_report, roc_auc_score,
 )
 
+_lgb_error = None
 try:
     import lightgbm as lgb
-except (ImportError, OSError):
+except (ImportError, OSError) as e:
     lgb = None
+    _lgb_error = str(e)
 
 try:
     import psycopg2
@@ -274,7 +276,7 @@ def save_model(model, meta: dict, model_path: str, meta_path: str):
 def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb") -> dict:
     """Uruchamia trening i zwraca wyniki jako dict (do API)."""
     if lgb is None:
-        return {"error": "lightgbm not installed — run: pip install lightgbm>=4.0.0"}
+        return {"error": f"lightgbm niedostępny: {_lgb_error}"}
     if psycopg2 is None:
         return {"error": "psycopg2 not installed — run: pip install psycopg2-binary"}
     db_url = db_url or os.getenv("DATABASE_URL")
