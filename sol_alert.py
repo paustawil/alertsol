@@ -844,7 +844,7 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 # str4      = identyczna geometria, ale próg strength obniżony do 4
 # shallow   = płytszy pullback (fib25-38) z ciaśniejszym SL (fib50), też strength>=4
 _PULLBACK_VARIANTS: dict[str, tuple] = {
-    "baseline": (0.38, 0.50, 0.618, 0.3, 5, False),
+    "baseline": (0.38, 0.50, 0.618, 0.3, 3, False),
     "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
     "micro":    (0.15, 0.25, 0.382, 0.1, 4, True),
     "deep":     (0.50, 0.618, 0.786, 0.4, 5, True),
@@ -1014,7 +1014,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "score": strength,
                         "variant": vname,
                         "tp_strategy": "tp1_tp2",
-                        "force_shadow": v_shadow,
+                        "force_shadow": v_shadow or (vname == "baseline" and strength < 5),
                         "market_context": _ctx,
                         "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
                     })
@@ -1209,7 +1209,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "score": strength,
                         "variant": vname,
                         "tp_strategy": "tp1_tp2",
-                        "force_shadow": v_shadow,
+                        "force_shadow": v_shadow or (vname == "baseline" and strength < 5),
                         "market_context": _ctx,
                         "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
                     })
@@ -2873,10 +2873,11 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     for s in algo2_setups:
         s["reasoning"] = algo2_log
         is_rejected = s.get("rejected_by_algo", False)
+        is_shadow = s.get("force_shadow", False)
         save_pending(s, "Algo2", "", current, shadow=True,
-                     ml_data_only=is_rejected)
+                     ml_data_only=is_rejected or is_shadow)
         if s.get("setup_id"):
-            tag = "ML data (rejected)" if is_rejected else "shadow"
+            tag = "ML data (rejected)" if is_rejected else ("ML data (shadow)" if is_shadow else "shadow")
             print(f"[algo2] {tag}: {s['type']} [{s.get('variant','?')}] #{s['setup_id']} RR={s.get('rr',0)}")
 
     # ── KROK 2: Filtruj kandydatów do live handlu ────────────────────────────
