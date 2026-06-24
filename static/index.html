@@ -1928,8 +1928,10 @@ function ViewML() {
     setTraining(true); setTrainResult(null); setError(null);
     try {
       const r = await fetch('/api/ml/train', {method:'POST'});
+      if (!r.ok) { setError(`Błąd serwera: HTTP ${r.status}`); return; }
       const d = await r.json();
       if (d.error) { setError(d.error); }
+      else if (d.status==='error') { setError(d.message || 'Nieznany błąd treningu'); }
       else { setTrainResult(d); fetch('/api/ml/model-info').then(r=>r.json()).then(setModelInfo).catch(()=>{}); }
     } catch(e) { setError(`Błąd: ${e}`); }
     finally { setTraining(false); }
@@ -1979,9 +1981,10 @@ function ViewML() {
       {/* Trening */}
       <div style={sCard}>
         <div style={sH}>Trening modelu</div>
-        <button onClick={startTraining} disabled={training || (ds && !ds.ready)} style={{padding:'8px 24px',fontSize:12,fontWeight:700,fontFamily:'var(--mono)',borderRadius:6,border:'1px solid var(--blue)',background:training?'transparent':'var(--blue-dim)',color:'var(--blue)',cursor:training||( ds&&!ds.ready)?'not-allowed':'pointer',opacity:training||(ds&&!ds.ready)?0.5:1}}>
-          {training ? 'Trenuję…' : 'Trenuj model'}
+        <button onClick={startTraining} disabled={training || (ds && !ds.ready)} style={{padding:'8px 24px',fontSize:12,fontWeight:700,fontFamily:'var(--mono)',borderRadius:6,border:'1px solid var(--blue)',background:training?'transparent':'var(--blue-dim)',color:'var(--blue)',cursor:training||(ds&&!ds.ready)?'not-allowed':'pointer',opacity:training||(ds&&!ds.ready)?0.5:1}}>
+          {training ? 'Trenuję… (może potrwać do 30s)' : 'Trenuj model'}
         </button>
+        {training && <div style={{marginTop:8,fontSize:11,color:'var(--text3)',fontFamily:'var(--mono)'}}>Trening w toku — cross-validation na {ds?.trainable||'?'} setupach…</div>}
 
         {trainResult && trainResult.status==='ok' && (
           <div style={{marginTop:20}}>
