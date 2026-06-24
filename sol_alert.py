@@ -2825,14 +2825,15 @@ _last_breakout_tg_regime: str = ""
 def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float, is_impulse: bool) -> str:
     """
     Wykonuje detekcję Algo2 i zapis setupów. Wywoływana z main() i breakout_scan().
-    Zakłada, że throttle został już sprawdzony i _last_algo2_ts zaktualizowany przez wywołującego.
 
-    Logika zapisu:
-    - force_shadow (np. impulse_aggressive): zawsze shadow=True, bez GPT3, bez Telegrama.
-    - regularne (pozostałe): najlepszy RR → walidacja → GPT3 → real order;
-      gorsze RR → shadow=True dla analizy porównawczej.
+    Flow: zapisz wszystko → filtruj → handluj.
+    1. algo_detect_setups() generuje WSZYSTKICH kandydatów
+    2. ML scoring (jeśli model dostępny)
+    3. Zapisz KAŻDY setup do bazy (shadow, dane treningowe)
+    4. Filtruj: validate_setup() + wariant włączony do live
+    5. Najlepszy kandydat → GPT3 validator → live trade (update w bazie)
 
-    Zwraca: 'rejected' gdy GPT3 Validator odrzucił best (main() powinien wtedy return),
+    Zwraca: 'rejected' gdy GPT3 Validator odrzucił best,
             'saved' / 'no_setups' / 'skipped' / 'duplicate' w pozostałych przypadkach.
     """
     algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
@@ -2853,14 +2854,6 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     if not algo2_setups:
         return "no_setups"
 
-    # Podziel na rejected (ml_data_only), force_shadow (testy) i regularne
-    rejected_setups = [s for s in algo2_setups if s.get("rejected_by_algo")]
-    force_shadow_setups = [s for s in algo2_setups if s.get("force_shadow") and not s.get("rejected_by_algo")]
-    regular_setups = sorted(
-        [s for s in algo2_setups if not s.get("force_shadow") and not s.get("rejected_by_algo")],
-        key=lambda s: s["rr"], reverse=True,
-    )
-
     # ── ML scoring (jeśli model dostępny) ────────────────────────────────────
     try:
         import ml_scorer
@@ -2874,66 +2867,45 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     except Exception as _e:
         print(f"[algo2] ML scoring error: {_e}")
 
-    # ── Rejected setups — zapis jako ml_data_only (bez validate_setup — to dane treningowe) ──
-    for s in rejected_setups:
+    # ── KROK 1: Zapisz WSZYSTKIE setupy do bazy ─────────────────────────────
+    for s in algo2_setups:
         s["reasoning"] = algo2_log
-        save_pending(s, "Algo2", "", current, shadow=True, ml_data_only=True)
+        is_rejected = s.get("rejected_by_algo", False)
+        save_pending(s, "Algo2", "", current, shadow=True,
+                     ml_data_only=is_rejected)
         if s.get("setup_id"):
-            print(f"[algo2] ML data: {s['type']} [{s.get('variant','?')}] #{s['setup_id']} "
-                  f"RR={s.get('rr',0)} reasons={s.get('filter_reasons','')}")
+            tag = "ML data (rejected)" if is_rejected else "shadow"
+            print(f"[algo2] {tag}: {s['type']} [{s.get('variant','?')}] #{s['setup_id']} RR={s.get('rr',0)}")
 
-    # ── Force-shadow setups — zapis bez GPT3 ─────────────────────────────────
-    for s in force_shadow_setups:
-        s["reasoning"] = algo2_log
-        _val_reason = validate_setup(s, "Algo2")
-        if not _val_reason:
-            shadow_s = not _is_type_bitget_enabled(s.get("type", ""), s.get("variant"))
-            save_pending(s, "Algo2", "", current, shadow=shadow_s)
-            if s.get("setup_id"):
-                if shadow_s:
-                    print(f"[algo2] Shadow (test): {s['type']} #{s['setup_id']} RR={s['rr']}")
-                else:
-                    print(f"[algo2] Real order: {s['type']} #{s['setup_id']} RR={s['rr']}")
-                    try:
-                        send_telegram(format_alert("Algo2", s, current, True))
-                    except Exception:
-                        pass
-        else:
-            save_pending(s, "Algo2", _val_reason, current, shadow=True, ml_data_only=True)
-            if s.get("setup_id"):
-                print(f"[algo2] ML data (validate): {s['type']} #{s['setup_id']} — {_val_reason}")
+    # ── KROK 2: Filtruj kandydatów do live handlu ────────────────────────────
+    live_candidates = []
+    for s in algo2_setups:
+        if not s.get("setup_id"):
+            continue
+        if s.get("rejected_by_algo"):
+            continue
+        val_reason = validate_setup(s, "Algo2")
+        if val_reason:
+            db.update_setup(s["setup_id"], ml_data_only=True, rejection=val_reason)
+            print(f"[algo2] #{s['setup_id']} → ml_data_only (validate: {val_reason})")
+            continue
+        if not _is_type_bitget_enabled(s.get("type", ""), s.get("variant")):
+            continue
+        live_candidates.append(s)
 
-    if not regular_setups:
-        return "saved" if any(s.get("setup_id") for s in force_shadow_setups) else "no_setups"
+    if not live_candidates:
+        return "saved"
 
-    # ── Regularne: najlepszy RR → real, gorsze → shadow dla analizy ──────
-    best = regular_setups[0]
-    best["reasoning"] = algo2_log
-
-    for s in regular_setups[1:]:
-        s["reasoning"] = algo2_log
-        _val_reason = validate_setup(s, "Algo2")
-        if not _val_reason:
-            save_pending(s, "Algo2", "", current, shadow=True)
-            if s.get("setup_id"):
-                print(f"[algo2] Shadow (gorszy RR): {s['type']} #{s['setup_id']} RR={s['rr']}")
-        else:
-            save_pending(s, "Algo2", _val_reason, current, shadow=True, ml_data_only=True)
-            if s.get("setup_id"):
-                print(f"[algo2] ML data (validate): {s['type']} #{s['setup_id']} — {_val_reason}")
+    # Sortuj po RR (docelowo: po ml_composite)
+    live_candidates.sort(key=lambda s: s.get("rr", 0), reverse=True)
+    best = live_candidates[0]
 
     level = best["entries"][0]
     dist  = abs(current - level)
-    print(f"[algo2] Best: {best['type']} {best['direction']} W=${level:.2f} (dist=${dist:.2f}) RR={best['rr']}")
+    print(f"[algo2] Best live: {best['type']} {best['direction']} W=${level:.2f} "
+          f"(dist=${dist:.2f}) RR={best['rr']} #{best['setup_id']}")
 
-    rejection = validate_setup(best, "Algo2")
-    if rejection:
-        save_pending(best, "Algo2", rejection, current, shadow=True, ml_data_only=True)
-        if best.get("setup_id"):
-            print(f"[algo2] ML data (validate best): {best['type']} #{best['setup_id']} — {rejection}")
-        return "skipped"
-
-    # ── GPT3 Validator — pomijany w IMPULSE (szybkość > jakość) ──────────
+    # ── KROK 3: GPT3 Validator — pomijany w IMPULSE ─────────────────────────
     val_result = None
     if ENABLE_GPT3_VALIDATOR and not is_impulse:
         val_atr    = calc_atr(candles_m15)
@@ -2952,33 +2924,32 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
             val_conf   = val_result.get("confidence", 0)
             print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
             if not approved:
-                save_pending(best, "Algo2", f"GPT3-val odrzucił: {val_reason}", current, shadow=True)
-                if best.get("setup_id"):
-                    db.update_setup(best["setup_id"], llm_scores={
-                        "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
-                    })
-                    db.resolve_setup(best["setup_id"], "odrzucony_validator", None, None, None, None)
-                print(f"[algo2] Setup odrzucony przez GPT3 Validator.")
+                db.update_setup(best["setup_id"], llm_scores={
+                    "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
+                })
+                db.resolve_setup(best["setup_id"], "odrzucony_validator", None, None, None, None)
+                print(f"[algo2] Setup #{best['setup_id']} odrzucony przez GPT3 Validator.")
                 return "rejected"
         else:
             print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
     elif is_impulse:
         print("[algo2] IMPULSE — GPT3 Validator pominięty.")
-    # ── koniec walidatora ─────────────────────────────────────────────────
 
-    is_shadow = ALGO2_SHADOW_MODE and not _is_type_bitget_enabled(best.get("type", ""), best.get("variant"))
-    save_pending(best, "Algo2", "", current, shadow=is_shadow)
-    if best.get("setup_id"):
-        if not is_shadow:
-            send_telegram(format_alert("Algo2", best, current, True))
-        if val_result and not is_shadow:
-            db.update_setup(best["setup_id"], llm_scores={
-                "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
-            })
-        return "saved"
-    else:
-        print("[algo2] Duplikat pominięty — setup już istnieje.")
-        return "duplicate"
+    # ── KROK 4: Promuj best do live handlu ───────────────────────────────────
+    is_shadow = bool(ALGO2_SHADOW_MODE)
+    update_fields = {"shadow": is_shadow, "ml_data_only": False}
+    if not is_shadow:
+        update_fields["status"] = "pending"
+        update_fields["entry_hit_at"] = None
+    db.update_setup(best["setup_id"], **update_fields)
+    if not is_shadow:
+        send_telegram(format_alert("Algo2", best, current, True))
+    if val_result and not is_shadow:
+        db.update_setup(best["setup_id"], llm_scores={
+            "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
+        })
+    print(f"[algo2] #{best['setup_id']} → {'shadow' if is_shadow else 'LIVE'}")
+    return "saved"
 
 
 def breakout_scan():
