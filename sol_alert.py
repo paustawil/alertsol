@@ -2903,19 +2903,8 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     print(f"[algo2] Live candidates: {len(live_candidates)} "
           + ", ".join(f"{s['type']}[{s.get('variant','?')}]" for s in live_candidates))
 
-    # ── KROK 3+4: Waliduj i promuj WSZYSTKICH kandydatów (max 1 per wariant) ─
+    # ── KROK 3: Promuj WSZYSTKICH kandydatów (max 1 per wariant) ────────────
     is_shadow = bool(ALGO2_SHADOW_MODE)
-    val_ctx = None
-    if ENABLE_GPT3_VALIDATOR and not is_impulse:
-        val_atr = calc_atr(candles_m15)
-        val_sup = regime.get("support")
-        val_res = regime.get("resistance")
-        val_rng = regime.get("range_size", 0)
-        val_pct = max(0.0, min(100.0, (current - val_sup) / val_rng * 100)) if val_rng and val_sup else 50.0
-        val_ctx = dict(atr=val_atr, support=val_sup, resistance=val_res,
-                       price_pct_in_range=val_pct)
-    elif is_impulse:
-        print("[algo2] IMPULSE — GPT3 Validator pominięty.")
 
     promoted = 0
     rejected_count = 0
@@ -2925,9 +2914,27 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         print(f"[algo2] Candidate: {cand['type']} [{cand.get('variant','?')}] "
               f"{cand['direction']} W=${level:.2f} (dist=${dist:.2f}) RR={cand.get('rr',0)} #{cand['setup_id']}")
 
-        # GPT3 Validator per kandydat (nie-IMPULSE)
-        val_result = None
-        if val_ctx is not None:
+        update_fields = {"shadow": is_shadow, "ml_data_only": False}
+        if not is_shadow:
+            update_fields["status"] = "pending"
+            update_fields["entry_hit_at"] = None
+        db.update_setup(cand["setup_id"], **update_fields)
+        print(f"[algo2] #{cand['setup_id']} → {'shadow' if is_shadow else 'LIVE'}")
+        promoted += 1
+
+    # ── KROK 4: GPT3 Validator — tylko live (nie-shadow), nie-IMPULSE ────────
+    if promoted and not is_shadow and ENABLE_GPT3_VALIDATOR and not is_impulse:
+        val_atr = calc_atr(candles_m15)
+        val_sup = regime.get("support")
+        val_res = regime.get("resistance")
+        val_rng = regime.get("range_size", 0)
+        val_pct = max(0.0, min(100.0, (current - val_sup) / val_rng * 100)) if val_rng and val_sup else 50.0
+        val_ctx = dict(atr=val_atr, support=val_sup, resistance=val_res,
+                       price_pct_in_range=val_pct)
+
+        for cand in live_candidates:
+            if not cand.get("setup_id"):
+                continue
             val_result = call_gpt3_validator(
                 cand, candles_m15, candles_h1, current, **val_ctx,
             )
@@ -2935,7 +2942,7 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
                 approved   = val_result.get("approve", True)
                 val_reason = val_result.get("reason", "")
                 val_conf   = val_result.get("confidence", 0)
-                print(f"[gpt3-val] {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
+                print(f"[gpt3-val] #{cand['setup_id']} {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
                 if not approved:
                     db.update_setup(cand["setup_id"], llm_scores={
                         "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
@@ -2943,22 +2950,18 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
                     db.resolve_setup(cand["setup_id"], "odrzucony_validator", None, None, None, None)
                     rejected_count += 1
                     continue
+                db.update_setup(cand["setup_id"], llm_scores={
+                    "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
+                })
             else:
-                print("[gpt3-val] Brak odpowiedzi — kontynuuję bez walidacji.")
-
-        update_fields = {"shadow": is_shadow, "ml_data_only": False}
-        if not is_shadow:
-            update_fields["status"] = "pending"
-            update_fields["entry_hit_at"] = None
-        db.update_setup(cand["setup_id"], **update_fields)
-        if not is_shadow:
+                print(f"[gpt3-val] #{cand['setup_id']} Brak odpowiedzi — kontynuuję bez walidacji.")
             send_telegram(format_alert("Algo2", cand, current, True))
-        if val_result and not is_shadow:
-            db.update_setup(cand["setup_id"], llm_scores={
-                "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
-            })
-        print(f"[algo2] #{cand['setup_id']} → {'shadow' if is_shadow else 'LIVE'}")
-        promoted += 1
+    elif promoted and not is_shadow:
+        if is_impulse:
+            print("[algo2] IMPULSE — GPT3 Validator pominięty.")
+        for cand in live_candidates:
+            if cand.get("setup_id"):
+                send_telegram(format_alert("Algo2", cand, current, True))
 
     print(f"[algo2] Cykl zakończony: {promoted} promowanych, {rejected_count} odrzuconych przez validator")
     return "saved" if promoted > 0 else ("rejected" if rejected_count > 0 else "saved")
