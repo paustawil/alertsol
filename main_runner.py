@@ -3333,18 +3333,18 @@ def api_ml_train():
     _ml_training_lock = True
     try:
         import ml_training
-        logger.info("[ML] Starting model training…")
+        log.info("[ML] Starting model training…")
         result = ml_training.run_training()
         if result.get("error"):
-            logger.warning("[ML] Training error: %s", result["error"])
+            log.warning("[ML] Training error: %s", result["error"])
         else:
-            logger.info("[ML] Training complete: %s samples, acc=%.1f%%, auc=%.3f",
+            log.info("[ML] Training complete: %s samples, acc=%.1f%%, auc=%.3f",
                         result.get("training_data", {}).get("used_for_training", 0),
                         result.get("model_quality", {}).get("accuracy", 0),
                         result.get("model_quality", {}).get("auc", 0))
         return result
     except BaseException as e:
-        logger.exception("[ML] Training exception: %s", e)
+        log.exception("[ML] Training exception: %s", e)
         return {"status": "error", "message": str(e)}
     finally:
         _ml_training_lock = False
