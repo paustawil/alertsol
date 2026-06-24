@@ -84,6 +84,12 @@ def _fmt_qty(qty: float) -> str:
 def _fmt_price(p: float) -> str:
     return f"{p:.{PRICE_DEC}f}"
 
+def _sid_int(sid) -> int | None:
+    try:
+        return int(sid)
+    except (ValueError, TypeError):
+        return None
+
 def _load_pending() -> list[dict]:
     return db.load_pending()
 
@@ -428,7 +434,7 @@ def _place_entry_plan_orders(
     if not plan2_oid:
         # Cofnij plan1 żeby nie zostawić samotnego half-qty plan order
         log.error(f"[exchange] #{sid} plan2 nieudany — anuluję plan1 {plan1_oid}")
-        _cancel_order(client, plan1_oid, "normal_plan")
+        _cancel_order(client, plan1_oid, "normal_plan", setup_id=sid, reason="plan2_failed")
         return None, None
 
     return plan1_oid, plan2_oid
@@ -718,7 +724,8 @@ def _tpsl_order_status(client: BitgetClient, order_id: str) -> str:
 
 # ── Anulowanie i modyfikacja zleceń ───────────────────────────────────────────
 
-def _cancel_order(client: BitgetClient, order_id: str, plan_type: str):
+def _cancel_order(client: BitgetClient, order_id: str, plan_type: str,
+                   setup_id: int | None = None, reason: str | None = None):
     """Anuluje zlecenie plan/tpsl po orderId."""
     try:
         resp = client.post("/api/v2/mix/order/cancel-plan-order", {
@@ -729,8 +736,20 @@ def _cancel_order(client: BitgetClient, order_id: str, plan_type: str):
         })
         if resp.get("code") == "00000":
             print(f"[exchange] Anulowano {plan_type} order {order_id}")
+            db.log_exchange_event(setup_id, "cancel_order", {
+                "order_id": order_id,
+                "plan_type": plan_type,
+                "reason": reason or "unknown",
+            })
         else:
             log.warning(f"[exchange] cancel {order_id}: code={resp.get('code')} msg={resp.get('msg')}")
+            db.log_exchange_event(setup_id, "cancel_order_fail", {
+                "order_id": order_id,
+                "plan_type": plan_type,
+                "reason": reason or "unknown",
+                "code": resp.get("code"),
+                "msg": resp.get("msg"),
+            })
     except Exception as e:
         log.warning(f"[exchange] cancel {order_id}: {e}")
 
@@ -947,7 +966,7 @@ def close_open_position(setup_id: int) -> bool:
         (sl_oid, "loss_plan"),    (sl2_oid, "loss_plan"),
     ]:
         if oid:
-            _cancel_order(client, oid, plan_type)
+            _cancel_order(client, oid, plan_type, setup_id=setup_id, reason="close_position")
 
     fee_close = _get_fill_fees(client, close_oid) if close_oid else 0.0
     upd = dict(
@@ -1004,7 +1023,7 @@ def move_sl_to_entry(setup_id: int, new_sl_price: float) -> bool:
     if new_sl_oid:
         sl_check = _tpsl_order_status(client, new_sl_oid)
         if sl_check == "live":
-            _cancel_order(client, sl_oid, "loss_plan")
+            _cancel_order(client, sl_oid, "loss_plan", setup_id=setup_id, reason="sl_modify_replace")
             db.update_setup(setup_id, exchange_sl_oid=new_sl_oid)
             print(f"[exchange] move_sl_to_entry #{setup_id}: nowy SL → {new_sl_price} (zweryfikowany, stary anulowany)")
             db.log_exchange_event(setup_id, "sl_fallback_ok", {
@@ -1137,9 +1156,9 @@ def _cancel_other_pending_on_position_open(client, opened_sid: int, pending: lis
             continue
         if plan_oid and plan_oid != "PENDING":
             print(f"[exchange] SINGLE_POS: #{sid} → anuluję plan order {plan_oid} (pozycja #{opened_sid} otwarta)")
-            _cancel_order(client, plan_oid, "normal_plan")
+            _cancel_order(client, plan_oid, "normal_plan", setup_id=sid, reason=f"single_pos_mode:#{opened_sid}")
             if plan2_oid:
-                _cancel_order(client, plan2_oid, "normal_plan")
+                _cancel_order(client, plan2_oid, "normal_plan", setup_id=sid, reason=f"single_pos_mode:#{opened_sid}")
             s["exchange_plan_oid"]  = None
             s["exchange_plan2_oid"] = None
             s["exchange_done"]      = True
@@ -1238,7 +1257,7 @@ def _sync_inner():
                 modified = True
                 continue
             print(f"[exchange] {label}: anulowany → cancel plan order {plan_oid}")
-            _cancel_order(client, plan_oid, "normal_plan")
+            _cancel_order(client, plan_oid, "normal_plan", setup_id=_sid_int(sid), reason="setup_shadow_or_cancelled")
             s["exchange_plan_oid"] = None
             s["exchange_done"]     = True
             modified = True
@@ -1318,7 +1337,7 @@ def _sync_inner():
             if status1 == "cancelled":
                 print(f"[exchange] {label}: plan1 anulowany z zewnątrz — anuluję plan2 i zamykam setup")
                 if plan2_oid:
-                    _cancel_order(client, plan2_oid, "normal_plan")
+                    _cancel_order(client, plan2_oid, "normal_plan", setup_id=_sid_int(sid), reason="plan1_cancelled_externally")
                 s["exchange_plan_oid"]  = None
                 s["exchange_plan2_oid"] = None
                 s["exchange_done"]      = True
@@ -1426,7 +1445,7 @@ def _sync_inner():
                     print(f"[exchange] {label}: SL1 wykonany — anuluj TP1, TP2; zamykam resztę market")
                     for oid, pt in [(tp1_oid, "profit_plan"), (tp2_oid, "profit_plan")]:
                         if oid:
-                            _cancel_order(client, oid, pt)
+                            _cancel_order(client, oid, pt, setup_id=_sid_int(sid), reason="sl1_executed")
                     # Zamknij drugą połowę market zamiast polegać na SL2
                     half_qty_str = (s.get("exchange_qty_half") or "0").replace(",", ".")
                     half_qty_val = float(half_qty_str)
@@ -1453,7 +1472,7 @@ def _sync_inner():
                         except Exception as e:
                             log.warning(f"[exchange] {label}: błąd zamykania drugiej połowy: {e}")
                     if sl2_oid:
-                        _cancel_order(client, sl2_oid, "loss_plan")
+                        _cancel_order(client, sl2_oid, "loss_plan", setup_id=_sid_int(sid), reason="sl1_executed")
                     s["exchange_sl_oid"]  = None
                     s["exchange_sl2_oid"] = None
                     s["exchange_tp1_oid"] = None
@@ -1487,7 +1506,7 @@ def _sync_inner():
                         log.warning(f"[exchange] {label}: SL1 i TP1 anulowane ręcznie — zamykam setup")
                         for oid, pt in [(tp2_oid, "profit_plan"), (sl2_oid, "loss_plan")]:
                             if oid:
-                                _cancel_order(client, oid, pt)
+                                _cancel_order(client, oid, pt, setup_id=_sid_int(sid), reason="sl1_tp1_cancelled_manual")
                         s["exchange_sl_oid"]  = None
                         s["exchange_tp1_oid"] = None
                         s["exchange_tp2_oid"] = None
@@ -1536,7 +1555,7 @@ def _sync_inner():
                     if s.get("tp_strategy") == "tp1_only":
                         # Cała pozycja zamknięta na TP1 — anuluj SL1 i zakończ setup
                         if sl_oid:
-                            _cancel_order(client, sl_oid, "loss_plan")
+                            _cancel_order(client, sl_oid, "loss_plan", setup_id=_sid_int(sid), reason="tp1_only_executed")
                         pnl_usd = None
                         if avg_entry and tp1_price and full_qty_f:
                             sign    = 1 if s.get("direction") == "long" else -1
@@ -1588,7 +1607,7 @@ def _sync_inner():
                                 sl2_check = _tpsl_order_status(client, placed_sl2)
                                 if sl2_check == "live":
                                     if sl2_oid and sl2_alive:
-                                        _cancel_order(client, sl2_oid, "loss_plan")
+                                        _cancel_order(client, sl2_oid, "loss_plan", setup_id=_sid_int(sid), reason="sl2_fallback_replace")
                                     new_sl2_oid = placed_sl2
                                     sl2_secured = True
                                     print(f"[exchange] {label}: nowy SL2 → {placed_sl2} @ {sl_new} (zweryfikowany, stary anulowany)")
@@ -1612,7 +1631,7 @@ def _sync_inner():
                     # Anuluj SL1 DOPIERO po zabezpieczeniu SL2
                     if sl2_secured:
                         if sl_oid and sl1_alive:
-                            _cancel_order(client, sl_oid, "loss_plan")
+                            _cancel_order(client, sl_oid, "loss_plan", setup_id=_sid_int(sid), reason="tp1_executed_sl_to_be")
                         s["exchange_sl_oid"] = None
                     else:
                         # SL2 nie zabezpieczony — SL1 pozostaje jako awaryjne zabezpieczenie
@@ -1696,7 +1715,7 @@ def _sync_inner():
                     tps_list  = s.get("tps") or []
                     tp2_price = float(tps_list[1]) if len(tps_list) > 1 else None
                     if sl2_oid:
-                        _cancel_order(client, sl2_oid, "loss_plan")
+                        _cancel_order(client, sl2_oid, "loss_plan", setup_id=_sid_int(sid), reason="tp2_executed")
                     s["exchange_tp2_oid"] = None
                     s["exchange_sl2_oid"] = None
                     s["exchange_done"]    = True
@@ -1728,7 +1747,7 @@ def _sync_inner():
                 print(f"[exchange] {label}: SL2-BE status = {sl2_status}")
                 if sl2_status == "executed":
                     if tp2_oid:
-                        _cancel_order(client, tp2_oid, "profit_plan")
+                        _cancel_order(client, tp2_oid, "profit_plan", setup_id=_sid_int(sid), reason="sl2_be_executed")
                     s["exchange_tp2_oid"] = None
                     s["exchange_sl2_oid"] = None
                     s["exchange_done"]    = True
@@ -1790,7 +1809,7 @@ def _sync_inner():
         oid = s["exchange_plan_oid"]
         sid = s["setup_id"]
         print(f"[exchange] #{sid}: wygasł bez wejścia → cancel plan order {oid}")
-        _cancel_order(client, oid, "normal_plan")
+        _cancel_order(client, oid, "normal_plan", setup_id=sid, reason="entry_timeout_resolved")
         db.mark_exchange_done(sid)
 
 
