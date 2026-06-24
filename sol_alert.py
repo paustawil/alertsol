@@ -2923,6 +2923,8 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         promoted += 1
 
     # ── KROK 4: GPT3 Validator — tylko live (nie-shadow), nie-IMPULSE ────────
+    # Odrzucone przez validator: cofnięte do shadow (dane treningowe), bez Telegrama.
+    # Zatwierdzone: zostają live + Telegram.
     if promoted and not is_shadow and ENABLE_GPT3_VALIDATOR and not is_impulse:
         val_atr = calc_atr(candles_m15)
         val_sup = regime.get("support")
@@ -2944,10 +2946,10 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
                 val_conf   = val_result.get("confidence", 0)
                 print(f"[gpt3-val] #{cand['setup_id']} {'APPROVE' if approved else 'REJECT'} ({val_conf}%) — {val_reason}")
                 if not approved:
-                    db.update_setup(cand["setup_id"], llm_scores={
-                        "gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}
-                    })
-                    db.resolve_setup(cand["setup_id"], "odrzucony_validator", None, None, None, None)
+                    db.update_setup(cand["setup_id"],
+                        shadow=True,
+                        llm_scores={"gpt3_validator": {"confidence": val_conf, "approved": False, "reason": val_reason}},
+                    )
                     rejected_count += 1
                     continue
                 db.update_setup(cand["setup_id"], llm_scores={
@@ -2964,7 +2966,7 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
                 send_telegram(format_alert("Algo2", cand, current, True))
 
     print(f"[algo2] Cykl zakończony: {promoted} promowanych, {rejected_count} odrzuconych przez validator")
-    return "saved" if promoted > 0 else ("rejected" if rejected_count > 0 else "saved")
+    return "saved"
 
 
 def breakout_scan():
