@@ -3273,6 +3273,20 @@ def api_ml_model_info():
         info = ml_scorer.get_model_info()
         if info is None:
             return {"status": "no_model", "message": "Model nie został jeszcze wytrenowany."}
+        feature_names_pl = {
+            "rr": "Risk:Reward", "score": "Siła reżimu",
+            "type_enc": "Typ setupu", "direction_enc": "Kierunek (long/short)",
+            "variant_enc": "Wariant", "trigger_enc": "Entry trigger",
+            "hour": "Godzina", "day_of_week": "Dzień tygodnia",
+            "sl_distance": "Odległość SL", "tp1_distance": "Odległość TP1",
+            "sl_after_tp1_dist": "Odległość SL po TP1",
+        }
+        importances = info.get("feature_importances", {})
+        sorted_imp = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+        top_features = [
+            {"name": feature_names_pl.get(k, k), "key": k, "importance": v}
+            for k, v in sorted_imp[:10]
+        ]
         return {
             "status": "ok",
             "trained_at": info.get("trained_at"),
@@ -3282,7 +3296,8 @@ def api_ml_model_info():
             "features": len(info.get("feature_cols", [])),
             "has_market_context": info.get("has_market_context", False),
             "avg_metrics": info.get("avg_metrics"),
-            "feature_importances": info.get("feature_importances"),
+            "feature_importances": importances,
+            "top_features": top_features,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -3348,6 +3363,108 @@ def api_ml_train():
         return {"status": "error", "message": str(e)}
     finally:
         _ml_training_lock = False
+
+
+@app.get("/api/ml/feature-analysis")
+def api_ml_feature_analysis():
+    """Analiza win rate w rozbiciu na kluczowe cechy."""
+    try:
+        import pandas as pd
+        import numpy as np
+        import ml_training
+
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            return {"status": "error", "message": "Brak DATABASE_URL"}
+
+        df = ml_training.export_training_data(db_url)
+        if df.empty:
+            return {"status": "error", "message": "Brak danych"}
+
+        win_results = ml_training.WIN_RESULTS
+        loss_results = ml_training.LOSS_RESULTS
+        df = df[df["effective_result"].isin(win_results | loss_results)].copy()
+        if df.empty:
+            return {"status": "error", "message": "Brak setupów win/loss"}
+
+        df["win"] = df["effective_result"].isin(win_results).astype(int)
+        df["hour"] = pd.to_datetime(df["alert_time"]).dt.hour
+        df["day_of_week"] = pd.to_datetime(df["alert_time"]).dt.dayofweek
+        df["entry_price"] = df["entries"].apply(
+            lambda e: float(e[0]) if isinstance(e, list) and e else np.nan
+        )
+        df["tp1_price"] = df["tps"].apply(
+            lambda t: float(t[0]) if isinstance(t, list) and t else np.nan
+        )
+        df["tp1_distance"] = abs(df["tp1_price"] - df["entry_price"])
+        df["sl_distance"] = abs(df["entry_price"] - pd.to_numeric(df["sl"], errors="coerce"))
+        df["rr"] = pd.to_numeric(df["rr"], errors="coerce")
+
+        day_names = {0: "Pon", 1: "Wt", 2: "Śr", 3: "Czw", 4: "Pt", 5: "Sob", 6: "Ndz"}
+
+        def group_stats(series, label_map=None):
+            grouped = df.groupby(series)["win"].agg(["sum", "count"])
+            grouped.columns = ["wins", "total"]
+            grouped["losses"] = grouped["total"] - grouped["wins"]
+            grouped["win_rate"] = (grouped["wins"] / grouped["total"] * 100).round(1)
+            rows = []
+            for val, row in grouped.sort_index().iterrows():
+                display = label_map[val] if label_map and val in label_map else str(val)
+                rows.append({"value": display, "wins": int(row["wins"]),
+                             "losses": int(row["losses"]), "total": int(row["total"]),
+                             "win_rate": float(row["win_rate"])})
+            return rows
+
+        def bucket_stats(col, n_bins=5, label_fmt="{:.2f}"):
+            s = df[col].dropna()
+            if len(s) < 10:
+                return []
+            try:
+                bins = pd.qcut(s, n_bins, duplicates="drop")
+            except ValueError:
+                return []
+            grouped = df.loc[s.index].groupby(bins)["win"].agg(["sum", "count"])
+            grouped.columns = ["wins", "total"]
+            grouped["losses"] = grouped["total"] - grouped["wins"]
+            grouped["win_rate"] = (grouped["wins"] / grouped["total"] * 100).round(1)
+            rows = []
+            for interval, row in grouped.iterrows():
+                label = f"{interval.left:.2f} – {interval.right:.2f}"
+                rows.append({"value": label, "wins": int(row["wins"]),
+                             "losses": int(row["losses"]), "total": int(row["total"]),
+                             "win_rate": float(row["win_rate"])})
+            return rows
+
+        analyses = {}
+        analyses["hour"] = {"label": "Godzina", "data": group_stats(df["hour"])}
+        analyses["day_of_week"] = {"label": "Dzień tygodnia", "data": group_stats(df["day_of_week"], day_names)}
+        analyses["direction"] = {"label": "Kierunek", "data": group_stats(df["direction"])}
+        analyses["type"] = {"label": "Typ setupu", "data": group_stats(df["type"])}
+        analyses["variant"] = {"label": "Wariant", "data": group_stats(df["variant"])}
+
+        tp1_data = bucket_stats("tp1_distance")
+        if tp1_data:
+            analyses["tp1_distance"] = {"label": "Odległość TP1", "data": tp1_data}
+        sl_data = bucket_stats("sl_distance")
+        if sl_data:
+            analyses["sl_distance"] = {"label": "Odległość SL", "data": sl_data}
+        rr_data = bucket_stats("rr")
+        if rr_data:
+            analyses["rr"] = {"label": "Risk:Reward", "data": rr_data}
+
+        total = len(df)
+        wins = int(df["win"].sum())
+        return {
+            "status": "ok",
+            "total": total,
+            "wins": wins,
+            "losses": total - wins,
+            "avg_win_rate": round(wins / total * 100, 1),
+            "analyses": analyses,
+        }
+    except Exception as e:
+        log.exception("[ML] Feature analysis error: %s", e)
+        return {"status": "error", "message": str(e)}
 
 
 @app.get("/api/simulator")

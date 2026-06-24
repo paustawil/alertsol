@@ -1918,6 +1918,8 @@ function ViewML() {
   const [training, setTraining] = React.useState(false);
   const [trainResult, setTrainResult] = React.useState(null);
   const [error, setError] = React.useState(null);
+  const [featureAnalysis, setFeatureAnalysis] = React.useState(null);
+  const [loadingAnalysis, setLoadingAnalysis] = React.useState(false);
 
   React.useEffect(() => {
     fetch('/api/ml/training-data-status').then(r=>r.json()).then(setDataStatus).catch(()=>setError('Błąd ładowania statusu danych'));
@@ -2048,7 +2050,7 @@ function ViewML() {
               <span>Market context: <span style={{color:mi.has_market_context?'var(--green)':'var(--text3)'}}>{mi.has_market_context?'tak':'nie'}</span></span>
             </div>
             {mi.avg_metrics && (
-              <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+              <div style={{display:'flex',gap:16,flexWrap:'wrap',marginBottom:16}}>
                 <span>Accuracy: <span style={{color:'var(--text1)'}}>{(mi.avg_metrics.accuracy*100).toFixed(1)}%</span></span>
                 <span>Precision: <span style={{color:'var(--text1)'}}>{(mi.avg_metrics.precision*100).toFixed(1)}%</span></span>
                 <span>Recall: <span style={{color:'var(--text1)'}}>{(mi.avg_metrics.recall*100).toFixed(1)}%</span></span>
@@ -2056,6 +2058,68 @@ function ViewML() {
                 <span>AUC: <span style={{color:'var(--text1)'}}>{mi.avg_metrics.auc?.toFixed(3)}</span></span>
               </div>
             )}
+            {mi.top_features && mi.top_features.length > 0 && (
+              <div>
+                <div style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)',marginBottom:8}}>Najważniejsze czynniki</div>
+                <div style={{fontSize:11,fontFamily:'var(--mono)'}}>
+                  {mi.top_features.map((f,i) => {
+                    const maxImp = mi.top_features[0].importance || 1;
+                    const pct = Math.round(f.importance / maxImp * 100);
+                    return (
+                      <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                        <span style={{width:180,color:'var(--text2)',flexShrink:0}}>{f.name}</span>
+                        <div style={{flex:1,height:6,background:'var(--bg1)',borderRadius:3,overflow:'hidden'}}>
+                          <div style={{width:`${pct}%`,height:'100%',background:'var(--blue)',borderRadius:3}}/>
+                        </div>
+                        <span style={{width:40,textAlign:'right',color:'var(--text3)',fontSize:10}}>{f.importance}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Analiza cech */}
+      <div style={sCard}>
+        <div style={sH}>Analiza cech — co przewiduje wygraną?</div>
+        <button onClick={() => {
+          setLoadingAnalysis(true); setError(null);
+          fetch('/api/ml/feature-analysis').then(r=>r.json())
+            .then(d => { if(d.status==='error') setError(d.message); else setFeatureAnalysis(d); })
+            .catch(e => setError(`Błąd: ${e}`))
+            .finally(() => setLoadingAnalysis(false));
+        }} disabled={loadingAnalysis} style={{padding:'8px 24px',fontSize:12,fontWeight:700,fontFamily:'var(--mono)',borderRadius:6,border:'1px solid var(--blue)',background:loadingAnalysis?'transparent':'var(--blue-dim)',color:'var(--blue)',cursor:loadingAnalysis?'not-allowed':'pointer',opacity:loadingAnalysis?0.5:1}}>
+          {loadingAnalysis ? 'Ładowanie…' : 'Załaduj analizę'}
+        </button>
+        {featureAnalysis && featureAnalysis.status==='ok' && (
+          <div style={{marginTop:20}}>
+            <div style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--text2)',marginBottom:16}}>
+              Setupy: {featureAnalysis.total} ({featureAnalysis.wins}W / {featureAnalysis.losses}L) · Średni win rate: {featureAnalysis.avg_win_rate}%
+            </div>
+            {Object.entries(featureAnalysis.analyses).map(([key, analysis]) => (
+              <div key={key} style={{marginBottom:20}}>
+                <div style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)',marginBottom:8}}>{analysis.label}</div>
+                <div style={{fontSize:11,fontFamily:'var(--mono)'}}>
+                  {analysis.data.map((row, i) => {
+                    const barColor = row.win_rate >= 40 ? 'var(--green)' : row.win_rate >= 25 ? 'var(--yellow, #f0b429)' : 'var(--red)';
+                    return (
+                      <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:3}}>
+                        <span style={{width:140,color:'var(--text2)',flexShrink:0,textOverflow:'ellipsis',overflow:'hidden',whiteSpace:'nowrap'}}>{row.value}</span>
+                        <div style={{flex:1,height:6,background:'var(--bg1)',borderRadius:3,overflow:'hidden'}}>
+                          <div style={{width:`${row.win_rate}%`,height:'100%',background:barColor,borderRadius:3}}/>
+                        </div>
+                        <span style={{width:100,textAlign:'right',color:'var(--text3)',fontSize:10,flexShrink:0}}>
+                          {row.win_rate}% ({row.wins}W/{row.losses}L)
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
