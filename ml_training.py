@@ -26,7 +26,7 @@ from sklearn.metrics import (
 
 try:
     import lightgbm as lgb
-except ImportError:
+except (ImportError, OSError):
     lgb = None
 
 try:
