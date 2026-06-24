@@ -2885,7 +2885,8 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     # ── Force-shadow setups — zapis bez GPT3 ─────────────────────────────────
     for s in force_shadow_setups:
         s["reasoning"] = algo2_log
-        if not validate_setup(s, "Algo2"):
+        _val_reason = validate_setup(s, "Algo2")
+        if not _val_reason:
             shadow_s = not _is_type_bitget_enabled(s.get("type", ""), s.get("variant"))
             save_pending(s, "Algo2", "", current, shadow=shadow_s)
             if s.get("setup_id"):
@@ -2897,6 +2898,10 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
                         send_telegram(format_alert("Algo2", s, current, True))
                     except Exception:
                         pass
+        else:
+            save_pending(s, "Algo2", _val_reason, current, shadow=True, ml_data_only=True)
+            if s.get("setup_id"):
+                print(f"[algo2] ML data (validate): {s['type']} #{s['setup_id']} — {_val_reason}")
 
     if not regular_setups:
         return "saved" if any(s.get("setup_id") for s in force_shadow_setups) else "no_setups"
@@ -2907,10 +2912,15 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
 
     for s in regular_setups[1:]:
         s["reasoning"] = algo2_log
-        if not validate_setup(s, "Algo2"):
+        _val_reason = validate_setup(s, "Algo2")
+        if not _val_reason:
             save_pending(s, "Algo2", "", current, shadow=True)
             if s.get("setup_id"):
                 print(f"[algo2] Shadow (gorszy RR): {s['type']} #{s['setup_id']} RR={s['rr']}")
+        else:
+            save_pending(s, "Algo2", _val_reason, current, shadow=True, ml_data_only=True)
+            if s.get("setup_id"):
+                print(f"[algo2] ML data (validate): {s['type']} #{s['setup_id']} — {_val_reason}")
 
     level = best["entries"][0]
     dist  = abs(current - level)
@@ -2918,6 +2928,9 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
 
     rejection = validate_setup(best, "Algo2")
     if rejection:
+        save_pending(best, "Algo2", rejection, current, shadow=True, ml_data_only=True)
+        if best.get("setup_id"):
+            print(f"[algo2] ML data (validate best): {best['type']} #{best['setup_id']} — {rejection}")
         return "skipped"
 
     # ── GPT3 Validator — pomijany w IMPULSE (szybkość > jakość) ──────────
