@@ -161,7 +161,7 @@ def build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, list[str]
         "variant_map": variant_map,
         "direction_map": direction_map,
         "trigger_map": trigger_map,
-        "has_market_context": has_mc,
+        "has_market_context": bool(has_mc),
         "trained_at": datetime.utcnow().isoformat(),
         "n_samples": len(df),
         "n_wins": int(df["label"].sum()),
