@@ -653,6 +653,7 @@ function Icon({ name, active }) {
   if(name==='algo') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><circle cx="8" cy="8" r="2.5"/><circle cx="8" cy="8" r="5.5" strokeDasharray="2,2"/><line x1="8" y1="2.5" x2="8" y2="1"/><line x1="8" y1="13.5" x2="8" y2="15"/><line x1="2.5" y1="8" x2="1" y2="8"/><line x1="13.5" y1="8" x2="15" y2="8"/></svg>;
   if(name==='hist') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><rect x="2.5" y="1.5" width="11" height="13" rx="1.5"/><line x1="5" y1="5.5" x2="11" y2="5.5"/><line x1="5" y1="8.5" x2="11" y2="8.5"/><line x1="5" y1="11.5" x2="8" y2="11.5"/></svg>;
   if(name==='sim') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><path d="M2 12 L5 6 L8 9 L11 3 L14 7"/><line x1="2" y1="14" x2="14" y2="14"/><circle cx="2" cy="12" r="1" fill={c} stroke="none"/><circle cx="14" cy="7" r="1" fill={c} stroke="none"/></svg>;
+  if(name==='ml') return <svg className="d-nav-icon" viewBox="0 0 16 16" fill="none" stroke={c} strokeWidth="1.4"><circle cx="4" cy="4" r="1.5"/><circle cx="12" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="8" cy="8" r="2"/><line x1="5.3" y1="5.3" x2="6.5" y2="6.5"/><line x1="10.7" y1="5.3" x2="9.5" y2="6.5"/><line x1="5.3" y1="10.7" x2="6.5" y2="9.5"/><line x1="10.7" y1="10.7" x2="9.5" y2="9.5"/></svg>;
   return null;
 }
 /* ── Mobile nav icons ── */
@@ -662,6 +663,7 @@ const NAV_ICONS = {
   algo: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><circle cx="11" cy="11" r="3"/><circle cx="11" cy="11" r="7" strokeDasharray="2,2"/><line x1="11" y1="4" x2="11" y2="2"/><line x1="11" y1="18" x2="11" y2="20"/><line x1="4" y1="11" x2="2" y2="11"/><line x1="18" y1="11" x2="20" y2="11"/></svg>,
   hist: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><rect x="4" y="3" width="14" height="16" rx="2"/><line x1="7" y1="8" x2="15" y2="8"/><line x1="7" y1="12" x2="15" y2="12"/><line x1="7" y1="16" x2="11" y2="16"/></svg>,
   sim: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><path d="M3 17 L7 9 L11 13 L15 5 L19 10"/><line x1="3" y1="19" x2="19" y2="19"/><circle cx="3" cy="17" r="1.5" fill={a?'#4a9eff':'#8a9bbf'} stroke="none"/><circle cx="19" cy="10" r="1.5" fill={a?'#4a9eff':'#8a9bbf'} stroke="none"/></svg>,
+  ml: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><circle cx="6" cy="6" r="2"/><circle cx="16" cy="6" r="2"/><circle cx="6" cy="16" r="2"/><circle cx="16" cy="16" r="2"/><circle cx="11" cy="11" r="2.5"/><line x1="7.5" y1="7.5" x2="9.2" y2="9.2"/><line x1="14.5" y1="7.5" x2="12.8" y2="9.2"/><line x1="7.5" y1="14.5" x2="9.2" y2="12.8"/><line x1="14.5" y1="14.5" x2="12.8" y2="12.8"/></svg>,
   settings: (a) => <svg viewBox="0 0 22 22" fill="none" className="m-nav-icon" stroke={a?'#4a9eff':'#8a9bbf'} strokeWidth="1.5"><circle cx="11" cy="11" r="3"/><path d="M11 2v2M11 18v2M2 11h2M18 11h2M4.93 4.93l1.41 1.41M15.66 15.66l1.41 1.41M4.93 17.07l1.41-1.41M15.66 6.34l1.41-1.41"/></svg>,
 };
 /* ── Budget bar ── */
@@ -1909,6 +1911,154 @@ const ALGO2_TYPES = [
   { key: 'range_support_long__baseline',       label: 'Range Support Long',         variant: 'baseline' },
   { key: 'range_resistance_short__baseline',   label: 'Range Resistance Short',     variant: 'baseline' },
 ];
+/* ── ViewML ── */
+function ViewML() {
+  const [dataStatus, setDataStatus] = React.useState(null);
+  const [modelInfo, setModelInfo] = React.useState(null);
+  const [training, setTraining] = React.useState(false);
+  const [trainResult, setTrainResult] = React.useState(null);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    fetch('/api/ml/training-data-status').then(r=>r.json()).then(setDataStatus).catch(()=>setError('Błąd ładowania statusu danych'));
+    fetch('/api/ml/model-info').then(r=>r.json()).then(setModelInfo).catch(()=>{});
+  }, []);
+
+  const startTraining = async () => {
+    setTraining(true); setTrainResult(null); setError(null);
+    try {
+      const r = await fetch('/api/ml/train', {method:'POST'});
+      const d = await r.json();
+      if (d.error) { setError(d.error); }
+      else { setTrainResult(d); fetch('/api/ml/model-info').then(r=>r.json()).then(setModelInfo).catch(()=>{}); }
+    } catch(e) { setError(`Błąd: ${e}`); }
+    finally { setTraining(false); }
+  };
+
+  const sCard = {background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,padding:'20px 24px',marginBottom:16};
+  const sH = {fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)',marginBottom:16};
+  const sVal = {fontSize:20,fontWeight:700,color:'var(--text1)',fontFamily:'var(--mono)'};
+  const sLbl2 = {fontSize:10,color:'var(--text3)',marginTop:2};
+  const sMetric = {textAlign:'center',flex:1,minWidth:70};
+
+  const ds = dataStatus;
+  const mi = modelInfo;
+
+  return (
+    <div style={{maxWidth:780}}>
+      <div style={{fontSize:18,fontWeight:700,color:'var(--text1)',marginBottom:24}}>Machine Learning</div>
+
+      {error && <div style={{...sCard,borderColor:'var(--red)',color:'var(--red)',fontSize:12,fontFamily:'var(--mono)'}}>{error}</div>}
+
+      {/* Dane treningowe */}
+      <div style={sCard}>
+        <div style={sH}>Dane treningowe</div>
+        {!ds ? <div style={{color:'var(--text3)',fontSize:12,fontFamily:'var(--mono)'}}>Ładowanie…</div> : ds.status==='error' ? <div style={{color:'var(--red)',fontSize:12}}>{ds.message}</div> : (
+          <div>
+            <div style={{display:'flex',gap:16,flexWrap:'wrap',marginBottom:16}}>
+              <div style={sMetric}><div style={sVal}>{ds.trainable}</div><div style={sLbl2}>Do treningu</div></div>
+              <div style={sMetric}><div style={{...sVal,color:'var(--green)'}}>{ds.real_wins}</div><div style={sLbl2}>Wygrane (real)</div></div>
+              <div style={sMetric}><div style={{...sVal,color:'var(--red)'}}>{ds.real_losses}</div><div style={sLbl2}>Przegrane (real)</div></div>
+              <div style={sMetric}><div style={{...sVal,color:'var(--green)',opacity:0.6}}>{ds.hypo_wins}</div><div style={sLbl2}>Wygrane (hypo)</div></div>
+              <div style={sMetric}><div style={{...sVal,color:'var(--red)',opacity:0.6}}>{ds.hypo_losses}</div><div style={sLbl2}>Przegrane (hypo)</div></div>
+            </div>
+            <div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:11,fontFamily:'var(--mono)',color:'var(--text2)'}}>
+              <span>Resolved: {ds.total_resolved}</span>
+              <span>Z market_context: {ds.with_market_context}</span>
+              <span>ML-only: {ds.ml_data_only}</span>
+            </div>
+            <div style={{marginTop:12}}>
+              <span style={{display:'inline-block',padding:'3px 10px',borderRadius:4,fontSize:10,fontWeight:700,fontFamily:'var(--mono)',background:ds.ready?'rgba(0,214,143,0.15)':'rgba(138,155,191,0.15)',color:ds.ready?'var(--green)':'var(--text3)',border:`1px solid ${ds.ready?'var(--green)':'var(--border2)'}`}}>
+                {ds.ready ? 'Gotowe do treningu' : 'Za mało danych (min. 30)'}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Trening */}
+      <div style={sCard}>
+        <div style={sH}>Trening modelu</div>
+        <button onClick={startTraining} disabled={training || (ds && !ds.ready)} style={{padding:'8px 24px',fontSize:12,fontWeight:700,fontFamily:'var(--mono)',borderRadius:6,border:'1px solid var(--blue)',background:training?'transparent':'var(--blue-dim)',color:'var(--blue)',cursor:training||( ds&&!ds.ready)?'not-allowed':'pointer',opacity:training||(ds&&!ds.ready)?0.5:1}}>
+          {training ? 'Trenuję…' : 'Trenuj model'}
+        </button>
+
+        {trainResult && trainResult.status==='ok' && (
+          <div style={{marginTop:20}}>
+            <div style={{...sH,marginBottom:12}}>Wyniki treningu</div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+              <div style={{...sMetric,background:'var(--bg1)',borderRadius:6,padding:'10px 6px'}}>
+                <div style={{...sVal,fontSize:16}}>{trainResult.model_quality.accuracy}%</div><div style={sLbl2}>Accuracy</div>
+              </div>
+              <div style={{...sMetric,background:'var(--bg1)',borderRadius:6,padding:'10px 6px'}}>
+                <div style={{...sVal,fontSize:16}}>{trainResult.model_quality.precision}%</div><div style={sLbl2}>Precision</div>
+              </div>
+              <div style={{...sMetric,background:'var(--bg1)',borderRadius:6,padding:'10px 6px'}}>
+                <div style={{...sVal,fontSize:16}}>{trainResult.model_quality.recall}%</div><div style={sLbl2}>Recall</div>
+              </div>
+              <div style={{...sMetric,background:'var(--bg1)',borderRadius:6,padding:'10px 6px'}}>
+                <div style={{...sVal,fontSize:16}}>{trainResult.model_quality.f1}%</div><div style={sLbl2}>F1</div>
+              </div>
+              <div style={{...sMetric,background:'var(--bg1)',borderRadius:6,padding:'10px 6px'}}>
+                <div style={{...sVal,fontSize:16}}>{trainResult.model_quality.auc}</div><div style={sLbl2}>AUC</div>
+              </div>
+            </div>
+            <div style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--text2)',marginBottom:12}}>
+              Setupów: {trainResult.training_data.used_for_training} ({trainResult.training_data.wins}W / {trainResult.training_data.losses}L) · Win rate: {trainResult.training_data.win_rate}% · CV folds: {trainResult.cv_folds} · Market context: {trainResult.has_market_context?'tak':'nie'}
+            </div>
+            {trainResult.top_features && trainResult.top_features.length > 0 && (
+              <div>
+                <div style={{...sH,marginBottom:8}}>Najważniejsze czynniki</div>
+                <div style={{fontSize:11,fontFamily:'var(--mono)'}}>
+                  {trainResult.top_features.map((f,i) => {
+                    const maxImp = trainResult.top_features[0].importance || 1;
+                    const pct = Math.round(f.importance / maxImp * 100);
+                    return (
+                      <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                        <span style={{width:180,color:'var(--text2)',flexShrink:0}}>{f.name}</span>
+                        <div style={{flex:1,height:6,background:'var(--bg1)',borderRadius:3,overflow:'hidden'}}>
+                          <div style={{width:`${pct}%`,height:'100%',background:'var(--blue)',borderRadius:3}}/>
+                        </div>
+                        <span style={{width:40,textAlign:'right',color:'var(--text3)',fontSize:10}}>{f.importance}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Aktualny model */}
+      <div style={sCard}>
+        <div style={sH}>Aktualny model</div>
+        {!mi ? <div style={{color:'var(--text3)',fontSize:12,fontFamily:'var(--mono)'}}>Ładowanie…</div>
+         : mi.status==='no_model' ? <div style={{color:'var(--text3)',fontSize:12,fontFamily:'var(--mono)'}}>{mi.message}</div>
+         : mi.status==='error' ? <div style={{color:'var(--red)',fontSize:12,fontFamily:'var(--mono)'}}>{mi.message}</div>
+         : (
+          <div style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--text2)'}}>
+            <div style={{display:'flex',gap:24,flexWrap:'wrap',marginBottom:12}}>
+              <span>Wytrenowany: <span style={{color:'var(--text1)'}}>{mi.trained_at ? new Date(mi.trained_at).toLocaleString('pl-PL') : '—'}</span></span>
+              <span>Próbki: <span style={{color:'var(--text1)'}}>{mi.n_samples}</span> ({mi.n_wins}W / {mi.n_losses}L)</span>
+              <span>Features: <span style={{color:'var(--text1)'}}>{mi.features}</span></span>
+              <span>Market context: <span style={{color:mi.has_market_context?'var(--green)':'var(--text3)'}}>{mi.has_market_context?'tak':'nie'}</span></span>
+            </div>
+            {mi.avg_metrics && (
+              <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
+                <span>Accuracy: <span style={{color:'var(--text1)'}}>{(mi.avg_metrics.accuracy*100).toFixed(1)}%</span></span>
+                <span>Precision: <span style={{color:'var(--text1)'}}>{(mi.avg_metrics.precision*100).toFixed(1)}%</span></span>
+                <span>Recall: <span style={{color:'var(--text1)'}}>{(mi.avg_metrics.recall*100).toFixed(1)}%</span></span>
+                <span>F1: <span style={{color:'var(--text1)'}}>{(mi.avg_metrics.f1*100).toFixed(1)}%</span></span>
+                <span>AUC: <span style={{color:'var(--text1)'}}>{mi.avg_metrics.auc?.toFixed(3)}</span></span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 function ViewSettings() {
   const [cfg, setCfg] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
@@ -2089,7 +2239,7 @@ function ViewSettings() {
 function Sidebar({ tab, setTab }) {
   const {price, setups} = useDash();
   const p = price || {};
-  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Setups'},{id:'algo',label:'Analityka Algo'},{id:'sim',label:'Symulator'},{id:'settings',label:'Ustawienia'}];
+  const nav=[{id:'dash',label:'Dashboard'},{id:'setups',label:'Setups'},{id:'algo',label:'Analityka Algo'},{id:'sim',label:'Symulator'},{id:'ml',label:'Machine Learning'},{id:'settings',label:'Ustawienia'}];
   return (
     <div className="sidebar">
       <div className="sidebar-logo"><div className="sidebar-brand">AlertSol</div><div className="sidebar-sub">Dashboard v2</div></div>
@@ -2149,6 +2299,7 @@ function DesktopApp() {
           {tab==='setups' && <ViewSetups/>}
           {tab==='algo' && <ViewAlgo/>}
           {tab==='sim' && <ViewSimulator/>}
+          {tab==='ml' && <ViewML/>}
           {tab==='settings' && <ViewSettings/>}
         </div>
       </div>
@@ -2455,8 +2606,8 @@ function MobileApp() {
   const [tab,setTab]=useState(0);
   const {price, stats, market, setups, statsPeriod, setStatsPeriod} = useDash();
   const p = price || {}, s = stats || {}, m = market || {};
-  const tabs=['dash','setups','algo','sim','settings'];
-  const labels=['Dashboard','Setups','Algo','Sym','Settings'];
+  const tabs=['dash','setups','algo','sim','ml','settings'];
+  const labels=['Dashboard','Setups','Algo','Sym','ML','Settings'];
   return (
     <div className="m-root">
       <div className="phone-wrap">
@@ -2500,7 +2651,8 @@ function MobileApp() {
           {tab===1 && <TabSetups/>}
           {tab===2 && <TabAlgo/>}
           {tab===3 && <ViewSimulator/>}
-          {tab===4 && <ViewSettings/>}
+          {tab===4 && <ViewML/>}
+          {tab===5 && <ViewSettings/>}
         </div>
         <div className="bottom-nav">
           {tabs.map((t,i)=>(
