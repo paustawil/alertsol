@@ -212,7 +212,7 @@ const normalizeSetup = (s) => {
   else if (s.entry_hit_at) status = 'pozycja';
   return {
     id: s.id, model: s.model, kier: s.kier, typ: s.typ, variant: s.variant||'', status,
-    shadow: s.shadow || false,
+    shadow: s.shadow || false, tradeable: s.tradeable || false,
     w:   entries.length > 0 ? entries.map(e=>Number(e).toFixed(2)).join(' / ') : (s.w ?? '—'),
     tp1: tps[0] != null ? Number(tps[0]).toFixed(2) : '—',
     tp2: tps[1] != null ? Number(tps[1]).toFixed(2) : '—',
@@ -291,7 +291,7 @@ function SetupActions({ setup }) {
 /* ── ActiveSetupsPanel — rich table with P&L and Bitget verification ── */
 function ActiveSetupsPanel({ mobile = false }) {
   const { setups, price, refreshSetups } = useDash();
-  const liveSetups = setups.filter(s => !s.shadow);
+  const liveSetups = setups.filter(s => s.tradeable);
   const currentPrice = price ? price.price : null;
   const [bitgetData, setBitgetData] = useState(null);
   const [bitgetLoading, setBitgetLoading] = useState(false);
@@ -847,8 +847,8 @@ function ViewSetups() {
     if(cls) return <span className={`status-pill ${cls}`}><span className="status-dot"></span>{sl}</span>;
     return <span style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:10,fontFamily:'var(--mono)',padding:'2px 8px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}><span className="status-dot"></span>{sl}</span>;
   };
-  const SrcBadge=({shadow,exch})=>{
-    if(shadow) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
+  const SrcBadge=({tradeable,exch})=>{
+    if(!tradeable) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
     if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
     return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
   };
@@ -1012,7 +1012,7 @@ function ViewSetups() {
                 <td colSpan={12} style={{background:'var(--bg2)',padding:'7px 14px',borderTop:'none'}}>
                   <div style={{display:'flex',gap:16,fontSize:10,color:'var(--text2)',fontFamily:'var(--mono)',flexWrap:'wrap',alignItems:'center'}}>
                     <span style={{color:'var(--text3)'}}>#{r.id}</span>
-                    <SrcBadge shadow={r.shadow} exch={r.exchange_position_opened}/>
+                    <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened}/>
                     <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{r.t_def||'—'}</span>
                     <span><span style={{color:'var(--text3)'}}>Wejście:&nbsp;</span>{fmtTs(r.t_entry)}</span>
                     <span><span style={{color:'var(--text3)'}}>Wyjście:&nbsp;</span>{r.t_exit||'—'}</span>
@@ -2439,8 +2439,8 @@ function TabSetups() {
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
-  const SrcBadge=({shadow,exch})=>{
-    if(shadow) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
+  const SrcBadge=({tradeable,exch})=>{
+    if(!tradeable) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
     if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
     return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
   };
@@ -2478,7 +2478,7 @@ function TabSetups() {
               <span style={{fontSize:10,color:'var(--text3)'}}>{r.t_def||'—'}</span>
             </div>
             <div style={{display:'flex',alignItems:'center',gap:6}}>
-              <SrcBadge shadow={r.shadow} exch={r.exchange_position_opened}/>
+              <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened}/>
               <MobileResultChip/>
             </div>
           </div>
