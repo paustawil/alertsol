@@ -50,7 +50,7 @@ ENABLE_GPT3          = False  # standalone GPT3 detektor — wyłączony
 ENABLE_GPT3_VALIDATOR = True  # GPT3 jako filtr Algo2 setupów — aktywny (backtest Mar 15-29: +$19.76)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
 ENABLE_GEMINI2       = False  # Gemini niezależny detektor — gołe świece H1, bez Algo
-ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako shadow (dedup aktywny)
+ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako nie-tradeable (dedup aktywny)
 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
 _last_feedback: dict = {}  # {"Algo2": {...}, "Grok": {...}}
@@ -346,7 +346,7 @@ def gemini2_main():
         return
 
     print(f"[gemini2] Setup {setup['direction']} entry={setup['entries'][0]} TP={setup['tps'][0]} SL={setup['sl']} RR={setup['rr']:.2f} prob={prob}%")
-    save_pending(setup, "Gemini2", "", current, shadow=True)
+    save_pending(setup, "Gemini2", "", current, tradeable=False)
 
 
 # ── Bitget API — cena na żywo ────────────────────────────────────────────────
@@ -839,7 +839,7 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 
 
 # ── Warianty parametrów trend_pullback (kalibracja) ──────────────────────────
-# Klucz → (fib_wejście_lo, fib_wejście_hi, fib_sl, atr_sl_mult, strength_min, force_shadow)
+# Klucz → (fib_wejście_lo, fib_wejście_hi, fib_sl, atr_sl_mult, strength_min, not_tradeable)
 # baseline  = aktualne ustawienia produkcyjne
 # str4      = identyczna geometria, ale próg strength obniżony do 4
 # shallow   = płytszy pullback (fib25-38) z ciaśniejszym SL (fib50), też strength>=4
@@ -891,7 +891,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     log_lines.append(f"  Max dystans entry: ${max_entry_dist:.2f} (3%)")
 
     # ── SYGNAŁY WYCZERPANIA — logowanie bez blokowania setupów ───────────────
-    # Dane zbierane w shadow; docelowo jeden sygnał = shadow_on przy wyłączaniu shadow
+    # Dane zbierane w obserwacji; docelowo jeden sygnał blokujący tradeable
     exhaustion_signals: list[str] = []
 
     # Sygnał 1: Malejąca amplituda kolejnych ekstremów H1
@@ -984,7 +984,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         # trend_pullback_short — warianty parametrów (baseline + eksperymenty)
         if swing_high > swing_low:
             swing_range = swing_high - swing_low
-            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_not_tradeable) in _PULLBACK_VARIANTS.items():
                 # str4 generuje tylko gdy strength==4 (baseline już pokrywa strength>=5)
                 if vname == "str4" and strength != 4:
                     continue
@@ -1014,7 +1014,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "score": strength,
                         "variant": vname,
                         "tp_strategy": "tp1_tp2",
-                        "force_shadow": v_shadow,
+                        "not_tradeable": v_not_tradeable,
                         "market_context": _ctx,
                         "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
                     })
@@ -1032,7 +1032,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "market_context": _ctx,
                         "rejected_by_algo": True,
                         "filter_reasons": reasons,
-                        "force_shadow": True,
+                        "not_tradeable": True,
                     })
 
             # trend_pullback_short ATR-based — entry = cena + 0.5*ATR, SL = cena + 1.2*ATR
@@ -1051,14 +1051,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             )
             _ctx_atr = _setup_ctx(w_atr, sl_atr, swing_h=swing_high, swing_l=swing_low)
             if rr_ok_atr and above_atr and dist_ok_atr:
-                log_lines.append(f"    ✓ ACCEPTED [atr_based] (force_shadow)")
+                log_lines.append(f"    ✓ ACCEPTED [atr_based] (not_tradeable)")
                 setups.append({
                     "type": "trend_pullback_short", "direction": "short",
                     "entries": [w_atr], "sl": sl_atr, "sl_after_tp1": w_atr,
                     "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
                     "score": strength, "variant": "atr_based",
                     "tp_strategy": "tp1_tp2",
-                    "force_shadow": True,
+                    "not_tradeable": True,
                     "market_context": _ctx_atr,
                     "reasoning": f"{regime_name}({strength}); ATR_M15=${atr_m15_pb:.2f} pullback [atr_based]",
                 })
@@ -1074,7 +1074,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
                     "score": strength, "variant": "atr_based",
                     "market_context": _ctx_atr,
-                    "rejected_by_algo": True, "filter_reasons": _rej_atr, "force_shadow": True,
+                    "rejected_by_algo": True, "filter_reasons": _rej_atr, "not_tradeable": True,
                 })
 
         # impulse_continuation_short
@@ -1117,10 +1117,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [tp1, tp2], "rr": round((w - tp1) / (sl - w), 1) if (sl - w) > 0 else 0,
                         "score": strength, "variant": "baseline",
                         "market_context": _setup_ctx(w, sl, swing_h=swing_high, swing_l=swing_low),
-                        "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
+                        "rejected_by_algo": True, "filter_reasons": _rej, "not_tradeable": True,
                     })
 
-        # impulse_aggressive_short — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
+        # impulse_aggressive_short — dwa warianty ATR (h1_atr vs m15_atr) dla porównania
         if regime_name.startswith("IMPULSE_"):
             _agg_vol   = regime.get("vol_ratio", 1.0)
             _agg_spike = regime.get("spike_score", 0)
@@ -1140,14 +1140,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
                     log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
                     if _rr_ok:
-                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
+                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (not_tradeable — tryb testowy)")
                         setups.append({
                             "type": "impulse_aggressive_short", "direction": "short",
                             "entries": [w], "sl": _sl, "sl_after_tp1": w,
                             "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
                             "score": strength, "variant": _vname,
                             "tp_strategy": "tp1_only",
-                            "force_shadow": True,
+                            "not_tradeable": True,
                             "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
                         })
@@ -1159,7 +1159,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1) if (_sl - w) > 0 else 0,
                             "score": strength, "variant": _vname,
                             "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
-                            "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                            "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "not_tradeable": True,
                         })
 
         # impulse_aggressive_short (trend_boost) — lokalny impuls w TREND_DOWN bez vol_ratio
@@ -1180,7 +1180,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
                 log_lines.append(f"    W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
                 if _rr_ok:
-                    log_lines.append(f"    ✓ ACCEPTED [trend_boost] (shadow — wariant testowy)")
+                    log_lines.append(f"    ✓ ACCEPTED [trend_boost] (not_tradeable — wariant testowy)")
                     setups.append({
                         "type": "impulse_aggressive_short", "direction": "short",
                         "entries": [w], "sl": _sl, "sl_after_tp1": w,
@@ -1189,7 +1189,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tp_strategy": "tp1_only",
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
                         "reasoning": f"TREND_DOWN({strength}); c2h={_c2h:+.1f}% imp={_imp} aggressive [trend_boost]",
-                        "force_shadow": True,
+                        "not_tradeable": True,
                     })
                 else:
                     log_lines.append(f"    ✗ REJECTED [trend_boost]: RR<1.5")
@@ -1199,7 +1199,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1) if (_sl - w) > 0 else 0,
                         "score": strength, "variant": "trend_boost",
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
-                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "not_tradeable": True,
                     })
             else:
                 reasons = []
@@ -1222,14 +1222,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
                 log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
                 if _rr_ok:
-                    log_lines.append(f"    ✓ ACCEPTED [prawie_impulse/{_vname}] (force_shadow)")
+                    log_lines.append(f"    ✓ ACCEPTED [prawie_impulse/{_vname}] (not_tradeable)")
                     setups.append({
                         "type": "impulse_aggressive_short", "direction": "short",
                         "entries": [w], "sl": _sl, "sl_after_tp1": w,
                         "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
                         "score": strength, "variant": f"prawie_{_vname}",
                         "tp_strategy": "tp1_only",
-                        "force_shadow": True,
+                        "not_tradeable": True,
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
                         "reasoning": f"TREND_DOWN({strength}); vol={_pv:.1f}x prawie-impulse [{_vname}]",
                     })
@@ -1240,7 +1240,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1) if (_sl - w) > 0 else 0,
                         "score": strength, "variant": f"prawie_{_vname}",
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
-                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "not_tradeable": True,
                     })
 
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
@@ -1254,7 +1254,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         # trend_pullback_long — warianty parametrów (baseline + eksperymenty)
         if swing_high > swing_low:
             swing_range = swing_high - swing_low
-            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_shadow) in _PULLBACK_VARIANTS.items():
+            for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, v_not_tradeable) in _PULLBACK_VARIANTS.items():
                 # str4 generuje tylko gdy strength==4 (baseline już pokrywa strength>=5)
                 if vname == "str4" and strength != 4:
                     continue
@@ -1285,7 +1285,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "score": strength,
                         "variant": vname,
                         "tp_strategy": "tp1_tp2",
-                        "force_shadow": v_shadow,
+                        "not_tradeable": v_not_tradeable,
                         "market_context": _ctx,
                         "reasoning": f"{regime_name}({strength}); swing ${swing_low:.0f}-${swing_high:.0f} [{vname}]",
                     })
@@ -1303,7 +1303,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "market_context": _ctx,
                         "rejected_by_algo": True,
                         "filter_reasons": reasons,
-                        "force_shadow": True,
+                        "not_tradeable": True,
                     })
 
             # trend_pullback_long ATR-based — entry = cena - 0.5*ATR, SL = cena - 1.2*ATR
@@ -1322,14 +1322,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             )
             _ctx_atr = _setup_ctx(w_atr, sl_atr, swing_h=swing_high, swing_l=swing_low)
             if rr_ok_atr and below_atr and dist_ok_atr:
-                log_lines.append(f"    ✓ ACCEPTED [atr_based] (force_shadow)")
+                log_lines.append(f"    ✓ ACCEPTED [atr_based] (not_tradeable)")
                 setups.append({
                     "type": "trend_pullback_long", "direction": "long",
                     "entries": [w_atr], "sl": sl_atr, "sl_after_tp1": w_atr,
                     "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
                     "score": strength, "variant": "atr_based",
                     "tp_strategy": "tp1_tp2",
-                    "force_shadow": True,
+                    "not_tradeable": True,
                     "market_context": _ctx_atr,
                     "reasoning": f"{regime_name}({strength}); ATR_M15=${atr_m15_pb:.2f} pullback [atr_based]",
                 })
@@ -1345,7 +1345,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
                     "score": strength, "variant": "atr_based",
                     "market_context": _ctx_atr,
-                    "rejected_by_algo": True, "filter_reasons": _rej_atr, "force_shadow": True,
+                    "rejected_by_algo": True, "filter_reasons": _rej_atr, "not_tradeable": True,
                 })
 
         # impulse_continuation_long
@@ -1388,10 +1388,10 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [tp1, tp2], "rr": round((tp1 - w) / (w - sl), 1) if (w - sl) > 0 else 0,
                         "score": strength, "variant": "baseline",
                         "market_context": _setup_ctx(w, sl, swing_h=swing_high, swing_l=swing_low),
-                        "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
+                        "rejected_by_algo": True, "filter_reasons": _rej, "not_tradeable": True,
                     })
 
-        # impulse_aggressive_long — dwa warianty ATR (h1_atr vs m15_atr) dla porównania shadow
+        # impulse_aggressive_long — dwa warianty ATR (h1_atr vs m15_atr) dla porównania
         if regime_name.startswith("IMPULSE_"):
             _agg_vol   = regime.get("vol_ratio", 1.0)
             _agg_spike = regime.get("spike_score", 0)
@@ -1411,14 +1411,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
                     log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
                     if _rr_ok:
-                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (force_shadow — tryb testowy)")
+                        log_lines.append(f"    ✓ ACCEPTED [{_vname}] (not_tradeable — tryb testowy)")
                         setups.append({
                             "type": "impulse_aggressive_long", "direction": "long",
                             "entries": [w], "sl": _sl, "sl_after_tp1": w,
                             "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
                             "score": strength, "variant": _vname,
                             "tp_strategy": "tp1_only",
-                            "force_shadow": True,
+                            "not_tradeable": True,
                             "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
                             "reasoning": f"{regime_name}({strength}); vol={_agg_vol:.1f}x aggressive [{_vname}]",
                         })
@@ -1430,7 +1430,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1) if (w - _sl) > 0 else 0,
                             "score": strength, "variant": _vname,
                             "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
-                            "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                            "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "not_tradeable": True,
                         })
 
         # impulse_aggressive_long (trend_boost) — lokalny impuls w TREND_UP bez vol_ratio
@@ -1451,7 +1451,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
                 log_lines.append(f"    W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
                 if _rr_ok:
-                    log_lines.append(f"    ✓ ACCEPTED [trend_boost] (shadow — wariant testowy)")
+                    log_lines.append(f"    ✓ ACCEPTED [trend_boost] (not_tradeable — wariant testowy)")
                     setups.append({
                         "type": "impulse_aggressive_long", "direction": "long",
                         "entries": [w], "sl": _sl, "sl_after_tp1": w,
@@ -1460,7 +1460,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tp_strategy": "tp1_only",
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
                         "reasoning": f"TREND_UP({strength}); c2h={_c2h:+.1f}% imp={_imp} aggressive [trend_boost]",
-                        "force_shadow": True,
+                        "not_tradeable": True,
                     })
                 else:
                     log_lines.append(f"    ✗ REJECTED [trend_boost]: RR<1.5")
@@ -1470,7 +1470,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1) if (w - _sl) > 0 else 0,
                         "score": strength, "variant": "trend_boost",
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
-                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "not_tradeable": True,
                     })
             else:
                 reasons = []
@@ -1493,14 +1493,14 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
                 log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
                 if _rr_ok:
-                    log_lines.append(f"    ✓ ACCEPTED [prawie_impulse/{_vname}] (force_shadow)")
+                    log_lines.append(f"    ✓ ACCEPTED [prawie_impulse/{_vname}] (not_tradeable)")
                     setups.append({
                         "type": "impulse_aggressive_long", "direction": "long",
                         "entries": [w], "sl": _sl, "sl_after_tp1": w,
                         "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
                         "score": strength, "variant": f"prawie_{_vname}",
                         "tp_strategy": "tp1_only",
-                        "force_shadow": True,
+                        "not_tradeable": True,
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
                         "reasoning": f"TREND_UP({strength}); vol={_pv:.1f}x prawie-impulse [{_vname}]",
                     })
@@ -1511,7 +1511,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1) if (w - _sl) > 0 else 0,
                         "score": strength, "variant": f"prawie_{_vname}",
                         "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
-                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "not_tradeable": True,
                     })
 
     # ── RANGE ─────────────────────────────────────────────────────────────
@@ -1585,7 +1585,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": _rr_s, "score": 0,
                     "market_context": _setup_ctx(round(w, 2), round(sl, 2)),
-                    "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
+                    "rejected_by_algo": True, "filter_reasons": _rej, "not_tradeable": True,
                 })
             # range_support_long
             w = sup + rng_size * 0.1
@@ -1651,7 +1651,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "tps": [round(tp1, 2), round(tp2, 2)],
                     "rr": _rr_l, "score": 0,
                     "market_context": _setup_ctx(round(w, 2), round(sl, 2)),
-                    "rejected_by_algo": True, "filter_reasons": _rej, "force_shadow": True,
+                    "rejected_by_algo": True, "filter_reasons": _rej, "not_tradeable": True,
                 })
     else:
         log_lines.append(f"  Brak setupów dla direction={direction}")
@@ -1838,7 +1838,7 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
 
 def log_to_anulowane_grok(s: dict, result: str, entry_ts, exit_ts,
                           eff_entry, eff_exit, move: float) -> bool:
-    """Zapisuje wynik shadow-trackowanego (anulowanego przez Groka) setupu."""
+    """Zapisuje wynik wirtualnie śledzonego (anulowanego przez Groka) setupu."""
     try:
         creds  = Credentials.from_service_account_info(
             json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}")),
@@ -2210,7 +2210,7 @@ REPLACE_MAX_DIFF = 0.50  # powyżej → osobny setup
 
 
 def save_pending(setup: dict, model: str, rejection: str, current_price: float,
-                 shadow: bool = False, ml_data_only: bool = False):
+                 tradeable: bool = False):
     entries   = setup.get("entries", [])
     tps       = setup.get("tps", [setup.get("tp1"), setup.get("tp2")])
     tps       = [t for t in tps if t is not None]
@@ -2219,13 +2219,12 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
 
     replaced_setup = None  # wypełniane gdy nowy setup zastępuje stary
 
-    # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
-    # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
-    # Algo2 shadow mode — dedup aktywny nawet gdy shadow=True (obserwacja w warunkach live).
-    # Deduplikacja obejmuje też ml_data_only — jeden aktywny setup per typ+wariant+kierunek.
+    # Deduplikacja per model+kierunek+typ+wariant.
+    # Grok — brak deduplikacji, każda detekcja zapisywana niezależnie.
+    # Algo2 — dedup aktywny zawsze (tradeable i nie-tradeable).
     new_variant = setup.get("variant", "baseline")
     new_type = setup.get("type", setup.get("setup_type", ""))
-    if not shadow or model == "Algo2":
+    if tradeable or model == "Algo2":
         for p in db.get_active_setups():
             if (p["direction"] == direction and p["model"] == model
                     and p.get("variant", "baseline") == new_variant
@@ -2250,7 +2249,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
                               f"(poprzedni W1=${old_w1:.2f}, diff=${diff:.2f})")
                     print(f"[pending] Zastępuję #{p['setup_id']} W1=${old_w1:.2f} → ${new_level:.2f}")
                     db.update_setup(p["setup_id"],
-                                    shadow=True,
+                                    tradeable=False,
                                     cancel_reason=reason,
                                     cancel_time=now_iso,
                                     cancel_price=round(current_price, 2))
@@ -2268,9 +2267,9 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
     else:
         entry_trigger = "falling"
 
-    # Natychmiastowe wejście gdy W1 == aktualna cena (np. impulse_aggressive) — tylko shadow.
-    # Dla nie-shadow setups entry potwierdza exchange_trader przez plan order na Bitget.
-    _immediate_entry = shadow and abs(w1_lvl - round(current_price, 2)) < 0.005
+    # Natychmiastowe wejście gdy W1 == aktualna cena (np. impulse_aggressive) — tylko nie-tradeable.
+    # Dla tradeable setups entry potwierdza exchange_trader przez plan order na Bitget.
+    _immediate_entry = not tradeable and abs(w1_lvl - round(current_price, 2)) < 0.005
 
     row = {
         "alert_time":      datetime.now(timezone.utc).isoformat(),
@@ -2294,11 +2293,11 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
         "status":          "open" if _immediate_entry else "pending",
         "tp1_hit_at":      None,
         "sl_adjusted":     False,
-        "entries_hit":     1,
-        "shadow":          shadow,
+        "shadow":          not tradeable,
+        "tradeable":       tradeable,
         "variant":         setup.get("variant") or "baseline",
         "market_context":  setup.get("market_context"),
-        "ml_data_only":    ml_data_only or setup.get("ml_data_only", False),
+        "ml_data_only":    not tradeable and bool(rejection),
         "ml_score":        setup.get("ml_score"),
         "ml_composite":    setup.get("ml_composite"),
     }
@@ -2309,7 +2308,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
         return
     setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
 
-    if replaced_setup and not shadow:
+    if replaced_setup and tradeable:
         try:
             di = "📉" if direction == "short" else "📈"
             tp1 = tps[0] if len(tps) > 0 else None
@@ -2493,7 +2492,7 @@ def check_pending(candles_m15: list[dict]):
                         print(f"[pending] {s['model']} {d}: nie weszlo")
                         db.resolve_setup(s["setup_id"], "nie weszlo", None, None, None, None)
                         _calc_hypo_result(s, candles_m15)
-                        if not s.get("shadow"):
+                        if s.get("tradeable"):
                             try:
                                 sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                                 send_telegram(
@@ -2507,7 +2506,7 @@ def check_pending(candles_m15: list[dict]):
                         still_pending.append(s)
                     continue
             s["entry_hit_at"] = hit
-            if not s.get("shadow"):
+            if s.get("tradeable"):
                 try:
                     sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                     send_telegram(
@@ -2551,7 +2550,7 @@ def check_pending(candles_m15: list[dict]):
                 # Bez TP2 — cała pozycja zamykana na TP1
                 if not tp2:
                     result, exit_ts = "TP1", c["time"]
-                    if not s.get("shadow"):
+                    if s.get("tradeable"):
                         try:
                             sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                             send_telegram(
@@ -2567,7 +2566,7 @@ def check_pending(candles_m15: list[dict]):
                 if sl_after_tp1 is not None and not s.get("sl_adjusted"):
                     effective_sl   = sl_after_tp1
                     s["sl_adjusted"] = True
-                    if not s.get("shadow"):
+                    if s.get("tradeable"):
                         try:
                             be_label = "BE" if abs(sl_after_tp1 - w1) < 0.05 else f"+${abs(sl_after_tp1 - w1):.2f}"
                             sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
@@ -2625,7 +2624,7 @@ def check_pending(candles_m15: list[dict]):
             print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
             db.resolve_setup(s["setup_id"], result, eff_entry, eff_exit, move, exit_ts)
             icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
-            if not s.get("shadow"):
+            if s.get("tradeable"):
                 sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
                 try:
                     equity = exchange_trader.get_account_balance()
@@ -2676,7 +2675,7 @@ def check_stale_setups(regime: dict, current_price: float):
     1. Cena uciekła >5% od entry
     2. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
     3. Cena przebiła TP1 bez wejścia w pozycję
-    Shadow setups podlegają tym samym regułom — różnica tylko w tym że nie składamy zleceń.
+    Nie-tradeable setupy podlegają tym samym regułom — różnica tylko w tym że nie składamy zleceń.
     """
     pending = db.get_active_setups()
     non_entered = [s for s in pending if s.get("entry_hit_at") is None]
@@ -2719,7 +2718,7 @@ def check_stale_setups(regime: dict, current_price: float):
         if reason:
             print(f"[stale] #{sid} anulowany: {reason}")
             db.update_setup(sid,
-                            shadow=True,
+                            tradeable=False,
                             cancel_reason=reason,
                             cancel_time=now_iso,
                             cancel_price=round(current_price, 2))
@@ -2728,8 +2727,7 @@ def check_stale_setups(regime: dict, current_price: float):
 
             di = "📉" if d == "short" else "📈"
             tp1 = s["tps"][0] if s.get("tps") else None
-            is_shadow = s.get("shadow", False)
-            if not is_shadow:
+            if s.get("tradeable"):
                 try:
                     send_telegram(
                         f"🚫 <b>Setup #{sid} anulowany</b>\n"
@@ -2771,7 +2769,7 @@ def _handle_open_invalidation(setup: dict, reason: str, action: str, current_pri
                         cancel_reason=reason,
                         cancel_time=now_iso,
                         cancel_price=round(current_price, 2))
-        if not setup.get("shadow"):
+        if setup.get("tradeable"):
             try:
                 send_telegram(
                     f"⚠️ <b>Open setup #{setup_id} — BE</b>\n"
@@ -2795,7 +2793,7 @@ def _handle_open_invalidation(setup: dict, reason: str, action: str, current_pri
                    else round(float(avg_entry) - current_price, 4)
 
         db.update_setup(setup_id,
-                        shadow=True,
+                        tradeable=False,
                         cancel_reason=reason,
                         cancel_time=now_iso,
                         cancel_price=round(current_price, 2))
@@ -2804,7 +2802,7 @@ def _handle_open_invalidation(setup: dict, reason: str, action: str, current_pri
                          int(time.time()))
 
         pnl_str = f"{move:+.2f} USD" if move is not None else "n/d"
-        if not setup.get("shadow"):
+        if setup.get("tradeable"):
             try:
                 equity = exchange_trader.get_account_balance()
                 equity_txt = f"\nEquity: <b>${equity:.2f}</b>" if equity is not None else ""
@@ -2983,7 +2981,7 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     Flow: zapisz wszystko → filtruj → handluj.
     1. algo_detect_setups() generuje WSZYSTKICH kandydatów
     2. ML scoring (jeśli model dostępny)
-    3. Zapisz KAŻDY setup do bazy (shadow, dane treningowe)
+    3. Zapisz KAŻDY setup do bazy (obserwacja, dane treningowe)
     4. Filtruj: validate_setup() + wariant włączony do live
     5. Najlepszy kandydat → GPT3 validator → live trade (update w bazie)
 
@@ -3025,10 +3023,10 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     for s in algo2_setups:
         s["reasoning"] = algo2_log
         is_rejected = s.get("rejected_by_algo", False)
-        save_pending(s, "Algo2", "", current, shadow=True,
-                     ml_data_only=is_rejected)
+        rejection = "; ".join(s.get("filter_reasons", [])) if is_rejected else ""
+        save_pending(s, "Algo2", rejection, current, tradeable=False)
         if s.get("setup_id"):
-            tag = "ML data (rejected)" if is_rejected else "shadow"
+            tag = "ML data (rejected)" if is_rejected else "observation"
             print(f"[algo2] {tag}: {s['type']} [{s.get('variant','?')}] #{s['setup_id']} RR={s.get('rr',0)}")
 
     # ── KROK 2: Filtruj kandydatów do live handlu ────────────────────────────
@@ -3038,10 +3036,12 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
             continue
         if s.get("rejected_by_algo"):
             continue
+        if s.get("not_tradeable"):
+            continue
         val_reason = validate_setup(s, "Algo2")
         if val_reason:
-            db.update_setup(s["setup_id"], ml_data_only=True, rejection=val_reason)
-            print(f"[algo2] #{s['setup_id']} → ml_data_only (validate: {val_reason})")
+            db.update_setup(s["setup_id"], rejection=val_reason)
+            print(f"[algo2] #{s['setup_id']} → rejected (validate: {val_reason})")
             continue
         if not _is_type_bitget_enabled(s.get("type", ""), s.get("variant")):
             continue
@@ -3090,19 +3090,19 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         print("[algo2] IMPULSE — GPT3 Validator pominięty.")
 
     # ── KROK 4: Promuj best do live handlu ───────────────────────────────────
-    is_shadow = bool(ALGO2_SHADOW_MODE)
-    update_fields = {"shadow": is_shadow, "ml_data_only": False}
-    if not is_shadow:
+    is_tradeable = not bool(ALGO2_SHADOW_MODE)
+    update_fields = {"tradeable": is_tradeable, "shadow": not is_tradeable, "ml_data_only": False}
+    if is_tradeable:
         update_fields["status"] = "pending"
         update_fields["entry_hit_at"] = None
     db.update_setup(best["setup_id"], **update_fields)
-    if not is_shadow:
+    if is_tradeable:
         send_telegram(format_alert("Algo2", best, current, True))
-    if val_result and not is_shadow:
+    if val_result and is_tradeable:
         db.update_setup(best["setup_id"], llm_scores={
             "gpt3_validator": {"confidence": val_conf, "approved": True, "reason": val_reason}
         })
-    print(f"[algo2] #{best['setup_id']} → {'shadow' if is_shadow else 'LIVE'}")
+    print(f"[algo2] #{best['setup_id']} → {'observation' if not is_tradeable else 'LIVE'}")
     return "saved"
 
 

@@ -52,7 +52,7 @@ def export_training_data(db_url: str) -> pd.DataFrame:
                        variant, rr, entry_trigger, entries, tps, sl, sl_after_tp1,
                        result, hypo_result, pnl_usd, hypo_pnl_usd, pnl_pct,
                        ml_data_only, market_context,
-                       shadow
+                       shadow, tradeable, rejection
                 FROM setups
                 WHERE resolved = TRUE
                   AND (result IS NOT NULL OR hypo_result IS NOT NULL)
@@ -72,7 +72,7 @@ def export_training_data(db_url: str) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df["effective_result"] = df.apply(
-        lambda r: r["hypo_result"] if r["ml_data_only"] and r["hypo_result"] else r["result"],
+        lambda r: r["hypo_result"] if (r.get("ml_data_only") or not r.get("tradeable", True)) and r["hypo_result"] else r["result"],
         axis=1,
     )
     return df

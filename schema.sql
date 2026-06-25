@@ -179,6 +179,18 @@ ALTER TABLE setups ADD COLUMN IF NOT EXISTS ml_composite      NUMERIC(5,4);
 CREATE INDEX IF NOT EXISTS idx_setups_market_context ON setups USING GIN (market_context);
 CREATE INDEX IF NOT EXISTS idx_setups_ml_data ON setups (ml_data_only) WHERE ml_data_only = TRUE;
 
+-- tradeable: zastępuje shadow + ml_data_only jedną flagą
+-- TRUE = setup kwalifikuje się do handlu na Bitget
+-- FALSE = obserwacja (rejection wyjaśnia powód, pusty = jakość OK ale shadow mode)
+ALTER TABLE setups ADD COLUMN IF NOT EXISTS tradeable BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS idx_setups_tradeable ON setups (tradeable) WHERE tradeable = TRUE;
+
+-- Backfill tradeable z istniejących flag
+UPDATE setups SET tradeable = TRUE
+WHERE shadow = FALSE
+  AND COALESCE(ml_data_only, FALSE) = FALSE
+  AND tradeable = FALSE;
+
 -- Log zdarzeń exchange (modyfikacje SL, fallbacki, błędy)
 CREATE TABLE IF NOT EXISTS exchange_events (
     id         SERIAL PRIMARY KEY,

@@ -2336,6 +2336,7 @@ def admin_diagnose_positions():
             "pos_open":   pos_open,
             "ex_done":    ex_done,
             "shadow":     s.get("shadow", False),
+            "tradeable":  s.get("tradeable", False),
             "cancelled":  bool(s.get("cancel_reason")),
             "plan_oid":   s.get("exchange_plan_oid"),
             "tp1_oid":    s.get("exchange_tp1_oid"),
@@ -3317,7 +3318,7 @@ def api_ml_training_data_status():
                         COUNT(*) FILTER (WHERE resolved = TRUE AND hypo_result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')) AS hypo_wins,
                         COUNT(*) FILTER (WHERE resolved = TRUE AND hypo_result = 'SL') AS hypo_losses,
                         COUNT(*) FILTER (WHERE resolved = TRUE AND market_context IS NOT NULL) AS with_market_context,
-                        COUNT(*) FILTER (WHERE ml_data_only = TRUE) AS ml_data_only_count
+                        COUNT(*) FILTER (WHERE COALESCE(rejection, '') != '') AS rejected_count
                     FROM setups
                     WHERE model = 'Algo2'
                 """)
@@ -3330,7 +3331,7 @@ def api_ml_training_data_status():
             "hypo_losses": row[4],
             "trainable": row[1] + row[2] + row[3] + row[4],
             "with_market_context": row[5],
-            "ml_data_only": row[6],
+            "rejected": row[6],
             "ready": (row[1] + row[2] + row[3] + row[4]) >= 30,
         }
     except Exception as e:
@@ -3519,7 +3520,7 @@ def api_analytics_export(
                     entry_hit_at, result, pnl_usd, pnl_pct,
                     avg_entry, avg_exit,
                     hypo_result, hypo_pnl_usd,
-                    shadow, resolved, score,
+                    shadow, tradeable, resolved, score,
                     EXTRACT(EPOCH FROM alert_time)::bigint AS alert_ts,
                     CASE WHEN entry_hit_at IS NOT NULL AND alert_timestamp IS NOT NULL
                          THEN ROUND((entry_hit_at - alert_timestamp) / 3600.0, 2) END AS hours_to_entry,
@@ -3839,6 +3840,7 @@ def api_dashboard_setups():
             "entry_hit_at":             s.get("entry_hit_at") is not None,
             "tp1_hit_at":               s.get("tp1_hit_at")   is not None,
             "shadow":                   s.get("shadow", False),
+            "tradeable":                s.get("tradeable", False),
             "avg_entry":                float(s["avg_entry"]) if s.get("avg_entry") is not None else None,
             "exchange_qty_full":        s.get("exchange_qty_full"),
             "exchange_qty_half":        s.get("exchange_qty_half"),
@@ -3881,14 +3883,14 @@ def api_all_setups(
     """Wszystkie setupy (aktywne + zamknięte) dla zunifikowanej zakładki Setups.
     statuses: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo (przecinkami)
     """
-    shadow: bool | None = None
+    tradeable: bool | None = None
     bitget_only = False
     if shadow_filter == "shadow":
-        shadow = True
+        tradeable = False
     elif shadow_filter == "real":
-        shadow = False
+        tradeable = True
     elif shadow_filter == "bitget":
-        shadow = False
+        tradeable = True
         bitget_only = True
 
     data = db.get_all_setups_filtered(
@@ -3896,7 +3898,7 @@ def api_all_setups(
         types     = [t.strip() for t in types.split(",")     if t.strip()] or None,
         variants  = [v.strip() for v in variants.split(",")  if v.strip()] or None,
         models    = [m.strip() for m in models.split(",")    if m.strip()] or None,
-        shadow    = shadow,
+        tradeable = tradeable,
         bitget_only = bitget_only,
         date_from = date_from or None,
         date_to   = date_to   or None,
@@ -3949,6 +3951,7 @@ def api_all_setups(
             "pnl_pct":                  _f(s.get("pnl_pct")),
             "pnl_tp1_pct":              _f(s.get("tp1_only_pnl_pct")),
             "shadow":                   s.get("shadow", False),
+            "tradeable":                s.get("tradeable", False),
             "exchange_position_opened": s.get("exchange_position_opened", False),
             "score":                    _f(s.get("score")),
             "rr":                       _f(s.get("rr")),

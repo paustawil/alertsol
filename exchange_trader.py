@@ -1139,7 +1139,7 @@ def _calc_dynamic_trade_usdt(balance: float | None, fallback: float) -> float:
 
 def _cancel_other_pending_on_position_open(client, opened_sid: int, pending: list[dict]) -> bool:
     """SINGLE_POSITION_MODE: gdy pozycja się otwiera, anuluj inne plan ordery
-    na Bitget i oznacz te setupy jako shadow."""
+    na Bitget i oznacz te setupy jako nie-tradeable."""
     if not SINGLE_POSITION_MODE:
         return False
     changed = False
@@ -1147,7 +1147,7 @@ def _cancel_other_pending_on_position_open(client, opened_sid: int, pending: lis
         sid = s.get("setup_id")
         if sid == opened_sid:
             continue
-        if s.get("exchange_done", False) or s.get("shadow", False):
+        if s.get("exchange_done", False) or not s.get("tradeable", True):
             continue
         plan_oid  = s.get("exchange_plan_oid")
         plan2_oid = s.get("exchange_plan2_oid")
@@ -1162,8 +1162,8 @@ def _cancel_other_pending_on_position_open(client, opened_sid: int, pending: lis
             s["exchange_plan_oid"]  = None
             s["exchange_plan2_oid"] = None
             s["exchange_done"]      = True
-            s["shadow"]             = True
-            db.update_setup(sid, shadow=True, cancel_reason="single_position_mode")
+            s["tradeable"]          = False
+            db.update_setup(sid, tradeable=False, cancel_reason="single_position_mode")
             db.log_exchange_event(sid, "single_pos_cancel", {
                 "reason": f"position #{opened_sid} opened",
                 "plan_oid": plan_oid,
@@ -1201,7 +1201,7 @@ def _sync_inner():
             if s.get("exchange_position_opened")
             and s.get("direction") == d
             and not s.get("exchange_done", False)
-            and not s.get("shadow", False)
+            and s.get("tradeable", False)
             and not s.get("exchange_tp1_done", False)
         )
     active_longs  = _active_for_dir("long")
@@ -1212,7 +1212,7 @@ def _sync_inner():
         1 for s in pending
         if s.get("exchange_position_opened")
         and not s.get("exchange_done", False)
-        and not s.get("shadow", False)
+        and s.get("tradeable", False)
         and not s.get("exchange_tp1_done", False)
     )
     single_pos_block = SINGLE_POSITION_MODE and total_active_positions >= 1
@@ -1229,7 +1229,7 @@ def _sync_inner():
         direction = s.get("direction", "?")
         model     = s.get("model", "?")
         entries   = s.get("entries", [])
-        shadow    = s.get("shadow", False)
+        tradeable = s.get("tradeable", False)
         cancelled = bool(s.get("cancel_reason"))
         label     = f"#{sid} [{model}] {direction.upper()}"
 
@@ -1249,7 +1249,7 @@ def _sync_inner():
             continue
 
         # ── Anuluj gdy setup odrzucony przed wejściem ─────────────────────────
-        if (shadow or cancelled) and plan_oid and not pos_open:
+        if (not tradeable or cancelled) and plan_oid and not pos_open:
             if plan_oid == "PENDING":
                 # Rezerwacja bez realnego OID — wyczyść bez odpytywania Bitget
                 s["exchange_plan_oid"] = None
@@ -1264,7 +1264,7 @@ def _sync_inner():
             continue
 
         # ── NOWY setup ────────────────────────────────────────────────────────
-        if not shadow and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
+        if tradeable and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
             if single_pos_block:
                 print(f"[exchange] {label}: pominięty — SINGLE_POSITION_MODE, aktywna pozycja na Bitget")
                 continue
