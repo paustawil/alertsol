@@ -2755,7 +2755,6 @@ class SettingsUpdate(BaseModel):
     alert_interval: int | None = None
     max_positions: int | None = None
     type_configs: dict[str, TypeConfig] | None = None
-    ml_training_cutoff: str | None = None
 
 
 @app.post("/api/update-tps/{setup_id}")
@@ -3156,7 +3155,6 @@ def api_get_settings():
         "alert_interval": alert_minutes,
         "max_positions": stored.get("max_positions", 5),
         "type_configs":  stored.get("type_configs", {}),
-        "ml_training_cutoff": stored.get("ml_training_cutoff", ""),
     }
 
 
@@ -3216,10 +3214,6 @@ def api_update_settings(body: SettingsUpdate):
             k: v.model_dump() for k, v in body.type_configs.items()
         }
         updated.append(f"type_configs={list(body.type_configs.keys())}")
-
-    if body.ml_training_cutoff is not None:
-        stored["ml_training_cutoff"] = body.ml_training_cutoff
-        updated.append(f"ml_training_cutoff={body.ml_training_cutoff or '(brak)'}")
 
     db.save_app_settings(stored)
     return {"ok": True, "updated": updated}
@@ -3354,9 +3348,8 @@ def api_ml_train():
     _ml_training_lock = True
     try:
         import ml_training
-        cutoff = db.get_app_settings().get("ml_training_cutoff") or None
-        log.info("[ML] Starting model training…%s", f" (cutoff: {cutoff})" if cutoff else "")
-        result = ml_training.run_training(cutoff_date=cutoff)
+        log.info("[ML] Starting model training…")
+        result = ml_training.run_training()
         if result.get("error"):
             log.warning("[ML] Training error: %s", result["error"])
         else:
@@ -3384,8 +3377,7 @@ def api_ml_feature_analysis():
         if not db_url:
             return {"status": "error", "message": "Brak DATABASE_URL"}
 
-        cutoff = db.get_app_settings().get("ml_training_cutoff") or None
-        df = ml_training.export_training_data(db_url, cutoff_date=cutoff)
+        df = ml_training.export_training_data(db_url)
         if df.empty:
             return {"status": "error", "message": "Brak danych"}
 
@@ -3410,10 +3402,9 @@ def api_ml_feature_analysis():
 
         day_names = {0: "Pon", 1: "Wt", 2: "Śr", 3: "Czw", 4: "Pt", 5: "Sob", 6: "Ndz"}
 
-        def group_stats(series, label_map=None, min_samples=5):
+        def group_stats(series, label_map=None):
             grouped = df.groupby(series)["win"].agg(["sum", "count"])
             grouped.columns = ["wins", "total"]
-            grouped = grouped[grouped["total"] >= min_samples]
             grouped["losses"] = grouped["total"] - grouped["wins"]
             grouped["win_rate"] = (grouped["wins"] / grouped["total"] * 100).round(1)
             rows = []
