@@ -2873,11 +2873,11 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     for s in algo2_setups:
         s["reasoning"] = algo2_log
         is_rejected = s.get("rejected_by_algo", False)
-        is_shadow = s.get("force_shadow", False)
+        is_force_shadow = s.get("force_shadow", False)
         save_pending(s, "Algo2", "", current, shadow=True,
-                     ml_data_only=is_rejected or is_shadow)
+                     ml_data_only=is_rejected)
         if s.get("setup_id"):
-            tag = "ML data (rejected)" if is_rejected else ("ML data (shadow)" if is_shadow else "shadow")
+            tag = "ML data (rejected)" if is_rejected else ("force_shadow" if is_force_shadow else "shadow")
             print(f"[algo2] {tag}: {s['type']} [{s.get('variant','?')}] #{s['setup_id']} RR={s.get('rr',0)}")
 
     # ── KROK 2: Filtruj kandydatów do live handlu ────────────────────────────
@@ -2905,13 +2905,18 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
           + ", ".join(f"{s['type']}[{s.get('variant','?')}]" for s in live_candidates))
 
     # ── KROK 3: Promuj WSZYSTKICH kandydatów (max 1 per wariant) ────────────
-    is_shadow = bool(ALGO2_SHADOW_MODE)
-
+    # ALGO2_SHADOW_MODE = domyślny tryb; typy z enabled=True w ustawieniach → live (shadow=False)
     promoted = 0
+    promoted_live = 0
     rejected_count = 0
     for cand in live_candidates:
         level = cand["entries"][0]
         dist  = abs(current - level)
+        cand_type = cand.get("type", "")
+        cand_variant = cand.get("variant")
+        is_shadow = cand.get("force_shadow", False) or (
+            ALGO2_SHADOW_MODE and not _is_type_bitget_enabled(cand_type, cand_variant)
+        )
         print(f"[algo2] Candidate: {cand['type']} [{cand.get('variant','?')}] "
               f"{cand['direction']} W=${level:.2f} (dist=${dist:.2f}) RR={cand.get('rr',0)} #{cand['setup_id']}")
 
@@ -2922,11 +2927,16 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         db.update_setup(cand["setup_id"], **update_fields)
         print(f"[algo2] #{cand['setup_id']} → {'shadow' if is_shadow else 'LIVE'}")
         promoted += 1
+        if not is_shadow:
+            promoted_live += 1
 
     # ── KROK 4: GPT3 Validator — tylko live (nie-shadow), nie-IMPULSE ────────
     # Odrzucone przez validator: cofnięte do shadow (dane treningowe), bez Telegrama.
     # Zatwierdzone: zostają live + Telegram.
-    if promoted and not is_shadow and ENABLE_GPT3_VALIDATOR and not is_impulse:
+    live_promoted = [c for c in live_candidates if c.get("setup_id") and not c.get("force_shadow", False)
+                     and not (ALGO2_SHADOW_MODE and not _is_type_bitget_enabled(c.get("type", ""), c.get("variant")))]
+
+    if live_promoted and ENABLE_GPT3_VALIDATOR and not is_impulse:
         val_atr = calc_atr(candles_m15)
         val_sup = regime.get("support")
         val_res = regime.get("resistance")
@@ -2935,9 +2945,7 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         val_ctx = dict(atr=val_atr, support=val_sup, resistance=val_res,
                        price_pct_in_range=val_pct)
 
-        for cand in live_candidates:
-            if not cand.get("setup_id"):
-                continue
+        for cand in live_promoted:
             val_result = call_gpt3_validator(
                 cand, candles_m15, candles_h1, current, **val_ctx,
             )
@@ -2959,12 +2967,11 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
             else:
                 print(f"[gpt3-val] #{cand['setup_id']} Brak odpowiedzi — kontynuuję bez walidacji.")
             send_telegram(format_alert("Algo2", cand, current, True))
-    elif promoted and not is_shadow:
+    elif live_promoted:
         if is_impulse:
             print("[algo2] IMPULSE — GPT3 Validator pominięty.")
-        for cand in live_candidates:
-            if cand.get("setup_id"):
-                send_telegram(format_alert("Algo2", cand, current, True))
+        for cand in live_promoted:
+            send_telegram(format_alert("Algo2", cand, current, True))
 
     print(f"[algo2] Cykl zakończony: {promoted} promowanych, {rejected_count} odrzuconych przez validator")
     return "saved"
