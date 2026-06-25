@@ -846,7 +846,7 @@ def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles
 _PULLBACK_VARIANTS: dict[str, tuple] = {
     "baseline": (0.38, 0.50, 0.618, 0.3, 5, False),
     "shallow":  (0.25, 0.38, 0.500, 0.1, 4, True),
-    "micro":    (0.15, 0.25, 0.382, 0.1, 4, True),
+    "micro":    (0.15, 0.25, 0.382, 0.1, 4, False),
     "deep":     (0.50, 0.618, 0.786, 0.4, 5, True),
 }
 
@@ -1035,6 +1035,48 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "force_shadow": True,
                     })
 
+            # trend_pullback_short ATR-based — entry = cena + 0.5*ATR, SL = cena + 1.2*ATR
+            atr_m15_pb = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+            w_atr   = round(current_price + atr_m15_pb * 0.5, 2)
+            sl_atr  = round(current_price + atr_m15_pb * 1.5, 2)
+            tp1_atr = round(current_price - atr_m15_pb * 1.0, 2)
+            tp2_atr = round(current_price - atr_m15_pb * 2.5, 2)
+            rr_atr  = round((w_atr - tp1_atr) / (sl_atr - w_atr), 1) if (sl_atr - w_atr) > 0 else 0
+            rr_ok_atr   = tp1_atr < w_atr and rr_atr >= 1.5
+            above_atr   = w_atr > current_price * 1.003
+            dist_ok_atr = w_atr - current_price <= max_entry_dist
+            log_lines.append(
+                f"  → pullback_short [atr_based]: W=${w_atr:.2f} SL=${sl_atr:.2f} "
+                f"TP1=${tp1_atr:.2f} RR={rr_atr} ATR_M15=${atr_m15_pb:.2f}"
+            )
+            _ctx_atr = _setup_ctx(w_atr, sl_atr, swing_h=swing_high, swing_l=swing_low)
+            if rr_ok_atr and above_atr and dist_ok_atr:
+                log_lines.append(f"    ✓ ACCEPTED [atr_based] (force_shadow)")
+                setups.append({
+                    "type": "trend_pullback_short", "direction": "short",
+                    "entries": [w_atr], "sl": sl_atr, "sl_after_tp1": w_atr,
+                    "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
+                    "score": strength, "variant": "atr_based",
+                    "tp_strategy": "tp1_tp2",
+                    "force_shadow": True,
+                    "market_context": _ctx_atr,
+                    "reasoning": f"{regime_name}({strength}); ATR_M15=${atr_m15_pb:.2f} pullback [atr_based]",
+                })
+            else:
+                _rej_atr = []
+                if not rr_ok_atr: _rej_atr.append(f"RR<1.5({rr_atr})")
+                if not above_atr: _rej_atr.append("W<=cena")
+                if not dist_ok_atr: _rej_atr.append("dist")
+                log_lines.append(f"    ✗ REJECTED [atr_based]: {', '.join(_rej_atr)}")
+                setups.append({
+                    "type": "trend_pullback_short", "direction": "short",
+                    "entries": [w_atr], "sl": sl_atr, "sl_after_tp1": w_atr,
+                    "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
+                    "score": strength, "variant": "atr_based",
+                    "market_context": _ctx_atr,
+                    "rejected_by_algo": True, "filter_reasons": _rej_atr, "force_shadow": True,
+                })
+
         # impulse_continuation_short
         if regime_name.startswith("IMPULSE_"):
             _cont_spike = regime.get("spike_score", 0)
@@ -1090,8 +1132,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
                 w = round(current_price, 2)
-                # m15_atr — zarchiwizowany: słabe +3.1% avg, 66.7% SL (backtest 30d)
-                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
+                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
+                    _is_m15 = _vname == "m15_atr"
                     _sl  = round(current_price + _vatr * 1.2, 2)
                     _tp1 = round(current_price - _vatr * 2.0, 2)
                     _tp2 = round(current_price - _vatr * _tp2_mult, 2)
@@ -1167,6 +1209,40 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 if _spike_s > 0: reasons.append("spike dolny wick")
                 log_lines.append(f"    ✗ SKIP: {', '.join(reasons)}")
 
+        # prawie-impulse short — TREND_DOWN z vol >= 2.0 ale bez formalnego breakoutu
+        if regime_name == "TREND_DOWN" and regime.get("vol_ratio", 1.0) >= 2.0:
+            _pv = regime.get("vol_ratio", 1.0)
+            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+            log_lines.append(f"  → prawie_impulse_short: vol={_pv:.1f}x ATR_M15=${atr_m15:.2f}")
+            w = round(current_price, 2)
+            for _vname, _vatr in [("h1_atr", atr), ("m15_atr", atr_m15)]:
+                _sl  = round(current_price + _vatr * 1.2, 2)
+                _tp1 = round(current_price - _vatr * 2.0, 2)
+                _tp2 = round(current_price - _vatr * 3.0, 2)
+                _rr_ok = _tp1 < w and (w - _tp1) / (_sl - w) >= 1.5
+                log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                if _rr_ok:
+                    log_lines.append(f"    ✓ ACCEPTED [prawie_impulse/{_vname}] (force_shadow)")
+                    setups.append({
+                        "type": "impulse_aggressive_short", "direction": "short",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1),
+                        "score": strength, "variant": f"prawie_{_vname}",
+                        "tp_strategy": "tp1_only",
+                        "force_shadow": True,
+                        "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                        "reasoning": f"TREND_DOWN({strength}); vol={_pv:.1f}x prawie-impulse [{_vname}]",
+                    })
+                else:
+                    setups.append({
+                        "type": "impulse_aggressive_short", "direction": "short",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((w - _tp1) / (_sl - w), 1) if (_sl - w) > 0 else 0,
+                        "score": strength, "variant": f"prawie_{_vname}",
+                        "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                    })
+
     # ── TREND_UP / IMPULSE_UP ─────────────────────────────────────────────
     elif direction == "up":
         swing_high, swing_low = find_swing_points(candles_h1, n=12)
@@ -1230,6 +1306,48 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "force_shadow": True,
                     })
 
+            # trend_pullback_long ATR-based — entry = cena - 0.5*ATR, SL = cena - 1.2*ATR
+            atr_m15_pb = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+            w_atr   = round(current_price - atr_m15_pb * 0.5, 2)
+            sl_atr  = round(current_price - atr_m15_pb * 1.5, 2)
+            tp1_atr = round(current_price + atr_m15_pb * 1.0, 2)
+            tp2_atr = round(current_price + atr_m15_pb * 2.5, 2)
+            rr_atr  = round((tp1_atr - w_atr) / (w_atr - sl_atr), 1) if (w_atr - sl_atr) > 0 else 0
+            rr_ok_atr   = tp1_atr > w_atr and rr_atr >= 1.5
+            below_atr   = w_atr < current_price * 0.997
+            dist_ok_atr = current_price - w_atr <= max_entry_dist
+            log_lines.append(
+                f"  → pullback_long [atr_based]: W=${w_atr:.2f} SL=${sl_atr:.2f} "
+                f"TP1=${tp1_atr:.2f} RR={rr_atr} ATR_M15=${atr_m15_pb:.2f}"
+            )
+            _ctx_atr = _setup_ctx(w_atr, sl_atr, swing_h=swing_high, swing_l=swing_low)
+            if rr_ok_atr and below_atr and dist_ok_atr:
+                log_lines.append(f"    ✓ ACCEPTED [atr_based] (force_shadow)")
+                setups.append({
+                    "type": "trend_pullback_long", "direction": "long",
+                    "entries": [w_atr], "sl": sl_atr, "sl_after_tp1": w_atr,
+                    "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
+                    "score": strength, "variant": "atr_based",
+                    "tp_strategy": "tp1_tp2",
+                    "force_shadow": True,
+                    "market_context": _ctx_atr,
+                    "reasoning": f"{regime_name}({strength}); ATR_M15=${atr_m15_pb:.2f} pullback [atr_based]",
+                })
+            else:
+                _rej_atr = []
+                if not rr_ok_atr: _rej_atr.append(f"RR<1.5({rr_atr})")
+                if not below_atr: _rej_atr.append("W>=cena")
+                if not dist_ok_atr: _rej_atr.append("dist")
+                log_lines.append(f"    ✗ REJECTED [atr_based]: {', '.join(_rej_atr)}")
+                setups.append({
+                    "type": "trend_pullback_long", "direction": "long",
+                    "entries": [w_atr], "sl": sl_atr, "sl_after_tp1": w_atr,
+                    "tps": [tp1_atr, tp2_atr], "rr": rr_atr,
+                    "score": strength, "variant": "atr_based",
+                    "market_context": _ctx_atr,
+                    "rejected_by_algo": True, "filter_reasons": _rej_atr, "force_shadow": True,
+                })
+
         # impulse_continuation_long
         if regime_name.startswith("IMPULSE_"):
             _cont_spike = regime.get("spike_score", 0)
@@ -1285,8 +1403,8 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 log_lines.append(f"    ✗ SKIP: vol={_agg_vol:.1f}x<2.0")
             else:
                 w = round(current_price, 2)
-                # m15_atr — zarchiwizowany: słabe +3.3% avg (backtest 30d)
-                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0)]:
+                for _vname, _vatr, _tp2_mult in [("h1_atr", atr, 3.0), ("m15_atr", atr_m15, 3.0)]:
+                    _is_m15 = _vname == "m15_atr"
                     _sl  = round(current_price - _vatr * 1.2, 2)
                     _tp1 = round(current_price + _vatr * 2.0, 2)
                     _tp2 = round(current_price + _vatr * _tp2_mult, 2)
@@ -1361,6 +1479,40 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                 if _bullish_l < 4: reasons.append(f"bullish={_bullish_l}/6<4")
                 if _spike_l > 0: reasons.append("spike górny wick")
                 log_lines.append(f"    ✗ SKIP: {', '.join(reasons)}")
+
+        # prawie-impulse long — TREND_UP z vol >= 2.0 ale bez formalnego breakoutu
+        if regime_name == "TREND_UP" and regime.get("vol_ratio", 1.0) >= 2.0:
+            _pv = regime.get("vol_ratio", 1.0)
+            atr_m15 = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
+            log_lines.append(f"  → prawie_impulse_long: vol={_pv:.1f}x ATR_M15=${atr_m15:.2f}")
+            w = round(current_price, 2)
+            for _vname, _vatr in [("h1_atr", atr), ("m15_atr", atr_m15)]:
+                _sl  = round(current_price - _vatr * 1.2, 2)
+                _tp1 = round(current_price + _vatr * 2.0, 2)
+                _tp2 = round(current_price + _vatr * 3.0, 2)
+                _rr_ok = _tp1 > w and (_tp1 - w) / (w - _sl) >= 1.5
+                log_lines.append(f"    [{_vname}] W=${w:.2f} SL=${_sl:.2f} TP1=${_tp1:.2f} rr_ok={_rr_ok}")
+                if _rr_ok:
+                    log_lines.append(f"    ✓ ACCEPTED [prawie_impulse/{_vname}] (force_shadow)")
+                    setups.append({
+                        "type": "impulse_aggressive_long", "direction": "long",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1),
+                        "score": strength, "variant": f"prawie_{_vname}",
+                        "tp_strategy": "tp1_only",
+                        "force_shadow": True,
+                        "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                        "reasoning": f"TREND_UP({strength}); vol={_pv:.1f}x prawie-impulse [{_vname}]",
+                    })
+                else:
+                    setups.append({
+                        "type": "impulse_aggressive_long", "direction": "long",
+                        "entries": [w], "sl": _sl, "sl_after_tp1": w,
+                        "tps": [_tp1, _tp2], "rr": round((_tp1 - w) / (w - _sl), 1) if (w - _sl) > 0 else 0,
+                        "score": strength, "variant": f"prawie_{_vname}",
+                        "market_context": _setup_ctx(w, _sl, swing_h=swing_high, swing_l=swing_low),
+                        "rejected_by_algo": True, "filter_reasons": ["RR<1.5"], "force_shadow": True,
+                    })
 
     # ── RANGE ─────────────────────────────────────────────────────────────
     elif regime_name == "RANGE":
@@ -2070,12 +2222,14 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
     # Shadow setups (Grok) — brak deduplikacji, każda detekcja zapisywana niezależnie.
     # Zwykłe setups (Algo2) — blokuj duplikat jeśli jakikolwiek model ma ten sam kierunek/poziom.
     # Algo2 shadow mode — dedup aktywny nawet gdy shadow=True (obserwacja w warunkach live).
-    # ml_data_only — brak deduplikacji (dane treningowe, każda obserwacja wartościowa).
+    # Deduplikacja obejmuje też ml_data_only — jeden aktywny setup per typ+wariant+kierunek.
     new_variant = setup.get("variant", "baseline")
-    if not ml_data_only and (not shadow or model == "Algo2"):
+    new_type = setup.get("type", setup.get("setup_type", ""))
+    if not shadow or model == "Algo2":
         for p in db.get_active_setups():
             if (p["direction"] == direction and p["model"] == model
-                    and p.get("variant", "baseline") == new_variant):
+                    and p.get("variant", "baseline") == new_variant
+                    and p.get("type", "") == new_type):
                 old_w1 = p["entries"][0] if p["entries"] else 0
                 diff = abs(old_w1 - new_level)
 
