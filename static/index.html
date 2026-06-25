@@ -2137,7 +2137,6 @@ function ViewSettings() {
         trade_usdt:   String(d.trade_usdt ?? 100),
         leverage:     String(d.leverage ?? 20),
         max_positions: String(d.max_positions ?? 5),
-        ml_training_cutoff: d.ml_training_cutoff || '',
         type_configs: Object.fromEntries(
           ALGO2_TYPES.map(t => {
             const saved = (d.type_configs || {})[t.key] || {};
@@ -2169,7 +2168,6 @@ function ViewSettings() {
       trade_usdt:   parseFloat(cfg.trade_usdt)    || null,
       leverage:     parseInt(cfg.leverage)         || null,
       max_positions: parseInt(cfg.max_positions)   || null,
-      ml_training_cutoff: cfg.ml_training_cutoff || '',
       type_configs,
     };
     try {
@@ -2290,17 +2288,6 @@ function ViewSettings() {
             </tbody>
           </table>
           <div style={{marginTop:10, fontSize:10, color:'var(--text3)'}}>Puste pola = wartość globalna</div>
-        </div>
-      </div>
-
-      {/* ML */}
-      <div style={sCard}>
-        <div style={sH}>Machine Learning</div>
-        <div>
-          <label style={sLbl}>Data cutoff (trenuj tylko na danych od tej daty)</label>
-          <input style={{...sInp, width:160}} type="date" value={cfg.ml_training_cutoff}
-            onChange={e => setBase('ml_training_cutoff', e.target.value)} />
-          <div style={{fontSize:10, color:'var(--text3)', marginTop:4}}>Puste = wszystkie dane</div>
         </div>
       </div>
 
