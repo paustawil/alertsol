@@ -750,6 +750,7 @@ function ViewSetups() {
   const [settingsFilter,setSettingsFilter]=useState(null); // {types, variants} z enabled settings
   const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
   const [dateTo,setDateTo]=useState('');
+  const [regimeFilter,setRegimeFilter]=useState('all');
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
   const [expandedRows,setExpandedRows]=useState(new Set());
@@ -961,12 +962,19 @@ function ViewSetups() {
           <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={inpStyle}/>
           {(dateFrom||dateTo)&&<span style={{color:'var(--blue)',fontSize:11,cursor:'pointer'}} onClick={()=>{setDateFrom('');setDateTo('');}}>✕</span>}
         </div>
+        {/* Trend */}
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Trend:</span>
+          <div className="seg-tabs">
+            {[{v:'all',l:'Wszystkie'},{v:'impulse',l:'Impulse'},{v:'trend',l:'Trend'},{v:'range',l:'Range'}].map(({v,l})=><div key={v} className={`seg-tab ${regimeFilter===v?'active':''}`} onClick={()=>setRegimeFilter(v)}>{l}</div>)}
+          </div>
+        </div>
       </div>
       <div className="panel-body scroll-y">
         {rows===null&&<div style={{padding:24,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:12}}>Ładowanie…</div>}
         {rows!==null&&<table className="tbl">
-          <thead><tr><th>Status / Wynik</th><th>Data</th><th>Kier</th><th>Typ / Wariant</th><th>Wejście</th><th>TP1</th><th>TP2</th><th>SL</th><th>RR</th><th>P&L TP1</th><th>P&L TP1+TP2</th><th>Ryzyko SL</th></tr></thead>
-          <tbody>{rows.map((r,i)=>{
+          <thead><tr><th>Status / Wynik</th><th>Data</th><th>Kier</th><th>Typ / Wariant</th><th>Trend</th><th>Wejście</th><th>TP1</th><th>TP2</th><th>SL</th><th>RR</th><th>P&L TP1</th><th>P&L TP1+TP2</th><th>Ryzyko SL</th></tr></thead>
+          <tbody>{rows.filter(r=>regimeFilter==='all'||((r.regime||'').toLowerCase().startsWith(regimeFilter))).map((r,i)=>{
             const isExp=expandedRows.has(r.id);
             const isActive=['pending','open','after_tp1'].includes(r.status_key);
             const isOpen=['open','after_tp1'].includes(r.status_key);
@@ -985,6 +993,7 @@ function ViewSetups() {
                 <td className="mono" style={{color:'var(--text3)',fontSize:10,whiteSpace:'nowrap'}}>{r.t_def?r.t_def.slice(5,16):'—'}</td>
                 <td><span className={`kier-badge ${(r.kier||'long').toLowerCase()}`}>{r.kier}</span></td>
                 <td style={{fontSize:10,color:'var(--text2)',maxWidth:160}}>{r.typ}<br/><span style={{color:'var(--text3)'}}>{r.variant}</span></td>
+                <td className="mono" style={{fontSize:10,whiteSpace:'nowrap'}}>{r.regime?<><span style={{color:r.regime.includes('UP')?'var(--green)':r.regime.includes('DOWN')?'var(--red)':'var(--text3)'}}>{r.regime.replace('_',' ')}</span>{r.regime_score!=null&&<span style={{color:'var(--text3)',marginLeft:3}}>({r.regime_score})</span>}</>:'—'}</td>
                 <td className="mono" style={{fontSize:10}}>{fmtPrice(entry)}</td>
                 <td className="mono" style={{fontSize:10,color:'var(--green)'}}>{fmtPrice(tp1)}</td>
                 <td className="mono" style={{fontSize:10,color:'var(--green)',opacity:.7}}>{tp2!=null?fmtPrice(tp2):'—'}</td>
@@ -1009,7 +1018,7 @@ function ViewSetups() {
                 </td>
               </tr>
               {isExp&&<tr>
-                <td colSpan={12} style={{background:'var(--bg2)',padding:'7px 14px',borderTop:'none'}}>
+                <td colSpan={13} style={{background:'var(--bg2)',padding:'7px 14px',borderTop:'none'}}>
                   <div style={{display:'flex',gap:16,fontSize:10,color:'var(--text2)',fontFamily:'var(--mono)',flexWrap:'wrap',alignItems:'center'}}>
                     <span style={{color:'var(--text3)'}}>#{r.id}</span>
                     <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened}/>
@@ -2404,9 +2413,16 @@ function TabDashboard() {
 function TabSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
   const [shadowFilter,setShadowFilter]=useState('all');
-  const [settingsFilter,setSettingsFilter]=useState(null); // null = ładowanie
+  const [settingsFilter,setSettingsFilter]=useState(null);
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
+  const [regimeFilter,setRegimeFilter]=useState('all');
+  const [showMoreFilters,setShowMoreFilters]=useState(false);
+  const [filterTree,setFilterTree]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState(null);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
+  const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
+  const [dateTo,setDateTo]=useState('');
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   useEffect(()=>{
@@ -2419,18 +2435,50 @@ function TabSetups() {
       setSettingsFilter({types,variants});
     }).catch(()=>setSettingsFilter({types:[],variants:[]}));
   },[]);
+  useEffect(()=>{
+    if(settingsFilter===null) return;
+    fetch('/api/dashboard/variants-tree').then(r=>r.ok?r.json():[])
+      .then(tree=>{
+        setFilterTree(tree);
+        setSelectedPairs(prev=>{
+          if(prev!==null) return prev;
+          if(settingsFilter.types.length>0)
+            return tree.flatMap(m=>m.types.flatMap(t=>t.variants
+              .filter(v=>settingsFilter.types.includes(t.name)&&settingsFilter.variants.includes(v.name))
+              .map(v=>`${m.name}:${t.name}:${v.name}`)));
+          return tree.flatMap(m=>m.types.flatMap(t=>t.variants.filter(v=>v.active).map(v=>`${m.name}:${t.name}:${v.name}`)));
+        });
+      }).catch(()=>{});
+  },[settingsFilter]);
+  const [modelFilters,typeFilters,variantFilters]=React.useMemo(()=>{
+    if(filterTree.length>0&&selectedPairs!==null){
+      if(selectedPairs.length===0) return [[],[],[]];
+      const allPairs=filterTree.flatMap(m=>m.types.flatMap(t=>t.variants.map(v=>`${m.name}:${t.name}:${v.name}`)));
+      if(selectedPairs.length===allPairs.length) return [[],[],[]];
+      return [
+        [...new Set(selectedPairs.map(p=>p.split(':')[0]))],
+        [...new Set(selectedPairs.map(p=>p.split(':')[1]))],
+        [...new Set(selectedPairs.map(p=>p.split(':')[2]))],
+      ];
+    }
+    if(settingsFilter&&settingsFilter.types.length>0) return [[],settingsFilter.types,settingsFilter.variants];
+    return [[],[],[]];
+  },[selectedPairs,filterTree,settingsFilter]);
+  const pairsFiltered=selectedPairs!==null&&filterTree.length>0&&
+    selectedPairs.length<filterTree.flatMap(m=>m.types.flatMap(t=>t.variants)).length;
   const fetchRowsMobile=React.useCallback(()=>{
     if(settingsFilter===null) return;
     const p=new URLSearchParams({limit:100,shadow_filter:shadowFilter});
     if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
-    if(settingsFilter.types.length>0) p.set('types',settingsFilter.types.join(','));
-    if(settingsFilter.variants.length>0) p.set('variants',settingsFilter.variants.join(','));
-    const d=new Date();d.setDate(d.getDate()-30);
-    p.set('date_from',d.toISOString().split('T')[0]);
+    if(modelFilters.length>0) p.set('models',modelFilters.join(','));
+    if(typeFilters.length>0) p.set('types',typeFilters.join(','));
+    if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
+    if(dateFrom) p.set('date_from',dateFrom);
+    if(dateTo) p.set('date_to',dateTo);
     return fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>{});
-  },[statusFilters,shadowFilter,settingsFilter]);
+  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
   useEffect(()=>{
     if(settingsFilter===null) return;
     setRows(null);
@@ -2450,9 +2498,32 @@ function TabSetups() {
       <div className="filter-scroll">
         {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
         {['all','real','bitget','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':v==='bitget'?'Bitget':'Shadow'}</div>)}
+        <div className={`filter-chip ${showMoreFilters?'active':''}`} onClick={()=>setShowMoreFilters(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>Filtry {showMoreFilters?'▴':'▾'}</div>
       </div>
+      {showMoreFilters&&<div style={{padding:'6px 12px',display:'flex',flexDirection:'column',gap:6}}>
+        <div className="filter-scroll">
+          <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)',flexShrink:0}}>Trend:</span>
+          {[{v:'all',l:'Wszystkie'},{v:'impulse',l:'Impulse'},{v:'trend',l:'Trend'},{v:'range',l:'Range'}].map(({v,l})=><div key={v} className={`filter-chip ${regimeFilter===v?'active':''}`} onClick={()=>setRegimeFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{l}</div>)}
+        </div>
+        <div style={{display:'flex',gap:4,alignItems:'center',flexWrap:'wrap'}}>
+          <div className={`filter-chip ${showTypeFilter?'active':''}`} onClick={()=>setShowTypeFilter(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>
+            Typ/Wariant{pairsFiltered?' (filtr)':''} {showTypeFilter?'▴':'▾'}
+          </div>
+          {pairsFiltered&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>setSelectedPairs(filterTree.flatMap(m=>m.types.flatMap(t=>t.variants.map(v=>`${m.name}:${t.name}:${v.name}`))))}>wyczysc</span>}
+        </div>
+        {showTypeFilter&&filterTree.length>0&&selectedPairs!==null&&
+          <div style={{maxHeight:240,overflowY:'auto',borderTop:'1px solid var(--border)'}}>
+            <FilterTree3 tree={filterTree} selected={selectedPairs} onSelect={setSelectedPairs} settingsFilter={settingsFilter}/>
+          </div>}
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10,flex:1}}/>
+          <span style={{color:'var(--text3)',fontSize:10}}>-</span>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10,flex:1}}/>
+          {(dateFrom||dateTo)&&<span style={{color:'var(--blue)',fontSize:11,cursor:'pointer'}} onClick={()=>{setDateFrom('');setDateTo('');}}>x</span>}
+        </div>
+      </div>}
       {rows===null&&<div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
-      {rows!==null&&rows.map((r,i)=>{
+      {rows!==null&&rows.filter(r=>regimeFilter==='all'||((r.regime||'').toLowerCase().startsWith(regimeFilter))).map((r,i)=>{
         const MobileResultChip=()=>{
           const [editing,setEditing]=useState(false);
           const [saving,setSaving]=useState(false);
@@ -2482,7 +2553,7 @@ function TabSetups() {
               <MobileResultChip/>
             </div>
           </div>
-          <div className="hist-typ" style={{marginBottom:4}}>{r.typ} · <span style={{color:'var(--text3)'}}>{r.variant}</span></div>
+          <div className="hist-typ" style={{marginBottom:4}}>{r.typ} · <span style={{color:'var(--text3)'}}>{r.variant}</span>{r.regime&&<span style={{marginLeft:6,fontFamily:'var(--mono)',fontSize:9,color:r.regime.includes('UP')?'var(--green)':r.regime.includes('DOWN')?'var(--red)':'var(--text3)'}}>{r.regime.replace('_',' ')}{r.regime_score!=null?`(${r.regime_score})`:''}</span>}</div>
           <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--text2)',marginBottom:4,display:'flex',flexWrap:'wrap',gap:'4px 10px'}}>
             <span>W1: <span style={{color:'var(--text1)'}}>{r.entries&&r.entries[0]!=null?`$${Number(r.entries[0]).toFixed(2)}`:'—'}</span></span>
             <span>TP1: <span style={{color:'var(--green)'}}>{r.tps&&r.tps[0]!=null?`$${Number(r.tps[0]).toFixed(2)}`:'—'}</span></span>

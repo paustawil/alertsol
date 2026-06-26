@@ -1911,7 +1911,8 @@ def get_all_setups_filtered(
                        ROUND(({tp1_only_pct_calc_f})::numeric, 2) AS tp1_only_pnl_pct,
                        entries, tps, sl,
                        trade_usdt, exchange_qty_full, exchange_qty_half,
-                       exchange_tp1_oid, exchange_sl_oid
+                       exchange_tp1_oid, exchange_sl_oid,
+                       market_context
                 FROM setups
                 WHERE {where_sql}
                 ORDER BY alert_time DESC
