@@ -3966,6 +3966,8 @@ def api_all_setups(
             "trade_usdt":               _f(s.get("trade_usdt")),
             "exchange_fee_open":        _f(s.get("exchange_fee_open")),
             "exchange_fee_close":       _f(s.get("exchange_fee_close")),
+            "regime":                   (s.get("market_context") or {}).get("regime"),
+            "regime_score":             (s.get("market_context") or {}).get("regime_score"),
         })
     return {"total": data["total"], "rows": rows}
 
