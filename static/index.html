@@ -2417,7 +2417,6 @@ function TabSetups() {
   const [rows,setRows]=useState(null);
   const [total,setTotal]=useState(0);
   const [regimeFilter,setRegimeFilter]=useState('all');
-  const [showMoreFilters,setShowMoreFilters]=useState(false);
   const [filterTree,setFilterTree]=useState([]);
   const [selectedPairs,setSelectedPairs]=useState(null);
   const [showTypeFilter,setShowTypeFilter]=useState(false);
@@ -2497,12 +2496,14 @@ function TabSetups() {
       <div className="sec-header"><span className="sec-title">Setups</span><span className="sec-badge">{rows?`${rows.length}/${total}`:'…'}</span></div>
       <div className="filter-scroll">
         {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
-        {['all','real','bitget','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':v==='bitget'?'Bitget':'Shadow'}</div>)}
-        <div className={`filter-chip ${showMoreFilters?'active':''}`} onClick={()=>setShowMoreFilters(p=>!p)} style={{fontFamily:'var(--mono)',fontSize:9}}>Filtry {showMoreFilters?'▴':'▾'}</div>
       </div>
-      {showMoreFilters&&<div style={{padding:'6px 12px',display:'flex',flexDirection:'column',gap:6}}>
-        <div className="filter-scroll">
-          <span style={{fontSize:9,color:'var(--text3)',fontFamily:'var(--mono)',flexShrink:0}}>Trend:</span>
+      <div style={{padding:'4px 12px',display:'flex',flexDirection:'column',gap:5}}>
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',minWidth:36,fontFamily:'var(--mono)'}}>Źródło:</span>
+          {['all','real','bitget','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':v==='bitget'?'Bitget':'Shadow'}</div>)}
+        </div>
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',minWidth:36,fontFamily:'var(--mono)'}}>Trend:</span>
           {[{v:'all',l:'Wszystkie'},{v:'impulse',l:'Impulse'},{v:'trend',l:'Trend'},{v:'range',l:'Range'}].map(({v,l})=><div key={v} className={`filter-chip ${regimeFilter===v?'active':''}`} onClick={()=>setRegimeFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{l}</div>)}
         </div>
         <div style={{display:'flex',gap:4,alignItems:'center',flexWrap:'wrap'}}>
@@ -2521,7 +2522,7 @@ function TabSetups() {
           <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:3,padding:'4px 6px',color:'var(--text2)',fontFamily:'var(--mono)',fontSize:10,flex:1}}/>
           {(dateFrom||dateTo)&&<span style={{color:'var(--blue)',fontSize:11,cursor:'pointer'}} onClick={()=>{setDateFrom('');setDateTo('');}}>x</span>}
         </div>
-      </div>}
+      </div>
       {rows===null&&<div style={{padding:20,color:'var(--text3)',fontFamily:'var(--mono)',fontSize:11,textAlign:'center'}}>Ładowanie…</div>}
       {rows!==null&&rows.filter(r=>regimeFilter==='all'||((r.regime||'').toLowerCase().startsWith(regimeFilter))).map((r,i)=>{
         const MobileResultChip=()=>{
