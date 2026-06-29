@@ -3354,10 +3354,11 @@ def api_ml_train():
         if result.get("error"):
             log.warning("[ML] Training error: %s", result["error"])
         else:
-            log.info("[ML] Training complete: %s samples, acc=%.1f%%, auc=%.3f",
+            auc_val = result.get("model_quality", {}).get("auc")
+            log.info("[ML] Training complete: %s samples, acc=%.1f%%, auc=%s",
                         result.get("training_data", {}).get("used_for_training", 0),
                         result.get("model_quality", {}).get("accuracy", 0),
-                        result.get("model_quality", {}).get("auc", 0))
+                        f"{auc_val:.3f}" if auc_val is not None else "N/A")
         return result
     except BaseException as e:
         log.exception("[ML] Training exception: %s", e)
