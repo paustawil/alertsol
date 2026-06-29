@@ -1155,6 +1155,7 @@ def get_simulator_trades(
     date_from: str | None = None,
     date_to: str | None = None,
     variants: list[str] | None = None,
+    min_regime_score: int | None = None,
 ) -> list[dict]:
     """Zwraca zamknięte setupy z entry_hit_at, exit_time, pnl_pct — do symulatora portfela."""
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
@@ -1210,6 +1211,9 @@ def get_simulator_trades(
     if date_to:
         where.append("resolved_at < (%(date_to)s::date + interval '1 day')")
         params["date_to"] = date_to
+    if min_regime_score is not None:
+        where.append("(market_context->>'regime_score')::int >= %(min_regime_score)s")
+        params["min_regime_score"] = min_regime_score
 
     where_sql = " AND ".join(where)
 
@@ -1229,7 +1233,8 @@ def get_simulator_trades(
                        {_entry} AS avg_entry,
                        avg_exit,
                        ROUND(({pnl_pct_calc})::numeric, 4) AS pnl_pct,
-                       ROUND(({tp1_only_pct_calc})::numeric, 4) AS tp1_only_pnl_pct
+                       ROUND(({tp1_only_pct_calc})::numeric, 4) AS tp1_only_pnl_pct,
+                       (market_context->>'regime_score')::int AS regime_score
                 FROM setups
                 WHERE {where_sql}
                 ORDER BY entry_hit_at ASC
