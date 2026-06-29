@@ -11,6 +11,7 @@ Użycie:
 
 import argparse
 import json
+import math
 import os
 import sys
 from datetime import datetime
@@ -345,7 +346,7 @@ def run_training(db_url: str = None, model_path: str = "model/setup_scorer.lgb")
             "precision": round(avg.get("precision", 0) * 100, 1),
             "recall": round(avg.get("recall", 0) * 100, 1),
             "f1": round(avg.get("f1", 0) * 100, 1),
-            "auc": round(avg.get("auc", 0), 3),
+            "auc": round(avg.get("auc", 0), 3) if not math.isnan(avg.get("auc", 0)) else None,
         },
         "top_features": top_features,
         "has_market_context": meta.get("has_market_context", False),
