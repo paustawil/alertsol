@@ -3474,10 +3474,11 @@ def api_simulator(
     variants: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    min_regime_score: int | None = None,
 ):
     """Dane do symulatora portfela: zamknięte setupy z entry/exit time i pnl_pct."""
     variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
-    return db.get_simulator_trades(date_from, date_to, variant_list)
+    return db.get_simulator_trades(date_from, date_to, variant_list, min_regime_score)
 
 
 @app.get("/api/analytics/export")

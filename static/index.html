@@ -1356,6 +1356,7 @@ function ViewSimulator() {
   const [dateTo,setDateTo]=useState('');
   const [startCapital,setStartCapital]=useState(1000);
   const [pnlMode,setPnlMode]=useState('tp12');
+  const [minRegimeScore,setMinRegimeScore]=useState('');
   const [withdrawEnabled,setWithdrawEnabled]=useState(false);
   const [withdrawMode,setWithdrawMode]=useState('weekly');
   const [withdrawPct,setWithdrawPct]=useState(50);
@@ -1418,6 +1419,7 @@ function ViewSimulator() {
         p.set('date_from',d.toISOString().slice(0,10));
       }
     }
+    if(minRegimeScore!=='') p.set('min_regime_score',minRegimeScore);
     fetch('/api/simulator?'+p.toString())
       .then(r=>r.ok?r.json():[])
       .then(data=>{
@@ -1432,9 +1434,9 @@ function ViewSimulator() {
       })
       .catch(()=>setTrades([]))
       .finally(()=>setLoading(false));
-  },[selectedPairs,allTreePairs,periodMode,dateFrom,dateTo]);
+  },[selectedPairs,allTreePairs,periodMode,dateFrom,dateTo,minRegimeScore]);
 
-  useEffect(()=>{runSim();},[selectedPairs,periodMode,dateFrom,dateTo]);
+  useEffect(()=>{runSim();},[selectedPairs,periodMode,dateFrom,dateTo,minRegimeScore]);
 
   const simulation=React.useMemo(()=>{
     if(!trades||trades.length===0) return null;
@@ -1578,6 +1580,16 @@ function ViewSimulator() {
               <div className={`seg-tab ${pnlMode==='tp1'?'active':''}`} onClick={()=>setPnlMode('tp1')}>TP1 only</div>
             </div>
             <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{pnlMode==='tp1'?'Cały wolumen wychodzi na TP1':'Połowa na TP1, połowa na TP2'}</span>
+          </div>
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Regime:</span>
+            <div style={{display:'flex',gap:4}}>
+              {['',1,2,3,4,5].map(v=>
+                <div key={v} className={`filter-chip ${minRegimeScore===v?'active':''}`}
+                  onClick={()=>setMinRegimeScore(v)}>{v===''?'Wszystkie':`≥${v}`}</div>
+              )}
+            </div>
+            <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{minRegimeScore!==''?`Tylko setupy z regime score ≥ ${minRegimeScore}`:'Bez filtra siły reżimu'}</span>
           </div>
           <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
             <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Wypłaty:</span>
