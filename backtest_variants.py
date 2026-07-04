@@ -335,22 +335,31 @@ def gen_pullback_setups_for_snapshot(
     return setups
 
 
-def find_structure_break(setup: dict, candles_h1_future: list[dict]) -> dict:
-    """Sprawdza PO fakcie (na kolejnych świecach H1), czy i kiedy struktura pękła —
-    2 kolejne zamknięcia H1 poza structure_boundary zapisanym przy tworzeniu setupu.
-    Odpowiednik tego, co check_stale_setups() robi cyklicznie na żywo."""
+# Okno, w którym setup jest w ogóle "żywy" (czeka na wejście + max hold) — złamanie
+# struktury po tym czasie jest już nieistotne, bo trade dawno się rozstrzygnął.
+_SETUP_LIFETIME_HOURS = (ENTRY_TIMEOUT_CANDLES + HOLD_TIMEOUT_CANDLES) * 15 / 60
+
+
+def find_structure_break(setup: dict, candles_h1_future: list[dict],
+                          max_hours: float = _SETUP_LIFETIME_HOURS) -> dict:
+    """Sprawdza PO fakcie (na kolejnych świecach H1, w oknie życia setupu), czy i kiedy
+    struktura pękła — 2 kolejne zamknięcia H1 poza structure_boundary zapisanym przy
+    tworzeniu setupu. Odpowiednik tego, co check_stale_setups() robi cyklicznie na żywo."""
     boundary = setup.get("structure_boundary")
     d = setup["direction"]
     if boundary is None:
         return {"structure_broken": False, "hours_to_structure_break": None}
 
+    alert_ts = setup["alert_ts"]
     consecutive = 0
     for c in candles_h1_future:
+        hours = (c["time"] - alert_ts) / 3600.0
+        if hours > max_hours:
+            break
         beyond = c["close"] > boundary if d == "short" else c["close"] < boundary
         consecutive = consecutive + 1 if beyond else 0
         if consecutive >= 2:
-            hours = round((c["time"] - setup["alert_ts"]) / 3600.0, 2)
-            return {"structure_broken": True, "hours_to_structure_break": hours}
+            return {"structure_broken": True, "hours_to_structure_break": round(hours, 2)}
     return {"structure_broken": False, "hours_to_structure_break": None}
 
 
