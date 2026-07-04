@@ -2215,7 +2215,8 @@ def get_setup_price_trace(date_from: str, date_to: str) -> list[dict]:
                     sl,
                     avg_entry, avg_exit,
                     entry_hit_at,
-                    to_char(exit_time AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS exit_time
+                    to_char(exit_time AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS exit_time,
+                    tradeable, shadow, exchange_position_opened
                 FROM setups
                 WHERE alert_timestamp >= %(ts_from)s AND alert_timestamp <= %(ts_to)s
                 ORDER BY alert_time ASC

@@ -2786,6 +2786,7 @@ def api_setup_prices_csv(date_from: str, date_to: str):
     writer.writerow([
         "ID", "Alert", "Typ", "Wariant", "Kierunek", "Wynik",
         "Cena@alert", "Entry(W)", "SL", "Avg entry", "Avg exit", "Exit time",
+        "Tradeable", "Shadow", "Exchange pozycja otwarta",
     ])
     for r in rows:
         writer.writerow([
@@ -2801,6 +2802,9 @@ def api_setup_prices_csv(date_from: str, date_to: str):
             r.get("avg_entry"),
             r.get("avg_exit"),
             r.get("exit_time"),
+            r.get("tradeable"),
+            r.get("shadow"),
+            r.get("exchange_position_opened"),
         ])
 
     return Response(
