@@ -293,15 +293,10 @@ def gen_pullback_setups_for_snapshot(
     swing_range = swing_high - swing_low
     setups = []
 
-    # Przełamanie struktury (patrz sol_alert.py _setup_ctx): ostatnie 2 świece H1,
-    # które ZAMKNĘŁY się poza swing_high (short) / swing_low (long).
+    # Poziom odniesienia do wykrywania przełamania struktury PO fakcie (patrz
+    # find_structure_break poniżej) — swing_high/low w tej chwili z definicji
+    # "podciąga się" do current_price, więc sprawdzanie ich TERAZ zawsze da 0/False.
     boundary = swing_high if tp_direction == "short" else swing_low
-    recent_h1 = candles_h1[-2:] if len(candles_h1) >= 2 else []
-    closes_beyond_structure = sum(
-        1 for c in recent_h1
-        if (c["close"] > boundary if tp_direction == "short" else c["close"] < boundary)
-    )
-    structure_broken = closes_beyond_structure >= 2
 
     for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, _) in _PULLBACK_VARIANTS.items():
         # Uwaga: w live systemie str4 odpala tylko przy strength==4 (baseline pokrywa >=5),
@@ -334,11 +329,29 @@ def gen_pullback_setups_for_snapshot(
             "rr":        rr_val,
             "swing_range": round(swing_range, 2),
             "alert_ts":  alert_ts,
-            "closes_beyond_structure": closes_beyond_structure,
-            "structure_broken": structure_broken,
+            "structure_boundary": round(boundary, 2),
         })
 
     return setups
+
+
+def find_structure_break(setup: dict, candles_h1_future: list[dict]) -> dict:
+    """Sprawdza PO fakcie (na kolejnych świecach H1), czy i kiedy struktura pękła —
+    2 kolejne zamknięcia H1 poza structure_boundary zapisanym przy tworzeniu setupu.
+    Odpowiednik tego, co check_stale_setups() robi cyklicznie na żywo."""
+    boundary = setup.get("structure_boundary")
+    d = setup["direction"]
+    if boundary is None:
+        return {"structure_broken": False, "hours_to_structure_break": None}
+
+    consecutive = 0
+    for c in candles_h1_future:
+        beyond = c["close"] > boundary if d == "short" else c["close"] < boundary
+        consecutive = consecutive + 1 if beyond else 0
+        if consecutive >= 2:
+            hours = round((c["time"] - setup["alert_ts"]) / 3600.0, 2)
+            return {"structure_broken": True, "hours_to_structure_break": hours}
+    return {"structure_broken": False, "hours_to_structure_break": None}
 
 
 # ── Główna pętla backtestowa ───────────────────────────────────────────────────
@@ -404,10 +417,12 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
 
         generated += len(setups)
         future_m15 = candles_m15[i:]
+        future_h1  = candles_h1[h1_idx:]
         n_vars = len(setups)  # ile wariantów odpaliło na tym snapshotu
 
         for s in setups:
             trade = simulate_trade(s, future_m15)
+            structure = find_structure_break(s, future_h1)
             results.append({
                 "alert_dt":      datetime.fromtimestamp(snap_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
                 "type":          s["type"],
@@ -421,8 +436,8 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
                 "sl":            s["sl"],
                 "rr":            s["rr"],
                 "swing_range":   s["swing_range"],
-                "closes_beyond_structure": s["closes_beyond_structure"],
-                "structure_broken": s["structure_broken"],
+                "structure_broken": structure["structure_broken"],
+                "hours_to_structure_break": structure["hours_to_structure_break"],
                 "n_vars":        n_vars,
                 **{k: v for k, v in trade.items()},
             })
