@@ -339,7 +339,10 @@ def gen_pullback_setups_for_snapshot(
 
 # ── Główna pętla backtestowa ───────────────────────────────────────────────────
 
-def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv") -> None:
+def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv") -> dict:
+    """Zwraca dict {ok, message, candles_m15, candles_h1, setups_generated, rows}
+    — zamiast milczeć przy braku wyników, żeby wywołujący (np. main_runner.py)
+    mógł pokazać prawdziwą przyczynę zamiast crashować przy otwieraniu pliku."""
     print(f"\n=== Backtest wariantów trend_pullback | {days} dni ===\n")
 
     # Pobierz dane historyczne
@@ -347,8 +350,10 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
     candles_h1  = fetch_history(SYMBOL, "1H",   days + 3)
 
     if len(candles_m15) < 100 or len(candles_h1) < 50:
-        print("Za mało danych historycznych.")
-        return
+        msg = f"Za mało danych historycznych (M15={len(candles_m15)}, H1={len(candles_h1)})."
+        print(msg)
+        return {"ok": False, "message": msg, "candles_m15": len(candles_m15),
+                "candles_h1": len(candles_h1), "setups_generated": 0, "rows": 0}
 
     # Indeks H1 po timestampie dla szybkiego lookup
     h1_by_ts = {c["time"]: i for i, c in enumerate(candles_h1)}
@@ -434,6 +439,23 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
 
     # Podsumowanie per wariant
     _print_summary(results)
+
+    if not results:
+        return {
+            "ok": False,
+            "message": (
+                f"Pobrano {len(candles_m15)} świec M15 / {len(candles_h1)} H1, "
+                f"ale 0 setupów przeszło filtry (RR>={MIN_RR}, strength, dystans od ceny) "
+                f"w {days} dniach — sprawdź logikę filtrów w gen_pullback_setups_for_snapshot()."
+            ),
+            "candles_m15": len(candles_m15), "candles_h1": len(candles_h1),
+            "setups_generated": generated, "rows": 0,
+        }
+    return {
+        "ok": True, "message": f"Zapisano {len(results)} rekordów.",
+        "candles_m15": len(candles_m15), "candles_h1": len(candles_h1),
+        "setups_generated": generated, "rows": len(results),
+    }
 
 
 def _print_summary(results: list[dict]) -> None:
