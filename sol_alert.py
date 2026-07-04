@@ -2684,18 +2684,48 @@ def grok_shadow_main() -> None:
 # ── Algorytmiczne anulowanie przestarzałych setupów ──────────────────────────
 STALE_DIST_PCT = 0.05  # 5% — max dystans ceny od entry, powyżej = anuluj
 
-def check_stale_setups(regime: dict, current_price: float):
+def check_stale_setups(regime: dict, current_price: float, candles_h1: list[dict] | None = None):
     """Anuluje nieotwarte setupy, które się zdezaktualizowały.
     Kryteria:
     1. Cena uciekła >5% od entry
     2. Reżim zmienił kierunek (setup short, teraz IMPULSE_UP/TREND_UP i odwrotnie)
     3. Cena przebiła TP1 bez wejścia w pozycję
     Nie-tradeable setupy podlegają tym samym regułom — różnica tylko w tym że nie składamy zleceń.
+
+    Dodatkowo (obserwacyjnie, nic nie anuluje): dla pending trend_pullback aktualizuje
+    market_context.structure_broken/closes_beyond_structure, porównując ŚWIEŻE świece H1
+    z swing_high/swing_low ZAPISANYM przy tworzeniu setupu (nie przeliczanym na nowo —
+    inaczej warunek nigdy nie mógłby być prawdziwy, bo swing_high/low w momencie detekcji
+    zawsze "podciąga się" do ówczesnej ceny).
     """
     pending = db.get_active_setups()
     non_entered = [s for s in pending if s.get("entry_hit_at") is None]
     if not non_entered:
         return
+
+    if candles_h1:
+        recent_h1 = candles_h1[-2:]
+        for s in non_entered:
+            if not str(s.get("type", "")).startswith("trend_pullback"):
+                continue
+            ctx = s.get("market_context") or {}
+            swing_h = ctx.get("swing_high")
+            swing_l = ctx.get("swing_low")
+            d = s.get("direction", "")
+            boundary = swing_h if d == "short" else swing_l
+            if boundary is None:
+                continue
+            closes_beyond = sum(
+                1 for c in recent_h1
+                if (c["close"] > boundary if d == "short" else c["close"] < boundary)
+            )
+            structure_broken = closes_beyond >= 2
+            if ctx.get("closes_beyond_structure") != closes_beyond or ctx.get("structure_broken") != structure_broken:
+                db.update_setup(s["setup_id"], market_context={
+                    **ctx,
+                    "closes_beyond_structure": closes_beyond,
+                    "structure_broken": structure_broken,
+                })
 
     regime_dir = regime.get("direction", "none")
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -3131,7 +3161,7 @@ def breakout_scan():
     regime      = detect_market_regime(candles_m15, candles_h1, current)
 
     # Anuluj przestarzałe setupy (co 3 min — szybciej niż main)
-    check_stale_setups(regime, current)
+    check_stale_setups(regime, current, candles_h1)
     check_open_setups_invalidation(regime, current)
 
     if regime["regime"] == "RANGE":
@@ -3212,7 +3242,7 @@ def main():
     # exchange_trader.sync()
 
     # Algorytmiczne anulowanie przestarzałych setupów (co 15 min)
-    check_stale_setups(regime, current)
+    check_stale_setups(regime, current, candles_h1)
     check_open_setups_invalidation(regime, current)
 
     # ── Algo2 — algorytmiczne setupy trend/impulse/range ───────────────────
