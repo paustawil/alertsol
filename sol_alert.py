@@ -966,6 +966,21 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
             ctx["swing_low"] = round(swing_l, 2)
         if swing_h is not None and swing_l is not None:
             ctx["swing_range"] = round(swing_h - swing_l, 2)
+        # Przełamanie struktury (obserwacyjne, nic nie blokuje): licz ostatnie 2 świece H1,
+        # które ZAMKNĘŁY się poza swing_high (short) / swing_low (long) użytym do zbudowania
+        # setupu — odróżnia trwałe złamanie trendu od zwykłego korekcyjnego knota.
+        boundary = None
+        if sl_price is not None and entry_price is not None:
+            is_short = sl_price > entry_price
+            boundary = swing_h if is_short else swing_l
+        if boundary is not None and len(candles_h1) >= 2:
+            recent_h1 = candles_h1[-2:]
+            closes_beyond = sum(
+                1 for c in recent_h1
+                if (c["close"] > boundary if is_short else c["close"] < boundary)
+            )
+            ctx["closes_beyond_structure"] = closes_beyond
+            ctx["structure_broken"] = closes_beyond >= 2
         ctx["entry_dist_pct"] = round(abs(current_price - entry_price) / current_price * 100, 3)
         ctx["sl_dist_pct"] = round(abs(entry_price - sl_price) / current_price * 100, 3) if sl_price else None
         if fib_lvl is not None:
