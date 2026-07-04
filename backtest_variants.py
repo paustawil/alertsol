@@ -45,17 +45,20 @@ HOLD_TIMEOUT_CANDLES  = 64
 
 # ── Pobieranie danych historycznych ───────────────────────────────────────────
 
-def _fetch_page(symbol: str, granularity: str, start_ms: int, end_ms: int) -> list[dict]:
-    """Pobiera jedną stronę (max 200 świec) z Bitget API."""
+def _fetch_page(symbol: str, granularity: str, end_ms: int | None, limit: int = 200) -> list[dict]:
+    """Pobiera jedną stronę (max `limit` świec) z Bitget API, kończącą się w `end_ms`.
+    Uwaga: Bitget /candles nie obsługuje poprawnie startTime+endTime razem dla starszych
+    okien (zwraca pustkę) — paginacja idzie WSTECZ przez samo endTime, tak jak w
+    sprawdzonych archiwalnych skryptach backtestowych (np. archive/gpt3_validator_backtest.py)."""
     url = "https://api.bitget.com/api/v2/mix/market/candles"
     params = {
         "symbol":      symbol,
         "productType": "USDT-FUTURES",
         "granularity": granularity,
-        "startTime":   str(start_ms),
-        "endTime":     str(end_ms),
-        "limit":       "200",
+        "limit":       str(limit),
     }
+    if end_ms is not None:
+        params["endTime"] = str(end_ms)
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json().get("data") or []
@@ -73,31 +76,32 @@ def _fetch_page(symbol: str, granularity: str, start_ms: int, end_ms: int) -> li
 
 
 def fetch_history(symbol: str, granularity: str, days: int) -> list[dict]:
-    """Pobiera kompletną historię świec za ostatnie `days` dni."""
-    interval_ms = {"15m": 15 * 60 * 1000, "1H": 60 * 60 * 1000}[granularity]
-    end_ms   = int(time.time() * 1000)
-    start_ms = end_ms - days * 24 * 60 * 60 * 1000
+    """Pobiera kompletną historię świec za ostatnie `days` dni, paginując wstecz od teraz."""
+    interval_s = {"15m": 15 * 60, "1H": 60 * 60}[granularity]
+    start_ts = int(time.time()) - days * 24 * 60 * 60
 
     all_candles: list[dict] = []
-    page_start = start_ms
+    end_ms: int | None = None
     print(f"[fetch] {granularity} {days}d: ", end="", flush=True)
 
-    while page_start < end_ms:
-        page_end = min(page_start + 200 * interval_ms, end_ms)
-        page = _fetch_page(symbol, granularity, page_start, page_end)
-        if not page:
+    while True:
+        batch = _fetch_page(symbol, granularity, end_ms)
+        if not batch:
             break
-        all_candles.extend(page)
-        page_start = page[-1]["time"] * 1000 + interval_ms
+        batch.sort(key=lambda c: c["time"])
+        all_candles = batch + all_candles
+        end_ms = batch[0]["time"] * 1000 - interval_s * 1000
         print(".", end="", flush=True)
         time.sleep(0.15)  # rate limit
+        if batch[0]["time"] <= start_ts or len(batch) < 2:
+            break
 
     print(f" {len(all_candles)} świec")
-    # deduplicate + sort
+    # deduplicate + sort + przytnij do żądanego okna
     seen: set[int] = set()
     unique = []
     for c in sorted(all_candles, key=lambda x: x["time"]):
-        if c["time"] not in seen:
+        if c["time"] not in seen and c["time"] >= start_ts:
             seen.add(c["time"])
             unique.append(c)
     return unique
