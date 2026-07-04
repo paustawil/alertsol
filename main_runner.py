@@ -2771,6 +2771,45 @@ def api_pullback_analysis_csv(date_from: str | None = None):
     )
 
 
+@app.get("/api/setup-prices/csv")
+def api_setup_prices_csv(date_from: str, date_to: str):
+    """CSV export poziomów cenowych (entry/SL/wejście/wyjście) wszystkich setupów
+    w danym oknie czasowym — do rekonstrukcji przebiegu ceny przy diagnozowaniu
+    anomalii (np. skorelowanych SL na wielu wariantach naraz)."""
+    from fastapi.responses import Response
+    import csv
+    import io
+
+    rows = db.get_setup_price_trace(date_from, date_to)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "ID", "Alert", "Typ", "Wariant", "Kierunek", "Wynik",
+        "Cena@alert", "Entry(W)", "SL", "Avg entry", "Avg exit", "Exit time",
+    ])
+    for r in rows:
+        writer.writerow([
+            r.get("setup_id"),
+            r.get("alert_time"),
+            r.get("type"),
+            r.get("variant"),
+            r.get("direction"),
+            r.get("result"),
+            r.get("price_at_alert"),
+            r.get("entry_w"),
+            r.get("sl"),
+            r.get("avg_entry"),
+            r.get("avg_exit"),
+            r.get("exit_time"),
+        ])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=setup_prices.csv"},
+    )
+
+
 class ResultUpdate(BaseModel):
     result: str
     avg_exit: float | None = None
