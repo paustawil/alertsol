@@ -3652,11 +3652,17 @@ def admin_run_backtest_variants(days: int = 60):
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            backtest_variants.run_backtest(days=days, out_path=_BACKTEST_VARIANTS_CSV)
-            import csv as _csv
-            with open(_BACKTEST_VARIANTS_CSV, newline="", encoding="utf-8") as f:
-                rows = sum(1 for _ in _csv.DictReader(f))
-            _backtest_variants_status.update({"running": False, "done": True, "rows": rows})
+            result = backtest_variants.run_backtest(days=days, out_path=_BACKTEST_VARIANTS_CSV)
+            if not result.get("ok"):
+                logging.warning(f"[backtest-variants] {result.get('message')}")
+                _backtest_variants_status.update({
+                    "running": False, "done": False, "error": result.get("message"),
+                    "rows": result.get("rows", 0),
+                })
+                return
+            _backtest_variants_status.update({
+                "running": False, "done": True, "rows": result.get("rows", 0),
+            })
         except Exception as e:
             logging.error(f"[backtest-variants] Błąd: {e}", exc_info=True)
             _backtest_variants_status.update({"running": False, "done": False, "error": str(e)})
