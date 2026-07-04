@@ -1691,6 +1691,56 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     "market_context": _setup_ctx(round(w, 2), round(sl, 2)),
                     "rejected_by_algo": True, "filter_reasons": _rej, "not_tradeable": True,
                 })
+
+        # ── Shadow: regime_alt rescue (obserwacyjne, zawsze not_tradeable) ──────
+        # Gdy regime_alt wskazuje trend, którego RANGE nie złapał (patrz Fix 3 /
+        # regime_alt w detect_market_regime), generuje ten sam baseline pullback,
+        # który powstałby, gdyby regime faktycznie był TREND_{alt_dir} — żeby
+        # zebrać dane porównawcze bez wpływu na realny handel (baseline pozostaje
+        # sterowany wyłącznie prawdziwym regime['direction']).
+        regime_alt = regime.get("regime_alt")
+        if regime_alt in ("TREND_UP", "TREND_DOWN"):
+            alt_dir = "down" if regime_alt == "TREND_DOWN" else "up"
+            alt_strength = 6  # proxy: regime_alt wymaga jednomyślnych 3/3 głosów mtf
+            swing_high, swing_low = find_swing_points(candles_h1, n=12)
+            swing_low  = min(swing_low,  current_price)
+            swing_high = max(swing_high, current_price)
+            if swing_high > swing_low:
+                swing_range = swing_high - swing_low
+                fib_lo, fib_hi, fib_sl, atr_sl, _str_min, _ = _PULLBACK_VARIANTS["baseline"]
+                entry_mid = (fib_lo + fib_hi) / 2
+                if alt_dir == "down":
+                    w   = round(swing_low + entry_mid * swing_range, 2)
+                    sl  = round(swing_low + fib_sl * swing_range + atr * atr_sl, 2)
+                    tp1 = round(swing_low + swing_range * 0.02, 2)
+                    tp2 = round(swing_low - swing_range * 0.3, 2)
+                    rr_ok = sl > w and tp1 < w and (w - tp1) / (sl - w) >= 1.5 if (sl - w) > 0 else False
+                    dist_ok = abs(w - current_price) <= max_entry_dist
+                else:
+                    w   = round(swing_high - entry_mid * swing_range, 2)
+                    sl  = round(swing_high - fib_sl * swing_range - atr * atr_sl, 2)
+                    tp1 = round(swing_high - swing_range * 0.02, 2)
+                    tp2 = round(swing_high + swing_range * 0.3, 2)
+                    rr_ok = sl < w and tp1 > w and (tp1 - w) / (w - sl) >= 1.5 if (w - sl) > 0 else False
+                    dist_ok = abs(w - current_price) <= max_entry_dist
+                rr_val = (round((w - tp1) / (sl - w), 1) if alt_dir == "down" and (sl - w) > 0
+                          else round((tp1 - w) / (w - sl), 1) if alt_dir == "up" and (w - sl) > 0
+                          else 0)
+                log_lines.append(
+                    f"  → pullback_{alt_dir} [regime_alt]: RANGE ale regime_alt={regime_alt} "
+                    f"W=${w:.2f} SL=${sl:.2f} RR={rr_val} rr_ok={rr_ok} dist_ok={dist_ok}"
+                )
+                setups.append({
+                    "type": f"trend_pullback_{'short' if alt_dir == 'down' else 'long'}",
+                    "direction": "short" if alt_dir == "down" else "long",
+                    "entries": [w], "sl": sl, "sl_after_tp1": w,
+                    "tps": [tp1, tp2], "rr": rr_val,
+                    "score": alt_strength,
+                    "variant": "regime_alt",
+                    "not_tradeable": True,
+                    "market_context": _setup_ctx(w, sl, fib_lvl=entry_mid, swing_h=swing_high, swing_l=swing_low),
+                    "reasoning": f"RANGE ale regime_alt={regime_alt}; swing ${swing_low:.0f}-${swing_high:.0f} [regime_alt] rr_ok={rr_ok} dist_ok={dist_ok}",
+                })
     else:
         log_lines.append(f"  Brak setupów dla direction={direction}")
 
