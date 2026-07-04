@@ -2126,6 +2126,74 @@ def get_trade_analysis(date_from: str | None = None) -> list[dict]:
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
+def get_pullback_analysis(date_from: str | None = None) -> list[dict]:
+    """Zestawienie trend_pullback (long+short) z market_context (exhaustion, regime_score)
+    do analizy filtrów wejścia. market_context bywa NULL dla starszych setupów —
+    zbieranie tego pola zaczęło się później niż samych setupów."""
+    trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
+    leverage = 20
+    _tu = f"COALESCE(trade_usdt, {trade_usdt})"
+
+    tp1_only_pct_calc = f"""
+        ROUND(
+            CASE
+                WHEN result = 'SL' THEN pnl_pct
+                WHEN result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2')
+                     AND (tps->>0) IS NOT NULL
+                     AND COALESCE(avg_entry,(entries->>0)::numeric) IS NOT NULL
+                THEN (
+                    CASE direction
+                        WHEN 'long' THEN
+                            ((tps->>0)::numeric - COALESCE(avg_entry,(entries->>0)::numeric))
+                        ELSE
+                            (COALESCE(avg_entry,(entries->>0)::numeric) - (tps->>0)::numeric)
+                    END
+                    * COALESCE(NULLIF(exchange_qty_full,'')::numeric,
+                               FLOOR({_tu}*{leverage}/COALESCE(avg_entry,(entries->>0)::numeric)/0.1)*0.1)
+                ) / NULLIF({_tu}, 0) * 100
+            END
+        ::numeric, 2)"""
+
+    if date_from:
+        try:
+            dt = datetime.fromisoformat(date_from)
+        except ValueError:
+            dt = datetime.fromisoformat(date_from + "T00:00:00")
+        date_ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
+    else:
+        date_ts = 0
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    setup_id,
+                    to_char(alert_time AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD HH24:MI')                         AS alert_time,
+                    type,
+                    variant,
+                    direction,
+                    result,
+                    score,
+                    ROUND(pnl_pct::numeric, 2)                             AS pnl_tp1tp2_pct,
+                    {tp1_only_pct_calc}                                    AS pnl_tp1only_pct,
+                    market_context->>'regime_score'                        AS regime_score,
+                    market_context->>'exhaustion_count'                    AS exhaustion_count,
+                    market_context->'exhaustion_signals'                   AS exhaustion_signals,
+                    market_context IS NOT NULL                             AS has_market_context
+                FROM setups
+                WHERE type IN ('trend_pullback_long', 'trend_pullback_short')
+                  AND resolved = TRUE
+                  AND result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')
+                  AND alert_timestamp >= %(date_ts)s
+                ORDER BY alert_time ASC
+                """,
+                {"date_ts": date_ts},
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
 def get_exchange_events(setup_id: int | None = None, limit: int = 100) -> list[dict]:
     """Zwraca ostatnie zdarzenia exchange, opcjonalnie filtrowane po setup_id."""
     try:

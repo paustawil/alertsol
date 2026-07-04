@@ -2730,6 +2730,47 @@ def api_trade_analysis_csv(date_from: str | None = None):
     )
 
 
+@app.get("/api/pullback-analysis/csv")
+def api_pullback_analysis_csv(date_from: str | None = None):
+    """CSV export trend_pullback (long+short) z market_context (exhaustion, regime_score)
+    do analizy filtrów wejścia. market_context bywa puste dla starszych setupów —
+    kolumna has_market_context pokazuje, dla ilu rekordów dane są dostępne."""
+    from fastapi.responses import Response
+    import csv
+    import io
+
+    rows = db.get_pullback_analysis(date_from)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "ID", "Alert", "Typ", "Wariant", "Kierunek", "Wynik", "Score",
+        "P&L% TP1+TP2", "P&L% TP1-only",
+        "Regime score", "Exhaustion count", "Exhaustion signals", "Ma market_context",
+    ])
+    for r in rows:
+        writer.writerow([
+            r.get("setup_id"),
+            r.get("alert_time"),
+            r.get("type"),
+            r.get("variant"),
+            r.get("direction"),
+            r.get("result"),
+            r.get("score"),
+            r.get("pnl_tp1tp2_pct"),
+            r.get("pnl_tp1only_pct"),
+            r.get("regime_score"),
+            r.get("exhaustion_count"),
+            r.get("exhaustion_signals"),
+            r.get("has_market_context"),
+        ])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=pullback_analysis.csv"},
+    )
+
+
 class ResultUpdate(BaseModel):
     result: str
     avg_exit: float | None = None
