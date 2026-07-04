@@ -387,10 +387,14 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
     results: list[dict] = []
     step = 4  # co ile świec M15 (co 1h) odpalamy detekcję
 
-    # Blokada: czas (unix) do kiedy dany wariant+kierunek jest "zajęty"
-    # Modeluje zachowanie live systemu — nowy setup nie jest generowany
-    # dopóki poprzedni nie wygaśnie (ENTRY_TIMEOUT + HOLD_TIMEOUT max).
-    BLOCKED_SECONDS = (ENTRY_TIMEOUT_CANDLES + HOLD_TIMEOUT_CANDLES) * 15 * 60
+    # Blokada: czas (unix) do kiedy dany wariant+kierunek jest "zajęty".
+    # Modeluje zachowanie live systemu — ale live system odblokowuje wariant zaraz
+    # po ROZSTRZYGNIĘCIU setupu (SL/TP/timeout), nie po sztywnym czasie z góry (patrz
+    # save_pending()/get_active_setups() w sol_alert.py: dedup patrzy tylko na setupy
+    # jeszcze nierozwiązane). Sztywna blokada ~20h zaniżała liczbę setupów względem
+    # tego, co faktycznie dzieje się live (np. 5 baseline_short w 3h podczas 2026-06-24).
+    ENTRY_TIMEOUT_H = ENTRY_TIMEOUT_CANDLES * 15 / 60
+    HOLD_TIMEOUT_H  = HOLD_TIMEOUT_CANDLES * 15 / 60
     active_until: dict[str, int] = {}  # klucz: "{variant}_{direction}"
 
     print(f"Replay: {len(candles_m15)} świec M15 (step={step}) ...", flush=True)
@@ -450,9 +454,15 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
                 "n_vars":        n_vars,
                 **{k: v for k, v in trade.items()},
             })
-            # Zablokuj wariant+kierunek na czas trwania tego setupu
+            # Zablokuj wariant+kierunek tylko do faktycznego rozstrzygnięcia tego setupu
             block_key = f"{s['variant']}_{s['direction']}"
-            active_until[block_key] = snap_ts + BLOCKED_SECONDS
+            if not trade["entered"]:
+                free_after_h = ENTRY_TIMEOUT_H  # nigdy nie weszło — wolne po timeout wejścia
+            elif trade["result"] == "timeout" or trade.get("hold_hours") is None:
+                free_after_h = trade["hours_to_entry"] + HOLD_TIMEOUT_H  # timeout trzymania
+            else:
+                free_after_h = trade["hours_to_entry"] + trade["hold_hours"]  # realny czas do wyjścia
+            active_until[block_key] = snap_ts + int(free_after_h * 3600)
 
     print(f"\nWygenerowano {generated} setupów → {len(results)} rekordów wyników")
 
