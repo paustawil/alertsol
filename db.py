@@ -2194,6 +2194,37 @@ def get_pullback_analysis(date_from: str | None = None) -> list[dict]:
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
+def get_setup_price_trace(date_from: str, date_to: str) -> list[dict]:
+    """Poziomy cenowe (entry/SL/wejście/wyjście) setupów w danym oknie czasowym —
+    do rekonstrukcji przebiegu ceny przy diagnozowaniu anomalii (np. skorelowanych SL)."""
+    dt_from = datetime.fromisoformat(date_from)
+    dt_to = datetime.fromisoformat(date_to)
+    ts_from = int(dt_from.replace(tzinfo=timezone.utc).timestamp())
+    ts_to = int(dt_to.replace(tzinfo=timezone.utc).timestamp())
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    setup_id,
+                    to_char(alert_time AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS alert_time,
+                    type, variant, direction, result,
+                    price_at_alert,
+                    entries->>0 AS entry_w,
+                    sl,
+                    avg_entry, avg_exit,
+                    entry_hit_at,
+                    to_char(exit_time AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS exit_time
+                FROM setups
+                WHERE alert_timestamp >= %(ts_from)s AND alert_timestamp <= %(ts_to)s
+                ORDER BY alert_time ASC
+                """,
+                {"ts_from": ts_from, "ts_to": ts_to},
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
 def get_exchange_events(setup_id: int | None = None, limit: int = 100) -> list[dict]:
     """Zwraca ostatnie zdarzenia exchange, opcjonalnie filtrowane po setup_id."""
     try:
