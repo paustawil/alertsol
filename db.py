@@ -57,7 +57,7 @@ def get_pool() -> psycopg2.pool.ThreadedConnectionPool:
                 raise RuntimeError("DATABASE_URL nie jest ustawiona")
             _pool = psycopg2.pool.ThreadedConnectionPool(
                 minconn=1,
-                maxconn=5,
+                maxconn=int(os.environ.get("DB_POOL_MAXCONN", "20")),
                 dsn=url,
             )
             log.info("DB pool zainicjalizowany.")
