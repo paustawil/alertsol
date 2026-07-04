@@ -289,6 +289,16 @@ def gen_pullback_setups_for_snapshot(
     swing_range = swing_high - swing_low
     setups = []
 
+    # Przełamanie struktury (patrz sol_alert.py _setup_ctx): ostatnie 2 świece H1,
+    # które ZAMKNĘŁY się poza swing_high (short) / swing_low (long).
+    boundary = swing_high if tp_direction == "short" else swing_low
+    recent_h1 = candles_h1[-2:] if len(candles_h1) >= 2 else []
+    closes_beyond_structure = sum(
+        1 for c in recent_h1
+        if (c["close"] > boundary if tp_direction == "short" else c["close"] < boundary)
+    )
+    structure_broken = closes_beyond_structure >= 2
+
     for vname, (fib_lo, fib_hi, fib_sl, atr_sl, str_min, _) in _PULLBACK_VARIANTS.items():
         # Uwaga: w live systemie str4 odpala tylko przy strength==4 (baseline pokrywa >=5),
         # ale w backteście każdy wariant jest niezależny — str4 odpala przy strength>=4.
@@ -320,6 +330,8 @@ def gen_pullback_setups_for_snapshot(
             "rr":        rr_val,
             "swing_range": round(swing_range, 2),
             "alert_ts":  alert_ts,
+            "closes_beyond_structure": closes_beyond_structure,
+            "structure_broken": structure_broken,
         })
 
     return setups
@@ -400,6 +412,8 @@ def run_backtest(days: int = 60, out_path: str = "backtest_variants_result.csv")
                 "sl":            s["sl"],
                 "rr":            s["rr"],
                 "swing_range":   s["swing_range"],
+                "closes_beyond_structure": s["closes_beyond_structure"],
+                "structure_broken": s["structure_broken"],
                 "n_vars":        n_vars,
                 **{k: v for k, v in trade.items()},
             })
