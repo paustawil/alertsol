@@ -688,10 +688,32 @@ def detect_market_regime(
         }
 
     # ── RANGE ────────────────────────────────────────────────────────────────
+    # Obserwacyjnie (nic nie zmienia w realnym filtrowaniu/handlu): sprawdź, czy
+    # krótsze ramy czasowe (4h/8h/12h) zgodnie wskazują trend, mimo że change_24h/48h
+    # wypadły płasko (bo punkt odniesienia trafił na lokalny szczyt/dołek — patrz
+    # Fix 3 wyżej). Zapisywane do market_context jako regime_alt, do analizy na danych
+    # historycznych przed ewentualnym użyciem w prawdziwej klasyfikacji.
+    mtf_up_votes = sum([
+        1 if change_4h  > 0.5 else 0,
+        1 if change_8h  > 0.5 else 0,
+        1 if change_12h > 1.0 else 0,
+    ])
+    mtf_down_votes = sum([
+        1 if change_4h  < -0.5 else 0,
+        1 if change_8h  < -0.5 else 0,
+        1 if change_12h < -1.0 else 0,
+    ])
+    regime_alt = None
+    if mtf_up_votes == 3:
+        regime_alt = "TREND_UP"
+    elif mtf_down_votes == 3:
+        regime_alt = "TREND_DOWN"
+
     return {
         **base,
         "regime": "RANGE",
         "direction": "none", "score": 0,
+        "regime_alt": regime_alt,
         "pct_outside": 0, "details": details,
     }
 
@@ -941,6 +963,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         "regime": regime_name,
         "regime_score": strength,
         "regime_direction": direction,
+        "regime_alt": regime.get("regime_alt"),
         "change_1h": regime.get("change_1h"), "change_2h": regime.get("change_2h"),
         "change_4h": regime.get("change_4h"), "change_8h": regime.get("change_8h"),
         "change_12h": regime.get("change_12h"),
