@@ -69,7 +69,7 @@ Inputs: price changes over multiple periods, volume ratios, swing high/low analy
 1. **Algo2 detection** — algorithmic scan produces candidate setups with entries, TPs, SL, score
 2. **GPT-4o validation** — `call_gpt3_validator()` sends market context + setup to OpenAI; GPT assigns score, can reject or modify levels
 3. **Score threshold** — `MIN_SCORE = 9` required for acceptance
-4. **Cooldown** — `COOLDOWN_HOURS = 4` prevents duplicate signals at same price level
+4. **Dedup** — `save_pending()` skips/replaces a new candidate if an unresolved setup with the same `model+direction+variant+type` already exists within ~$0.50 (`sol_alert.py:2222`). Note: `COOLDOWN_HOURS`/`was_alerted()`/`save_alerted()` in `db.py` exist but are **dead code** — never called anywhere. Once a setup resolves (SL/TP/timeout), a new one can fire immediately; there is no "wait N hours after a loss" cooldown today.
 5. **Impulse cooldown** — prevents false reversals after strong directional moves
 
 ### Setup Lifecycle
@@ -93,6 +93,49 @@ Controlled by `ENABLE_GROK_SHADOW` env var.
 ### Gemini2
 
 Independent detector using Google Gemini. Currently disabled (`ENABLE_GEMINI2 = False`).
+
+### Experiment: `regime_alt` (RANGE misclassification rescue) — started 2026-07-04
+
+**Problem found:** `detect_market_regime()` classifies TREND vs RANGE using `change_24h`/
+`change_48h` measured against a single reference candle from 24h/48h ago. If that reference
+candle happens to land near a local peak/trough (e.g. right after a pullback in an otherwise
+clear multi-day uptrend), the computed % change looks artificially flat, `trend_score < 3`,
+and the regime falls through to `RANGE` even though a real trend exists. Confirmed by eye on
+a live SOL chart showing an obvious multi-day uptrend that the bot had classified as RANGE.
+
+This matters because `RANGE` classification gates which setups can even be generated
+(`regime['direction']` becomes `"none"`, so `trend_pullback` never fires), and it's the
+suspected root cause of why `trend_pullback_short` and `range_resistance_short` — the two
+counter-trend (short) variants — have shown much worse win rates than their long-side
+mirrors (`trend_pullback_long`, `range_support_long`) despite identical code/filters on both
+sides: SOL trended up for most of the analyzed period (~April–July 2026), so this bug
+would silently suppress correct-direction long-side trend detection less often than it lets
+bad counter-trend shorts through in the RANGE branch's own (too-short-lookback) filters.
+
+**What was shipped (all log-only, zero effect on live trading — see PRs #287, #288):**
+1. `regime_alt` field: when regime falls to `RANGE`, additionally checks if `change_4h`/
+   `change_8h`/`change_12h` unanimously agree on a trend direction (same 3-vote consensus
+   logic as the existing "Fix 3" override, just applied at the RANGE boundary instead of
+   only flipping an already-detected trend's direction). Stored in `market_context.regime_alt`.
+2. Shadow `trend_pullback` setup: when `regime_alt` disagrees with `RANGE`, generates the
+   same `baseline` fib-pullback geometry that would have fired had the regime actually been
+   `TREND_{alt_dir}` — tagged `variant="regime_alt"`, always `not_tradeable=True`. This is
+   what actually makes the idea testable (the plain `regime_alt` field alone is inert, since
+   nothing downstream reads it — `trend_pullback` detection still gates on the real
+   `regime['direction']`).
+
+**Real `baseline` (and everything else live-tradeable) is completely untouched.** This is
+purely collecting comparison data.
+
+**To check back (after ~1 month of data, i.e. ~early August 2026):**
+- Query `setups` where `type LIKE 'trend_pullback_%'` and `variant = 'regime_alt'`.
+- Compare win rate / expectancy against real `baseline` for the same period (see
+  `/api/pullback-analysis/csv` and `/api/setup-prices/csv` endpoints in `main_runner.py`,
+  added this session for exactly this kind of analysis).
+- If `regime_alt` setups show meaningfully better win rate than what `range_resistance_short`/
+  `trend_pullback_short` actually achieved during the same misclassified windows, consider
+  wiring `regime_alt` into the real classification (i.e. let it rescue `RANGE` → `TREND`)
+  — but only after this historical validation, not before.
 
 ---
 
