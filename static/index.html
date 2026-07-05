@@ -2389,6 +2389,7 @@ function DesktopApp() {
           {m.vol_ratio!=null && <span style={{color:'var(--text2)'}}>Vol: <span style={{color:'var(--text1)'}}>{Number(m.vol_ratio).toFixed(2)}x</span></span>}
           {m.atr!=null && <span style={{color:'var(--text2)'}}>ATR: <span style={{color:'var(--text1)'}}>{Number(m.atr).toFixed(2)}</span></span>}
           {m.last_scans&&m.last_scans['Algo2'] && <span style={{color:'var(--text3)'}}>Algo2: <span style={{color:'var(--text2)'}}>{m.last_scans['Algo2'].count} setup{m.last_scans['Algo2'].count!==1?'ów':''}</span> · <span style={{color:'var(--text3)',fontSize:10}}>{String(m.last_scans['Algo2'].time||'').slice(11,16)}</span></span>}
+          {m.regime_alt && <span style={{color:'var(--amber)'}} title="RANGE, ale krótsze ramy czasowe (4h/8h/12h) zgodnie wskazują trend — obserwacyjne, nie wpływa na handel">Alt: {m.regime_alt.replace('_',' ')}</span>}
         </div>
         <div className="d-topbar">
           <div className="stat-cell"><div className={`stat-val ${(s.pnl||0)>=0?'green':'red'}`}>{fmtPnl(s.pnl)}</div><div className="stat-lbl">P&L</div></div>
@@ -2801,6 +2802,7 @@ function MobileApp() {
             {m.vol_ratio!=null && <span style={{color:'var(--text3)'}}>Vol: <span style={{color:'var(--text2)'}}>{Number(m.vol_ratio).toFixed(2)}x</span></span>}
             {m.atr!=null && <span style={{color:'var(--text3)'}}>ATR: <span style={{color:'var(--text2)'}}>{Number(m.atr).toFixed(2)}</span></span>}
             {m.last_scans&&m.last_scans['Algo2'] && <span style={{color:'var(--text3)'}}>Algo2: <span style={{color:'var(--text2)'}}>{m.last_scans['Algo2'].count} stp</span></span>}
+            {m.regime_alt && <span style={{color:'var(--amber)'}} title="RANGE, ale krótsze ramy czasowe (4h/8h/12h) zgodnie wskazują trend — obserwacyjne, nie wpływa na handel">Alt: {m.regime_alt.replace('_',' ')}</span>}
           </div>
         </div>
         <div className="stats-strip" style={{flexDirection:'column',padding:0}}>
