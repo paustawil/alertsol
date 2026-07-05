@@ -2473,6 +2473,7 @@ def api_market_status():
     return {
         "price":       price,
         "regime":      reg.get("regime"),
+        "regime_alt":  reg.get("regime_alt"),
         "direction":   reg.get("direction"),
         "score":       reg.get("score"),
         "change_24h":  reg.get("change_24h"),
