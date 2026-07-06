@@ -50,7 +50,7 @@ ENABLE_GPT3          = False  # standalone GPT3 detektor — wyłączony
 ENABLE_GPT3_VALIDATOR = True  # GPT3 jako filtr Algo2 setupów — aktywny (backtest Mar 15-29: +$19.76)
 ENABLE_GROK          = False  # wyłączony — zastąpiony przez Algo2 (algorytmiczne setupy)
 ENABLE_GEMINI2       = False  # Gemini niezależny detektor — gołe świece H1, bez Algo
-ALGO2_SHADOW_MODE    = True   # tryb obserwacji — wszystkie Algo2 setupy jako nie-tradeable (dedup aktywny)
+ALGO2_SHADOW_MODE    = False  # LIVE — best candidate (jeśli enabled w type_configs) idzie na realny handel
 
 # ── Feedback z ostatniego uruchomienia (odczytywany przez dashboard) ──────────
 _last_feedback: dict = {}  # {"Algo2": {...}, "Grok": {...}}
