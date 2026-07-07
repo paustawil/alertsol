@@ -157,11 +157,24 @@ defaults to `None`. `compute_orderbook_features()` derives, per cycle:
 These land in every setup's `market_context` JSONB (merged into the existing `_ml_ctx`
 dict) — no schema changes, no new gating, no effect on entries/TP/SL/scoring.
 
-**To check back (after a few weeks of data):**
-- Query `setups.market_context->>'ob_imbalance'` etc. against resolved outcomes —
-  does high imbalance / a nearby wall correlate with where price actually reverses
-  (i.e. would using wall distance to place TP/SL have improved R:R or reduced
-  premature SL hits)? Only wire this into real TP/SL geometry after that's validated.
+**Hypothesis (falsifiable, not just "collect and see"):** distance to an order-book
+wall recorded at signal time (`ob_wall_ask_dist_pct` for longs / `ob_wall_bid_dist_pct`
+for shorts) predicts how far price actually moves in our favor (MFE — max favorable
+excursion) *better than* the current fib/ATR-based TP2 distance. Falsified if MFE isn't
+meaningfully closer to the wall level than to TP2, or if walls rarely appear within a
+relevant range.
+
+**Analysis tooling (`orderbook_analysis.py`, `db.get_orderbook_exit_analysis()`):**
+for every resolved setup with order-book features in `market_context`, reconstructs MFE
+from Bitget M15 candles in the `[entry_hit_at, exit_time]` window and compares
+`mean_abs(wall_dist_pct − mfe_pct)` against `mean_abs(tp2_dist_pct − mfe_pct)` — writes
+a CSV plus a summary. Run with `python orderbook_analysis.py [--date-from YYYY-MM-DD]`.
+
+**To check back (after a few weeks / a few dozen resolved setups):**
+- Run `orderbook_analysis.py` and compare the two mean-abs-diff numbers.
+- Only wire wall distance into real TP2 geometry if it's a clearly better (smaller)
+  predictor of MFE than the current TP2 across enough setups to trust the signal —
+  otherwise the hypothesis is rejected and nothing changes in live trading.
 
 ---
 

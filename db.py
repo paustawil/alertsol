@@ -2226,6 +2226,52 @@ def get_setup_price_trace(date_from: str, date_to: str) -> list[dict]:
             return [_row_to_dict(r) for r in cur.fetchall()]
 
 
+def get_orderbook_exit_analysis(date_from: str | None = None) -> list[dict]:
+    """Zestawienie rozwiązanych setupów z cechami order booka zapisanymi przy sygnale
+    (ob_imbalance, ob_spread_pct, ob_wall_bid/ask_dist_pct) + poziomy wejścia/wyjścia
+    potrzebne do rekonstrukcji MFE (patrz orderbook_analysis.py). Tylko setupy, których
+    market_context faktycznie zawiera cechy order booka (feature wystartował 2026-07-07,
+    starsze setupy nie mają tych pól)."""
+    if date_from:
+        try:
+            dt = datetime.fromisoformat(date_from)
+        except ValueError:
+            dt = datetime.fromisoformat(date_from + "T00:00:00")
+        date_ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
+    else:
+        date_ts = 0
+
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    setup_id,
+                    to_char(alert_time AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS alert_time,
+                    type, variant, direction, result,
+                    entries->>0 AS entry_w,
+                    sl,
+                    tps->>0 AS tp1, tps->>1 AS tp2,
+                    avg_entry, avg_exit,
+                    entry_hit_at,
+                    exit_time,
+                    market_context->>'ob_imbalance'          AS ob_imbalance,
+                    market_context->>'ob_spread_pct'          AS ob_spread_pct,
+                    market_context->>'ob_wall_bid_dist_pct'   AS ob_wall_bid_dist_pct,
+                    market_context->>'ob_wall_ask_dist_pct'   AS ob_wall_ask_dist_pct
+                FROM setups
+                WHERE resolved = TRUE
+                  AND entry_hit_at IS NOT NULL
+                  AND exit_time IS NOT NULL
+                  AND alert_timestamp >= %(date_ts)s
+                  AND jsonb_exists(market_context, 'ob_wall_bid_dist_pct')
+                ORDER BY alert_time ASC
+                """,
+                {"date_ts": date_ts},
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
 def get_exchange_events(setup_id: int | None = None, limit: int = 100) -> list[dict]:
     """Zwraca ostatnie zdarzenia exchange, opcjonalnie filtrowane po setup_id."""
     try:
