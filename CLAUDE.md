@@ -137,6 +137,45 @@ purely collecting comparison data.
   wiring `regime_alt` into the real classification (i.e. let it rescue `RANGE` → `TREND`)
   — but only after this historical validation, not before.
 
+### Experiment: order book depth features — started 2026-07-07
+
+**Motivation:** two open questions — (1) can regime classification be improved (see
+`regime_alt` above), (2) can Bitget order book depth help place better exit levels
+(TP/SL) than the current fib/ATR-based geometry. Starting with data collection only,
+same log-only pattern as `regime_alt` — no live trading impact.
+
+**What was shipped:** `fetch_order_book()` (`sol_alert.py`) pulls a depth snapshot
+(`GET /api/v2/mix/market/merge-depth`, public endpoint, top 50 levels/side) once per
+Algo2 cycle, from `_algo2_run()` only — never from the backtest/replay path, so
+historical replays are unaffected and `algo_detect_setups()`'s `orderbook` param
+defaults to `None`. `compute_orderbook_features()` derives, per cycle:
+- `ob_imbalance` — bid volume share of total bid+ask volume (top 50 levels)
+- `ob_spread_pct` — best bid/ask spread, % of current price
+- `ob_wall_bid_dist_pct` / `ob_wall_ask_dist_pct` — distance to the nearest bid/ask
+  level with volume >= 3x the median level size ("wall"), % of current price
+
+These land in every setup's `market_context` JSONB (merged into the existing `_ml_ctx`
+dict) — no schema changes, no new gating, no effect on entries/TP/SL/scoring.
+
+**Hypothesis (falsifiable, not just "collect and see"):** distance to an order-book
+wall recorded at signal time (`ob_wall_ask_dist_pct` for longs / `ob_wall_bid_dist_pct`
+for shorts) predicts how far price actually moves in our favor (MFE — max favorable
+excursion) *better than* the current fib/ATR-based TP2 distance. Falsified if MFE isn't
+meaningfully closer to the wall level than to TP2, or if walls rarely appear within a
+relevant range.
+
+**Analysis tooling (`orderbook_analysis.py`, `db.get_orderbook_exit_analysis()`):**
+for every resolved setup with order-book features in `market_context`, reconstructs MFE
+from Bitget M15 candles in the `[entry_hit_at, exit_time]` window and compares
+`mean_abs(wall_dist_pct − mfe_pct)` against `mean_abs(tp2_dist_pct − mfe_pct)` — writes
+a CSV plus a summary. Run with `python orderbook_analysis.py [--date-from YYYY-MM-DD]`.
+
+**To check back (after a few weeks / a few dozen resolved setups):**
+- Run `orderbook_analysis.py` and compare the two mean-abs-diff numbers.
+- Only wire wall distance into real TP2 geometry if it's a clearly better (smaller)
+  predictor of MFE than the current TP2 across enough setups to trust the signal —
+  otherwise the hypothesis is rejected and nothing changes in live trading.
+
 ---
 
 ## Exchange Trading (`exchange_trader.py`)

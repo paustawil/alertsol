@@ -411,6 +411,73 @@ def fetch_klines(symbol: str, interval: str, limit: int = 100) -> list[dict]:
     return candles
 
 
+# ── Bitget API — order book (depth) ──────────────────────────────────────────
+def fetch_order_book(symbol: str, limit: str = "50") -> dict | None:
+    """Pobiera snapshot order booka (bids/asks) z Bitget futures.
+    Zwraca {'bids': [(price, size), ...], 'asks': [(price, size), ...]} — bids malejąco
+    od best bid, asks rosnąco od best ask (kolejność jak z API) — lub None przy błędzie."""
+    try:
+        r = requests.get(
+            "https://api.bitget.com/api/v2/mix/market/merge-depth",
+            params={"symbol": symbol, "productType": "USDT-FUTURES", "precision": "scale0", "limit": limit},
+            timeout=5,
+        )
+        r.raise_for_status()
+        data = r.json().get("data") or {}
+        bids = [(float(p), float(q)) for p, q in data.get("bids", [])]
+        asks = [(float(p), float(q)) for p, q in data.get("asks", [])]
+        if not bids or not asks:
+            return None
+        return {"bids": bids, "asks": asks}
+    except Exception as e:
+        print(f"[orderbook] Błąd pobierania depth: {e}")
+        return None
+
+
+def compute_orderbook_features(ob: dict | None, current_price: float) -> dict:
+    """Liczy cechy order booka do market_context (obserwacyjne — nic nie blokuje w handlu):
+    - ob_imbalance: udział wolumenu bidów w sumie bid+ask (top N poziomów z merge-depth)
+    - ob_spread_pct: spread best bid/ask w % ceny
+    - ob_wall_bid_dist_pct / ob_wall_ask_dist_pct: dystans do najbliższej "ściany" (poziom
+      z wolumenem >= 3x mediana) po stronie bidów / asków, w % ceny
+    Zwraca same None gdy brak danych (np. błąd fetchu — nie blokuje detekcji setupów)."""
+    empty = {
+        "ob_imbalance": None, "ob_spread_pct": None,
+        "ob_wall_bid_dist_pct": None, "ob_wall_ask_dist_pct": None,
+    }
+    if not ob or not ob.get("bids") or not ob.get("asks") or current_price <= 0:
+        return empty
+
+    bids, asks = ob["bids"], ob["asks"]
+    best_bid, best_ask = bids[0][0], asks[0][0]
+
+    bid_vol = sum(q for _, q in bids)
+    ask_vol = sum(q for _, q in asks)
+    imbalance = bid_vol / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else None
+
+    spread_pct = (best_ask - best_bid) / current_price * 100
+
+    sizes = sorted(q for _, q in bids + asks)
+    median_size = sizes[len(sizes) // 2] if sizes else 0
+
+    def _nearest_wall_dist(levels):
+        if median_size <= 0:
+            return None
+        for price, qty in levels:
+            if qty >= median_size * 3:
+                return abs(price - current_price) / current_price * 100
+        return None
+
+    wall_bid_dist = _nearest_wall_dist(bids)
+    wall_ask_dist = _nearest_wall_dist(asks)
+    return {
+        "ob_imbalance": round(imbalance, 3) if imbalance is not None else None,
+        "ob_spread_pct": round(spread_pct, 4),
+        "ob_wall_bid_dist_pct": round(wall_bid_dist, 3) if wall_bid_dist is not None else None,
+        "ob_wall_ask_dist_pct": round(wall_ask_dist, 3) if wall_ask_dist is not None else None,
+    }
+
+
 # ── Wskaźniki techniczne ──────────────────────────────────────────────────────
 def calc_atr(candles: list[dict], period: int = 14) -> float:
     trs = [max(c["high"] - c["low"], abs(c["high"] - p["close"]), abs(c["low"] - p["close"]))
@@ -874,8 +941,11 @@ _PULLBACK_VARIANTS: dict[str, tuple] = {
 
 
 def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[dict],
-                       current_price: float) -> tuple[list[dict], str]:
+                       current_price: float, orderbook: dict | None = None) -> tuple[list[dict], str]:
     """Algorytmicznie wykrywa setupy trend/impulse/range.
+    `orderbook` (opcjonalny, z fetch_order_book) — snapshot depth, wyłącznie do zapisu
+    cech w market_context (obserwacyjne, nic nie zmienia w detekcji/filtrowaniu). None
+    w backtest/replay, gdzie nie ma live depth.
     Zwraca (setupy, log_text) — log_text trafia do reasoning/arkusza."""
     regime_name = regime["regime"]
     direction = regime.get("direction", "none")
@@ -955,6 +1025,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
     m15_closes_ctx = [c["close"] for c in candles_m15]
     ma30_m15 = sum(m15_closes_ctx[-30:]) / min(30, len(m15_closes_ctx)) if len(m15_closes_ctx) >= 10 else None
     ma60_m15 = sum(m15_closes_ctx[-60:]) / min(60, len(m15_closes_ctx)) if len(m15_closes_ctx) >= 30 else None
+    _ob_features = compute_orderbook_features(orderbook, current_price)
 
     _ml_ctx = {
         "atr_h1": round(atr, 4),
@@ -979,6 +1050,7 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
         "spike_reversal_score": regime.get("spike_score", 0),
         "s_touches": regime.get("s_touches", 0),
         "r_touches": regime.get("r_touches", 0),
+        **_ob_features,
     }
 
     def _setup_ctx(entry_price, sl_price, fib_lvl=None, swing_h=None, swing_l=None):
@@ -3106,7 +3178,8 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
     Zwraca: 'rejected' gdy GPT3 Validator odrzucił best,
             'saved' / 'no_setups' / 'skipped' / 'duplicate' w pozostałych przypadkach.
     """
-    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current)
+    orderbook = fetch_order_book(SYMBOL)
+    algo2_setups, algo2_log = algo_detect_setups(regime, candles_m15, candles_h1, current, orderbook)
     n_total = len(algo2_setups)
     print(f"[algo2] Reżim: {regime['regime']}({regime.get('score', 0)}) | Setupów: {n_total}")
     _last_feedback["Algo2"] = {
