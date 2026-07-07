@@ -137,6 +137,32 @@ purely collecting comparison data.
   wiring `regime_alt` into the real classification (i.e. let it rescue `RANGE` → `TREND`)
   — but only after this historical validation, not before.
 
+### Experiment: order book depth features — started 2026-07-07
+
+**Motivation:** two open questions — (1) can regime classification be improved (see
+`regime_alt` above), (2) can Bitget order book depth help place better exit levels
+(TP/SL) than the current fib/ATR-based geometry. Starting with data collection only,
+same log-only pattern as `regime_alt` — no live trading impact.
+
+**What was shipped:** `fetch_order_book()` (`sol_alert.py`) pulls a depth snapshot
+(`GET /api/v2/mix/market/merge-depth`, public endpoint, top 50 levels/side) once per
+Algo2 cycle, from `_algo2_run()` only — never from the backtest/replay path, so
+historical replays are unaffected and `algo_detect_setups()`'s `orderbook` param
+defaults to `None`. `compute_orderbook_features()` derives, per cycle:
+- `ob_imbalance` — bid volume share of total bid+ask volume (top 50 levels)
+- `ob_spread_pct` — best bid/ask spread, % of current price
+- `ob_wall_bid_dist_pct` / `ob_wall_ask_dist_pct` — distance to the nearest bid/ask
+  level with volume >= 3x the median level size ("wall"), % of current price
+
+These land in every setup's `market_context` JSONB (merged into the existing `_ml_ctx`
+dict) — no schema changes, no new gating, no effect on entries/TP/SL/scoring.
+
+**To check back (after a few weeks of data):**
+- Query `setups.market_context->>'ob_imbalance'` etc. against resolved outcomes —
+  does high imbalance / a nearby wall correlate with where price actually reverses
+  (i.e. would using wall distance to place TP/SL have improved R:R or reduced
+  premature SL hits)? Only wire this into real TP/SL geometry after that's validated.
+
 ---
 
 ## Exchange Trading (`exchange_trader.py`)
