@@ -710,9 +710,10 @@ def _place_tpsl_orders_split(
 
 # ── Sprawdzanie statusu zleceń ─────────────────────────────────────────────────
 
-def _plan_order_status(client: BitgetClient, order_id: str) -> str:
+def _plan_order_status_detail(client: BitgetClient, order_id: str) -> tuple[str, dict | None]:
     """
-    Status plan ordera (normal_plan): 'live' | 'executed' | 'cancelled' | 'unknown'
+    Jak _plan_order_status, ale zwraca też surowy obiekt zlecenia zwrócony przez Bitget
+    (do diagnostyki nieoczekiwanych anulowań — np. entry_plan_cancelled_externally).
     """
     try:
         resp = client.get("/api/v2/mix/order/orders-plan-pending", {
@@ -721,9 +722,9 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
             "planType":    "normal_plan",
         })
         if resp.get("code") == "00000":
-            live_ids = {o["orderId"] for o in (resp["data"].get("entrustedList") or [])}
-            if order_id in live_ids:
-                return "live"
+            for o in (resp["data"].get("entrustedList") or []):
+                if o.get("orderId") == order_id:
+                    return "live", o
 
         resp = client.get("/api/v2/mix/order/orders-plan-history", {
             "symbol":      SYMBOL,
@@ -737,12 +738,20 @@ def _plan_order_status(client: BitgetClient, order_id: str) -> str:
                 if o["orderId"] == order_id:
                     status = o.get("planStatus", "")
                     if status == "executed":
-                        return "executed"
+                        return "executed", o
                     if status in ("cancelled", "expired"):
-                        return "cancelled"
+                        return "cancelled", o
     except Exception as e:
         log.warning(f"[exchange] plan_order_status {order_id}: {e}")
-    return "unknown"
+    return "unknown", None
+
+
+def _plan_order_status(client: BitgetClient, order_id: str) -> str:
+    """
+    Status plan ordera (normal_plan): 'live' | 'executed' | 'cancelled' | 'unknown'
+    """
+    status, _ = _plan_order_status_detail(client, order_id)
+    return status
 
 
 def _tpsl_order_detail(client: BitgetClient, order_id: str) -> tuple[str, float]:
@@ -1422,13 +1431,14 @@ def _sync_inner():
                 s["exchange_plan_oid"] = None
                 modified = True
                 continue
-            status1 = _plan_order_status(client, plan_oid)
+            status1, status1_detail = _plan_order_status_detail(client, plan_oid)
             print(f"[exchange] {label}: plan1 status = {status1}")
 
             if status1 == "cancelled":
                 print(f"[exchange] {label}: plan1 anulowany z zewnątrz — anuluję plan2 i zamykam setup")
                 db.log_exchange_event(_sid_int(sid), "entry_plan_cancelled_externally", {
                     "plan1_oid": plan_oid, "plan2_oid": plan2_oid,
+                    "bitget_order_detail": status1_detail,
                 })
                 if plan2_oid:
                     _cancel_order(client, plan2_oid, "normal_plan", setup_id=_sid_int(sid), reason="plan1_cancelled_externally")
