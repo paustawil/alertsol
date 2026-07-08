@@ -176,6 +176,42 @@ a CSV plus a summary. Run with `python orderbook_analysis.py [--date-from YYYY-M
   predictor of MFE than the current TP2 across enough setups to trust the signal —
   otherwise the hypothesis is rejected and nothing changes in live trading.
 
+### Experiment: `swing24h` (wider swing lookback for trend_pullback) — started 2026-07-08
+
+**Problem found:** `find_swing_points(candles_h1, n=12)` computes the pullback entry (W1)
+from only the last 12 H1 candles. In a long, uninterrupted one-directional trend (no real
+reversal for 12h+), this rolling window keeps re-anchoring to ever-lower local highs
+(downtrend) / higher local lows (uptrend) instead of the actual, older swing extreme —
+so the fib-retracement entry level keeps landing at or below current price (`above_price`
+check fails, logged as `rejection = "W<=cena"`), and the setup never gets a real chance
+at a pullback entry. Confirmed by hand for setup #2586 (2026-07-08 19:07 UTC): computed
+`swing_high=$78.41` from the 12h window, while the visible chart high of that session
+(~$80.5) was more than 12h in the past and fell outside the lookback entirely. The math
+was correct given the inputs — the window was just too short for that trend's duration.
+
+**What was shipped (log-only, zero effect on live trading):** in `algo_detect_setups()`,
+right after each `trend_pullback_short`/`trend_pullback_long` baseline-variant loop, an
+extra shadow candidate is computed using the *same* fib geometry (38-50% retracement,
+SL at fib 61.8%) but with `find_swing_points(candles_h1, n=24)` instead of `n=12` —
+tagged `variant="swing24h"`, always `not_tradeable=True`. Saved (accepted or rejected,
+same as every other variant) so both outcomes are comparable against baseline over time.
+
+**Hypothesis (falsifiable):** the `swing24h` variant gets accepted (passes `above_price`/
+`below_price`, RR≥1.5, dist≤3%) meaningfully more often than `baseline` during long
+one-directional trends, without materially worse outcomes (win rate / expectancy) once
+those swing24h-only setups are backtested/compared. Falsified if `swing24h` accepts about
+as rarely as baseline (meaning window length wasn't actually the bottleneck), or if its
+extra accepted setups have clearly worse win rate than baseline's.
+
+**To check back (after a few weeks):**
+- Query `setups` where `type LIKE 'trend_pullback_%'` and `variant = 'swing24h'`.
+- Compare acceptance rate (rows without `rejected_by_algo`) against `baseline` for the
+  same period, and compare win rate/expectancy for the accepted ones (can't trade them
+  live, so this is hypothetical/backtested performance, not real P&L).
+- Only consider widening the live `n=12` window (or making it adaptive) if `swing24h`
+  clearly accepts more often *and* doesn't show worse quality — otherwise the hypothesis
+  is rejected and nothing changes in live trading.
+
 ---
 
 ## Exchange Trading (`exchange_trader.py`)

@@ -1145,6 +1145,60 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "not_tradeable": True,
                     })
 
+            # trend_pullback_short — okno swing 24h zamiast 12h (obserwacyjne, zawsze not_tradeable).
+            # Hipoteza: w długim, jednokierunkowym trendzie 12h swing ciągle się zawęża do coraz
+            # niższych lokalnych maksimów, więc W1 (fib retracement) wypada coraz bliżej/poniżej
+            # ceny zanim zdąży się cokolwiek złożyć. Sprawdzamy czy szersze okno łapie realniejsze
+            # pullbacki — sama geometria (fib 38-50%, SL fib61.8%) identyczna jak baseline, różni
+            # się tylko długość okna swing. Do porównania po pewnym czasie z wynikami baseline.
+            if strength >= 5:
+                swing_high_w, swing_low_w = find_swing_points(candles_h1, n=24)
+                swing_low_w = min(swing_low_w, current_price)
+                swing_high_w = max(swing_high_w, current_price)
+                if swing_high_w > swing_low_w:
+                    swing_range_w = swing_high_w - swing_low_w
+                    entry_mid_w = 0.44  # (0.38+0.50)/2, jak baseline
+                    w_w   = round(swing_low_w + entry_mid_w * swing_range_w, 2)
+                    sl_w  = round(swing_low_w + 0.618 * swing_range_w + atr * 0.3, 2)
+                    tp1_w = round(swing_low_w + swing_range_w * 0.02, 2)
+                    tp2_w = round(swing_low_w - swing_range_w * 0.3, 2)
+                    rr_ok_w       = sl_w > w_w and tp1_w < w_w and (w_w - tp1_w) / (sl_w - w_w) >= 1.5
+                    above_price_w = w_w > current_price * 1.003
+                    dist_ok_w     = w_w - current_price <= max_entry_dist
+                    rr_val_w      = round((w_w - tp1_w) / (sl_w - w_w), 1) if (sl_w - w_w) > 0 else 0
+                    log_lines.append(
+                        f"  → pullback_short [swing24h]: W=${w_w:.2f} SL=${sl_w:.2f} RR={rr_val_w} "
+                        f"swing24h=${swing_low_w:.2f}-${swing_high_w:.2f} dist=${w_w-current_price:.2f} "
+                        f"above={above_price_w} dist_ok={dist_ok_w} rr_ok={rr_ok_w}"
+                    )
+                    _ctx_w = _setup_ctx(w_w, sl_w, fib_lvl=entry_mid_w, swing_h=swing_high_w, swing_l=swing_low_w)
+                    if rr_ok_w and above_price_w and dist_ok_w:
+                        log_lines.append(f"    ✓ ACCEPTED [swing24h] (not_tradeable)")
+                        setups.append({
+                            "type": "trend_pullback_short", "direction": "short",
+                            "entries": [w_w], "sl": sl_w, "sl_after_tp1": w_w,
+                            "tps": [tp1_w, tp2_w], "rr": rr_val_w,
+                            "score": strength, "variant": "swing24h",
+                            "tp_strategy": "tp1_tp2",
+                            "not_tradeable": True,
+                            "market_context": _ctx_w,
+                            "reasoning": f"{regime_name}({strength}); swing24h ${swing_low_w:.0f}-${swing_high_w:.0f} [swing24h]",
+                        })
+                    else:
+                        _rej_w = []
+                        if not rr_ok_w: _rej_w.append(f"RR<1.5({rr_val_w})")
+                        if not above_price_w: _rej_w.append("W<=cena")
+                        if not dist_ok_w: _rej_w.append(f"dist>3%({w_w-current_price:.2f})")
+                        log_lines.append(f"    ✗ REJECTED [swing24h]: {', '.join(_rej_w)}")
+                        setups.append({
+                            "type": "trend_pullback_short", "direction": "short",
+                            "entries": [w_w], "sl": sl_w, "sl_after_tp1": w_w,
+                            "tps": [tp1_w, tp2_w], "rr": rr_val_w,
+                            "score": strength, "variant": "swing24h",
+                            "market_context": _ctx_w,
+                            "rejected_by_algo": True, "filter_reasons": _rej_w, "not_tradeable": True,
+                        })
+
             # trend_pullback_short ATR-based — entry = cena + 0.5*ATR, SL = cena + 1.2*ATR
             atr_m15_pb = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
             w_atr   = round(current_price + atr_m15_pb * 0.5, 2)
@@ -1415,6 +1469,56 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                         "filter_reasons": reasons,
                         "not_tradeable": True,
                     })
+
+            # trend_pullback_long — okno swing 24h zamiast 12h (obserwacyjne, zawsze not_tradeable).
+            # Lustrzane odbicie eksperymentu swing24h z gałęzi short — patrz komentarz tam.
+            if strength >= 5:
+                swing_high_w, swing_low_w = find_swing_points(candles_h1, n=24)
+                swing_low_w = min(swing_low_w, current_price)
+                swing_high_w = max(swing_high_w, current_price)
+                if swing_high_w > swing_low_w:
+                    swing_range_w = swing_high_w - swing_low_w
+                    entry_mid_w = 0.44  # (0.38+0.50)/2, jak baseline
+                    w_w   = round(swing_high_w - entry_mid_w * swing_range_w, 2)
+                    sl_w  = round(swing_high_w - 0.618 * swing_range_w - atr * 0.3, 2)
+                    tp1_w = round(swing_high_w - swing_range_w * 0.02, 2)
+                    tp2_w = round(swing_high_w + swing_range_w * 0.3, 2)
+                    rr_ok_w       = sl_w < w_w and tp1_w > w_w and (tp1_w - w_w) / (w_w - sl_w) >= 1.5
+                    below_price_w = w_w < current_price * 0.997
+                    dist_ok_w     = current_price - w_w <= max_entry_dist
+                    rr_val_w      = round((tp1_w - w_w) / (w_w - sl_w), 1) if (w_w - sl_w) > 0 else 0
+                    log_lines.append(
+                        f"  → pullback_long [swing24h]: W=${w_w:.2f} SL=${sl_w:.2f} RR={rr_val_w} "
+                        f"swing24h=${swing_low_w:.2f}-${swing_high_w:.2f} dist=${current_price-w_w:.2f} "
+                        f"below={below_price_w} dist_ok={dist_ok_w} rr_ok={rr_ok_w}"
+                    )
+                    _ctx_w = _setup_ctx(w_w, sl_w, fib_lvl=entry_mid_w, swing_h=swing_high_w, swing_l=swing_low_w)
+                    if rr_ok_w and below_price_w and dist_ok_w:
+                        log_lines.append(f"    ✓ ACCEPTED [swing24h] (not_tradeable)")
+                        setups.append({
+                            "type": "trend_pullback_long", "direction": "long",
+                            "entries": [w_w], "sl": sl_w, "sl_after_tp1": w_w,
+                            "tps": [tp1_w, tp2_w], "rr": rr_val_w,
+                            "score": strength, "variant": "swing24h",
+                            "tp_strategy": "tp1_tp2",
+                            "not_tradeable": True,
+                            "market_context": _ctx_w,
+                            "reasoning": f"{regime_name}({strength}); swing24h ${swing_low_w:.0f}-${swing_high_w:.0f} [swing24h]",
+                        })
+                    else:
+                        _rej_w = []
+                        if not rr_ok_w: _rej_w.append(f"RR<1.5({rr_val_w})")
+                        if not below_price_w: _rej_w.append("W>=cena")
+                        if not dist_ok_w: _rej_w.append(f"dist>3%({current_price-w_w:.2f})")
+                        log_lines.append(f"    ✗ REJECTED [swing24h]: {', '.join(_rej_w)}")
+                        setups.append({
+                            "type": "trend_pullback_long", "direction": "long",
+                            "entries": [w_w], "sl": sl_w, "sl_after_tp1": w_w,
+                            "tps": [tp1_w, tp2_w], "rr": rr_val_w,
+                            "score": strength, "variant": "swing24h",
+                            "market_context": _ctx_w,
+                            "rejected_by_algo": True, "filter_reasons": _rej_w, "not_tradeable": True,
+                        })
 
             # trend_pullback_long ATR-based — entry = cena - 0.5*ATR, SL = cena - 1.2*ATR
             atr_m15_pb = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
