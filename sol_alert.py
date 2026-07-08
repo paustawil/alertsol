@@ -2422,7 +2422,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
                                     cancel_time=now_iso,
                                     cancel_price=round(current_price, 2))
                     db.resolve_setup(p["setup_id"], "anulowany", None, None, None, None)
-                    replaced_setup = {"sid": p["setup_id"], "w1": old_w1}
+                    replaced_setup = {"sid": p["setup_id"], "w1": old_w1, "tradeable": p.get("tradeable", False)}
                     break  # stary anulowany — kontynuuj wstawianie nowego
 
     # Ustal kierunek aktywacji wejścia (rising = cena musi wzrosnąć do W1, falling = spaść)
@@ -2476,7 +2476,7 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
         return
     setup["setup_id"] = sid  # mutujemy dict żeby format_alert/format_grok_alert miały dostęp
 
-    if replaced_setup and tradeable:
+    if replaced_setup and replaced_setup.get("tradeable"):
         try:
             di = "📉" if direction == "short" else "📈"
             tp1 = tps[0] if len(tps) > 0 else None
