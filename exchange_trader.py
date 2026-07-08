@@ -385,10 +385,20 @@ def _place_entry_plan_orders(
                 oid = resp["data"]["orderId"]
                 print(f"[exchange] #{sid} Plan {label}: {oid} | {side} {_fmt_qty(half_qty)} SOL"
                       f" @ W1={w1} | TP={tp} SL={sl}")
+                db.log_exchange_event(_sid_int(sid), "entry_plan_place_ok", {
+                    "label": label, "order_id": oid, "side": side,
+                    "qty": _fmt_qty(half_qty), "trigger": w1, "tp": tp, "sl": sl,
+                })
                 return oid
             log.error(f"[exchange] #{sid} place plan {label}: code={resp.get('code')} msg={resp.get('msg')}")
+            db.log_exchange_event(_sid_int(sid), "entry_plan_place_fail", {
+                "label": label, "code": resp.get("code"), "msg": resp.get("msg"),
+            })
         except Exception as e:
             log.error(f"[exchange] #{sid} place plan {label}: {e}")
+            db.log_exchange_event(_sid_int(sid), "entry_plan_place_fail", {
+                "label": label, "exception": str(e),
+            })
         return None
 
     if s.get("tp_strategy") == "tp1_only":
@@ -420,10 +430,20 @@ def _place_entry_plan_orders(
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
                 print(f"[exchange] #{sid} Plan 1(TP1-only): {oid} | {_fmt_qty(full_qty_single)} SOL @ TP1={tp1}")
+                db.log_exchange_event(_sid_int(sid), "entry_plan_place_ok", {
+                    "label": "1(TP1-only)", "order_id": oid,
+                    "qty": _fmt_qty(full_qty_single), "trigger": s["entries"][0], "tp": tp1, "sl": sl,
+                })
                 return oid, None
             log.error(f"[exchange] #{sid} place plan tp1_only: code={resp.get('code')} msg={resp.get('msg')}")
+            db.log_exchange_event(_sid_int(sid), "entry_plan_place_fail", {
+                "label": "tp1_only", "code": resp.get("code"), "msg": resp.get("msg"),
+            })
         except Exception as e:
             log.error(f"[exchange] #{sid} place plan tp1_only: {e}")
+            db.log_exchange_event(_sid_int(sid), "entry_plan_place_fail", {
+                "label": "tp1_only", "exception": str(e),
+            })
         return None, None
 
     plan1_oid = _place_one(tp1, "1(TP1)")
@@ -434,6 +454,9 @@ def _place_entry_plan_orders(
     if not plan2_oid:
         # Cofnij plan1 żeby nie zostawić samotnego half-qty plan order
         log.error(f"[exchange] #{sid} plan2 nieudany — anuluję plan1 {plan1_oid}")
+        db.log_exchange_event(_sid_int(sid), "entry_plan_rollback", {
+            "reason": "plan2_failed", "plan1_oid": plan1_oid,
+        })
         _cancel_order(client, plan1_oid, "normal_plan", setup_id=sid, reason="plan2_failed")
         return None, None
 
@@ -472,18 +495,28 @@ def _place_market_entry(
         })
     except Exception as e:
         log.error(f"[exchange] #{sid} market entry: {e}")
+        db.log_exchange_event(_sid_int(sid), "market_entry_fail", {"exception": str(e)})
         return False
 
     if resp.get("code") != "00000":
         log.error(f"[exchange] #{sid} market entry: code={resp.get('code')} msg={resp.get('msg')}")
+        db.log_exchange_event(_sid_int(sid), "market_entry_fail", {
+            "code": resp.get("code"), "msg": resp.get("msg"),
+        })
         return False
 
     market_oid = (resp.get("data") or {}).get("orderId")
     print(f"[exchange] #{sid} market entry: {_fmt_qty(full_qty)} SOL {side.upper()} (aggressive) oid={market_oid}")
+    db.log_exchange_event(_sid_int(sid), "market_entry_ok", {
+        "order_id": market_oid, "side": side, "qty": _fmt_qty(full_qty),
+    })
 
     actual_qty, avg_open_price = _get_open_position_info(client, direction)
     if actual_qty <= 0:
         log.error(f"[exchange] #{sid} market entry: pozycja=0 po market order")
+        db.log_exchange_event(_sid_int(sid), "position_open_fail_zero_qty", {
+            "order_id": market_oid, "context": "market_entry",
+        })
         return False
 
     # Zapisz faktyczne dane z giełdy
@@ -507,6 +540,11 @@ def _place_market_entry(
     if fee_open > 0:
         db.update_setup(s["setup_id"], exchange_fee_open=fee_open)
     print(f"[exchange] #{sid} faktyczne: qty={actual_qty} avg_entry={avg_open_price} fee={fee_open}")
+    db.log_exchange_event(_sid_int(sid), "position_opened", {
+        "qty": actual_qty, "avg_entry": avg_open_price, "fee_open": fee_open,
+        "tp1_oid": tp1_id, "tp2_oid": tp2_id, "sl1_oid": sl1_id, "sl2_oid": sl2_id,
+        "context": "market_entry_aggressive",
+    })
     return True
 
 
@@ -551,10 +589,17 @@ def _place_tpsl_orders_split(
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
                 print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(half_qty)} SOL @ {price}")
+                db.log_exchange_event(_sid_int(sid), "tpsl_place_ok", {
+                    "label": label, "order_id": oid, "price": price, "qty": _fmt_qty(half_qty),
+                })
                 return oid
             log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
+            db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {
+                "label": label, "code": resp.get("code"), "msg": resp.get("msg"),
+            })
         except Exception as e:
             log.error(f"[exchange] #{sid} place {label}: {e}")
+            db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {"label": label, "exception": str(e)})
         return None
 
     def _place_sl(label):
@@ -575,10 +620,17 @@ def _place_tpsl_orders_split(
             if resp.get("code") == "00000":
                 oid = resp["data"]["orderId"]
                 print(f"[exchange] #{sid} {label}: {oid} | {_fmt_qty(half_qty)} SOL @ {sl}")
+                db.log_exchange_event(_sid_int(sid), "tpsl_place_ok", {
+                    "label": label, "order_id": oid, "price": sl, "qty": _fmt_qty(half_qty),
+                })
                 return oid
             log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
+            db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {
+                "label": label, "code": resp.get("code"), "msg": resp.get("msg"),
+            })
         except Exception as e:
             log.error(f"[exchange] #{sid} place {label}: {e}")
+            db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {"label": label, "exception": str(e)})
         return None
 
     if s.get("tp_strategy") == "tp1_only":
@@ -603,10 +655,17 @@ def _place_tpsl_orders_split(
                 if resp.get("code") == "00000":
                     oid = resp["data"]["orderId"]
                     print(f"[exchange] #{sid} {label}(full): {oid} | {_fmt_qty(full_qty_single)} SOL @ {price}")
+                    db.log_exchange_event(_sid_int(sid), "tpsl_place_ok", {
+                        "label": f"{label}(full)", "order_id": oid, "price": price, "qty": _fmt_qty(full_qty_single),
+                    })
                     return oid
                 log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
+                db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {
+                    "label": label, "code": resp.get("code"), "msg": resp.get("msg"),
+                })
             except Exception as e:
                 log.error(f"[exchange] #{sid} place {label}: {e}")
+                db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {"label": label, "exception": str(e)})
             return None
 
         def _place_sl_full(label):
@@ -627,10 +686,17 @@ def _place_tpsl_orders_split(
                 if resp.get("code") == "00000":
                     oid = resp["data"]["orderId"]
                     print(f"[exchange] #{sid} {label}(full): {oid} | {_fmt_qty(full_qty_single)} SOL @ {sl}")
+                    db.log_exchange_event(_sid_int(sid), "tpsl_place_ok", {
+                        "label": f"{label}(full)", "order_id": oid, "price": sl, "qty": _fmt_qty(full_qty_single),
+                    })
                     return oid
                 log.error(f"[exchange] #{sid} place {label}: code={resp.get('code')} msg={resp.get('msg')}")
+                db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {
+                    "label": label, "code": resp.get("code"), "msg": resp.get("msg"),
+                })
             except Exception as e:
                 log.error(f"[exchange] #{sid} place {label}: {e}")
+                db.log_exchange_event(_sid_int(sid), "tpsl_place_fail", {"label": label, "exception": str(e)})
             return None
 
         return _place_tp_full(tp1, "TP1"), None, _place_sl_full("SL1"), None
@@ -959,6 +1025,9 @@ def close_open_position(setup_id: int) -> bool:
 
     close_oid = (resp.get("data") or {}).get("orderId")
     print(f"[exchange] #{setup_id}: zamknięto pozycję market ({direction.upper()}, {_fmt_qty(full_qty)} SOL)")
+    db.log_exchange_event(setup_id, "position_closed_manual", {
+        "order_id": close_oid, "direction": direction, "qty": full_qty,
+    })
 
     # Anuluj TPSL dopiero po udanym zamknięciu pozycji
     for oid, plan_type in [
@@ -1099,6 +1168,18 @@ def _check_after_tp1_positions(client: BitgetClient) -> None:
 
 _sync_lock = threading.Lock()
 _exchange_configured = False
+
+# Dedup dla "entry_blocked" — blokada (single-position-mode/limit/typ wyłączony) trwa
+# zwykle wiele cykli sync() (co 15s); logujemy raz na (setup_id, reason), nie za każdym pollem.
+_entry_block_logged: set[tuple[int | None, str]] = set()
+
+
+def _log_entry_blocked_once(sid_int: int | None, reason: str, detail: dict) -> None:
+    key = (sid_int, reason)
+    if key in _entry_block_logged:
+        return
+    _entry_block_logged.add(key)
+    db.log_exchange_event(sid_int, "entry_blocked", detail)
 
 def sync():
     """
@@ -1267,10 +1348,17 @@ def _sync_inner():
         if tradeable and not cancelled and not plan_oid and s.get("entry_hit_at") is None:
             if single_pos_block:
                 print(f"[exchange] {label}: pominięty — SINGLE_POSITION_MODE, aktywna pozycja na Bitget")
+                _log_entry_blocked_once(_sid_int(sid), "single_position_mode", {
+                    "reason": "single_position_mode", "active_positions": total_active_positions,
+                })
                 continue
             dir_active = active_longs if direction == "long" else active_shorts
             if dir_active >= MAX_POSITIONS:
                 print(f"[exchange] {label}: pominięty — limit {direction} pozycji ({dir_active}/{MAX_POSITIONS})")
+                _log_entry_blocked_once(_sid_int(sid), "max_positions_limit", {
+                    "reason": "max_positions_limit", "direction": direction,
+                    "active": dir_active, "limit": MAX_POSITIONS,
+                })
                 continue
             # Atomicznie zarezerwuj slot przed wywołaniem API
             if not db.claim_plan_order(s["setup_id"]):
@@ -1282,6 +1370,9 @@ def _sync_inner():
             )
             if not type_enabled:
                 print(f"[exchange] {label}: pominięty — typ wyłączony w ustawieniach")
+                _log_entry_blocked_once(_sid_int(sid), "type_disabled", {
+                    "reason": "type_disabled", "type": s.get("type", ""), "variant": s.get("variant"),
+                })
                 db.release_plan_order_claim(s["setup_id"])
                 continue
             if eff_tp_strat:
@@ -1336,6 +1427,9 @@ def _sync_inner():
 
             if status1 == "cancelled":
                 print(f"[exchange] {label}: plan1 anulowany z zewnątrz — anuluję plan2 i zamykam setup")
+                db.log_exchange_event(_sid_int(sid), "entry_plan_cancelled_externally", {
+                    "plan1_oid": plan_oid, "plan2_oid": plan2_oid,
+                })
                 if plan2_oid:
                     _cancel_order(client, plan2_oid, "normal_plan", setup_id=_sid_int(sid), reason="plan1_cancelled_externally")
                 s["exchange_plan_oid"]  = None
@@ -1360,6 +1454,9 @@ def _sync_inner():
                         f"[exchange] {label}: oba plan ordery wykonane ale pozycja=0 "
                         f"— traktuję jako brak wejścia"
                     )
+                    db.log_exchange_event(_sid_int(sid), "position_open_fail_zero_qty", {
+                        "plan1_oid": plan_oid, "plan2_oid": plan2_oid, "context": "plan_order_executed",
+                    })
                     s["exchange_plan_oid"]  = None
                     s["exchange_plan2_oid"] = None
                     s["exchange_done"]      = True
@@ -1411,6 +1508,11 @@ def _sync_inner():
                 print(f"[exchange] {label}: pozycja otwarta ({actual_qty} SOL, "
                       f"avg_entry={avg_open_price}, fee={fee_open}) | "
                       f"TP1={tp1_id} TP2={tp2_id} SL1={sl1_id} SL2={sl2_id}")
+                db.log_exchange_event(_sid_int(sid), "position_opened", {
+                    "qty": actual_qty, "avg_entry": avg_open_price, "fee_open": fee_open,
+                    "tp1_oid": tp1_id, "tp2_oid": tp2_id, "sl1_oid": sl1_id, "sl2_oid": sl2_id,
+                    "context": "plan_orders_executed",
+                })
 
                 if _cancel_other_pending_on_position_open(client, int(sid), pending):
                     modified = True
@@ -1469,8 +1571,15 @@ def _sync_inner():
                                 print(f"[exchange] {label}: druga połowa zamknięta market")
                             else:
                                 log.warning(f"[exchange] {label}: nie udało się zamknąć drugiej połowy: {close_resp.get('msg')}")
+                                db.log_exchange_event(_sid_int(sid), "position_close_fail", {
+                                    "context": "sl1_second_half", "code": close_resp.get("code"),
+                                    "msg": close_resp.get("msg"),
+                                })
                         except Exception as e:
                             log.warning(f"[exchange] {label}: błąd zamykania drugiej połowy: {e}")
+                            db.log_exchange_event(_sid_int(sid), "position_close_fail", {
+                                "context": "sl1_second_half", "exception": str(e),
+                            })
                     if sl2_oid:
                         _cancel_order(client, sl2_oid, "loss_plan", setup_id=_sid_int(sid), reason="sl1_executed")
                     s["exchange_sl_oid"]  = None
@@ -1494,6 +1603,10 @@ def _sync_inner():
                             fee_close += _get_fill_fees(client, close_oid_2)
                         if fee_close > 0:
                             db.update_setup(int(sid), exchange_fee_close=fee_close)
+                        db.log_exchange_event(int(sid), "sl_hit", {
+                            "sl_oid": sl_oid, "avg_entry": avg_entry, "sl_price": sl_price,
+                            "pnl_usd": pnl_usd, "close_oid_second_half": close_oid_2,
+                        })
                         db.resolve_setup(int(sid), "SL", avg_entry, sl_price, pnl_usd, None)
                     continue
 
@@ -1514,6 +1627,10 @@ def _sync_inner():
                         s["exchange_done"]    = True
                         modified = True
                         if sid and sid != "?":
+                            db.log_exchange_event(int(sid), "position_cancelled_manual", {
+                                "sl1_oid": sl_oid, "tp1_oid": tp1_oid,
+                                "reason": "sl1_and_tp1_both_cancelled_externally",
+                            })
                             db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
                         continue
                     # TP1 executed — wpadamy w sekcję poniżej
@@ -1568,6 +1685,10 @@ def _sync_inner():
                             fee_close = _get_fill_fees(client, tp1_oid) if tp1_oid else 0.0
                             if fee_close > 0:
                                 db.update_setup(int(sid), exchange_fee_close=fee_close)
+                            db.log_exchange_event(int(sid), "tp1_only_closed", {
+                                "tp1_oid": tp1_oid, "avg_entry": avg_entry, "tp1_price": tp1_price,
+                                "pnl_usd": pnl_usd,
+                            })
                             db.resolve_setup(int(sid), "TP1", avg_entry, tp1_price, pnl_usd, None)
                         continue
 
@@ -1675,11 +1796,16 @@ def _sync_inner():
                     print(f"[exchange] {label}: TP1 wykonany — czekamy na TP2 lub SL2 "
                           f"(SL2={new_sl2_oid}, secured={sl2_secured})")
                     if sid and sid != "?":
+                        db.log_exchange_event(int(sid), "tp1_hit", {
+                            "tp1_oid": tp1_oid, "avg_entry": avg_entry, "tp1_price": tp1_price,
+                            "pnl_usd": pnl_usd, "new_sl2_oid": new_sl2_oid, "sl2_secured": sl2_secured,
+                        })
                         db.mark_tp1_hit(int(sid), avg_entry, tp1_price, pnl_usd)
                     continue
 
                 elif tp1_status == "cancelled":
                     log.warning(f"[exchange] {label}: TP1 anulowany ręcznie")
+                    db.log_exchange_event(_sid_int(sid), "tp1_cancelled_externally", {"tp1_oid": tp1_oid})
                     s["exchange_tp1_oid"] = None
                     modified = True
 
@@ -1688,6 +1814,9 @@ def _sync_inner():
                     and not s.get("exchange_tp2_oid") and not s.get("exchange_done")):
                 log.warning(f"[exchange] {label}: wszystkie TPSL zniknęły — zamykam pozycję market")
                 fq = float((s.get("exchange_qty_full") or "0").replace(",", "."))
+                db.log_exchange_event(_sid_int(sid), "orphaned_position_closed", {
+                    "reason": "all_tpsl_orders_disappeared_phase1", "qty": fq,
+                })
                 if fq > 0 and sid and sid != "?":
                     close_open_position(int(sid))
                 s["exchange_done"] = True
@@ -1703,6 +1832,9 @@ def _sync_inner():
                 # lub błąd — zamykamy
                 if not s.get("exchange_done"):
                     log.warning(f"[exchange] {label}: po TP1 brak tp2/sl2 — zamykam")
+                    db.log_exchange_event(_sid_int(sid), "orphaned_phase2_closed", {
+                        "reason": "no_tp2_sl2_orders_after_tp1",
+                    })
                     s["exchange_done"] = True
                     modified = True
                 continue
@@ -1733,11 +1865,16 @@ def _sync_inner():
                         if fee_close > 0:
                             prev_fee = float(s.get("exchange_fee_close") or 0)
                             db.update_setup(int(sid), exchange_fee_close=round(prev_fee + fee_close, 6))
+                        db.log_exchange_event(int(sid), "tp2_hit", {
+                            "tp2_oid": tp2_oid, "avg_entry": s.get("avg_entry"), "tp2_price": tp2_price,
+                            "pnl_tp1": pnl_tp1, "pnl_tp2": pnl_tp2, "total_pnl": total_pnl,
+                        })
                         db.resolve_setup(int(sid), "TP1+TP2", s.get("avg_entry"), tp2_price, total_pnl, None)
                         print(f"[exchange] {label}: TP1+TP2 — total pnl={total_pnl:.2f}")
                     continue
                 elif tp2_status == "cancelled":
                     log.warning(f"[exchange] {label}: TP2 anulowany ręcznie")
+                    db.log_exchange_event(_sid_int(sid), "tp2_cancelled_externally", {"tp2_oid": tp2_oid})
                     s["exchange_tp2_oid"] = None
                     modified = True
 
@@ -1759,6 +1896,9 @@ def _sync_inner():
                         if fee_close > 0:
                             prev_fee = float(s.get("exchange_fee_close") or 0)
                             db.update_setup(int(sid), exchange_fee_close=round(prev_fee + fee_close, 6))
+                        db.log_exchange_event(int(sid), "sl2_be_hit", {
+                            "sl2_oid": sl2_oid, "avg_entry": avg_entry, "pnl_tp1": pnl_tp1,
+                        })
                         db.resolve_setup(int(sid), "TP1+BE", avg_entry, avg_entry, pnl_tp1, None)
                         print(f"[exchange] {label}: TP1+BE — pnl tp1={pnl_tp1:.2f}")
                     continue
@@ -1795,6 +1935,9 @@ def _sync_inner():
             # Zwolnij slot gdy faza 2 bez zleceń
             if not s.get("exchange_tp2_oid") and not s.get("exchange_sl2_oid") and not s.get("exchange_done"):
                 log.warning(f"[exchange] {label}: faza 2 — wszystkie zlecenia zniknęły — zwalniam slot")
+                db.log_exchange_event(_sid_int(sid), "orphaned_phase2_closed", {
+                    "reason": "all_tp2_sl2_orders_disappeared",
+                })
                 s["exchange_done"] = True
                 modified = True
                 if sid and sid != "?":
