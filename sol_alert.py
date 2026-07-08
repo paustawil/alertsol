@@ -2396,6 +2396,9 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
                     # Identyczny poziom — prawdziwy duplikat
                     print(f"[pending] Duplikat pominięty: {model} {direction} ~${new_level:.2f} "
                           f"(już istnieje #{p['setup_id']} od {p['model']})")
+                    db.log_exchange_event(p["setup_id"], "duplicate_skipped", {
+                        "new_w1": new_level, "existing_w1": old_w1, "diff": diff,
+                    })
                     return
 
                 if diff < REPLACE_MAX_DIFF:
@@ -2408,6 +2411,11 @@ def save_pending(setup: dict, model: str, rejection: str, current_price: float,
                     reason = (f"zastąpiony nowszym setupem W1=${new_level:.2f} "
                               f"(poprzedni W1=${old_w1:.2f}, diff=${diff:.2f})")
                     print(f"[pending] Zastępuję #{p['setup_id']} W1=${old_w1:.2f} → ${new_level:.2f}")
+                    db.log_exchange_event(p["setup_id"], "setup_replaced", {
+                        "old_w1": old_w1, "new_w1": new_level, "diff": diff,
+                        "old_tradeable": p.get("tradeable", False),
+                        "old_had_plan_oid": bool(p.get("exchange_plan_oid")),
+                    })
                     db.update_setup(p["setup_id"],
                                     tradeable=False,
                                     cancel_reason=reason,
@@ -2907,6 +2915,11 @@ def check_stale_setups(regime: dict, current_price: float, candles_h1: list[dict
 
         if reason:
             print(f"[stale] #{sid} anulowany: {reason}")
+            db.log_exchange_event(sid, "stale_cancelled", {
+                "reason": reason, "w1": w1, "direction": d,
+                "tradeable": s.get("tradeable", False),
+                "had_plan_oid": bool(s.get("exchange_plan_oid")),
+            })
             db.update_setup(sid,
                             tradeable=False,
                             cancel_reason=reason,
@@ -3287,6 +3300,11 @@ def _algo2_run(regime: dict, candles_m15: list, candles_h1: list, current: float
         update_fields["status"] = "pending"
         update_fields["entry_hit_at"] = None
     db.update_setup(best["setup_id"], **update_fields)
+    db.log_exchange_event(best["setup_id"], "setup_promoted_live" if is_tradeable else "setup_kept_observation", {
+        "type": best.get("type", ""), "variant": best.get("variant", "baseline"),
+        "direction": best.get("direction", ""), "w1": best["entries"][0] if best.get("entries") else None,
+        "rr": best.get("rr", 0), "algo2_shadow_mode": bool(ALGO2_SHADOW_MODE),
+    })
     if is_tradeable:
         send_telegram(format_alert("Algo2", best, current, True))
     if val_result and is_tradeable:
