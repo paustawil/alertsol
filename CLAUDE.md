@@ -212,6 +212,47 @@ extra accepted setups have clearly worse win rate than baseline's.
   clearly accepts more often *and* doesn't show worse quality — otherwise the hypothesis
   is rejected and nothing changes in live trading.
 
+### Experiment: `m15_confirmed` (trigger pullback on a live M15 bounce, not a static window) — started 2026-07-13
+
+**Problem found:** `baseline` (and `swing24h`) compute the fib pullback entry from a rolling H1
+swing window every cycle regardless of whether a correction is actually happening right now —
+so most of the time W1 is a static projection that price never reaches while a trend runs
+straight through without a real pullback, and other times it happens to catch a random wick
+during continued trend, not an actual completed correction. Confirmed on a period where SOL
+dropped ~$5 with multiple real pullbacks along the way: `trend_pullback_short baseline` barely
+entered (1/19 over 7 days) and the one entry that did land was a loss — the algorithm wasn't
+distinguishing "a correction is underway" from "swing window fib retracement, unconditionally."
+
+**What was shipped (log-only, zero effect on live trading):** in `algo_detect_setups()`, a new
+shadow candidate per side (`trend_pullback_short`/`trend_pullback_long`) that only fires once a
+real corrective move is confirmed on M15 — corrections on this instrument typically run tens of
+minutes, not hours, so H1 is too coarse a timeframe to react to them. Trigger: at least 2 of the
+last 3 M15 candles close counter-trend (bullish for the short side, bearish for the long side)
+**and** MA30/MA60 still confirm the underlying trend is intact (MA30<MA60 for short, MA30>MA60
+for long — same idea as the MA filter already used in RANGE detection) — this second condition
+guards against catching what's actually a trend reversal rather than a pullback. Only once both
+conditions hold do we compute the fib entry (same 38–50% retracement / SL at 61.8% geometry as
+baseline) — but anchored to a short M15 swing window (`find_swing_points(candles_m15, n=12)`,
+~3h) capturing the local extremes of *this* correction, instead of the old H1 window. Tagged
+`variant="m15_confirmed"`, always `not_tradeable=True`, saved accepted-or-rejected like every
+other variant.
+
+**Hypothesis (falsifiable):** gating entry on a confirmed live M15 bounce (plus MA trend-intact
+check) produces a meaningfully higher entry rate and better win rate/expectancy than `baseline`
+over the same period, because it only computes a fib zone once an actual correction is in
+progress instead of projecting one unconditionally from a rolling window. Falsified if
+`m15_confirmed` enters about as rarely as `baseline` (meaning the trigger isn't actually
+catching real corrections), or if its accepted setups don't show better win rate/expectancy.
+
+**To check back (after a few weeks):**
+- Query `setups` where `type LIKE 'trend_pullback_%'` and `variant = 'm15_confirmed'`.
+- Compare entry rate (`entry_hit_at IS NOT NULL`) and win rate/expectancy against `baseline` for
+  the same period — same caveat as `swing24h`, these are shadow so it's hypothetical performance,
+  not real P&L.
+- Only consider wiring the M15-confirmation trigger into the live `baseline` path if
+  `m15_confirmed` clearly enters more often *and* shows better quality — otherwise the
+  hypothesis is rejected and nothing changes in live trading.
+
 ---
 
 ## Exchange Trading (`exchange_trader.py`)
