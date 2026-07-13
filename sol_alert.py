@@ -2778,6 +2778,14 @@ def check_pending(candles_m15: list[dict]):
                         still_pending.append(s)
                     continue
             s["entry_hit_at"] = hit
+            # Zapisz entry_hit_at od razu — jeśli setup zdąży też się rozwiązać
+            # (TP/SL) w tym samym przebiegu check_pending(), db.resolve_setup()
+            # nie nadpisuje tej kolumny, więc bez tego zapisu zostałaby NULL na
+            # zawsze mimo poprawnie zapisanego wyniku (setup wygląda jak "nie weszło").
+            _entry_upd = {"entry_hit_at": hit}
+            if s.get("status") != "after_tp1":
+                _entry_upd["status"] = "open"
+            db.update_setup(s["setup_id"], **_entry_upd)
             if s.get("tradeable"):
                 try:
                     sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""
