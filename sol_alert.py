@@ -910,6 +910,72 @@ def find_swing_points(candles_h1: list[dict], n: int = 12):
     return max(c["high"] for c in recent), min(c["low"] for c in recent)
 
 
+def find_impulse_leg(candles: list[dict], direction: str, atr: float,
+                      reversal_mult: float = 1.2, max_lookback: int = 48):
+    """Zigzag do przodu przez ostatnie max_lookback świec: śledzi jedno
+    kandydujące ekstremum na raz (szczyt albo dołek) i rozszerza je, dopóki
+    cena robi nowe ekstrema w tym samym kierunku. Gdy cena cofnie się od
+    NIEGO (od ostatniego kandydata, nie od jakiegoś odległego punktu) o
+    więcej niż reversal_mult*atr — to potwierdzony punkt zwrotny: zapisujemy
+    go i zaczynamy śledzić przeciwne ekstremum od tego miejsca. Dzięki temu
+    poprawnie oddziela osobne nogi trendu niezależnie od tego, jak długa jest
+    aktualna noga względem ATR (w przeciwieństwie do porównywania z globalnym
+    dołkiem/szczytem całego okna, co fałszywie "kończyłoby" długą, czystą
+    nogę już po kilku świecach).
+
+    Zwraca (leg_high, leg_low) — ten sam kształt co find_swing_points().
+    "Lokalny szczyt/dołek" to tu punkt potwierdzony tym, że cena realnie od
+    niego odeszła o więcej niż typowa zmienność — nie po prostu max/min z
+    dowolnego okna.
+    """
+    window = candles[-max_lookback:] if len(candles) > max_lookback else candles[:]
+    if len(window) < 2 or atr <= 0:
+        return find_swing_points(candles, n=12)  # fallback: cold-start / zdegenerowany ATR
+
+    threshold = reversal_mult * atr
+    pivots: list[tuple[float, bool]] = []  # (cena, is_high) potwierdzone punkty zwrotne, chronologicznie
+    tracking_high = window[1]["close"] >= window[0]["close"]
+    extreme = window[0]["high"] if tracking_high else window[0]["low"]
+
+    for c in window[1:]:
+        if tracking_high:
+            if c["high"] > extreme:
+                extreme = c["high"]
+            elif extreme - c["low"] > threshold:
+                pivots.append((extreme, True))
+                tracking_high, extreme = False, c["low"]
+        else:
+            if c["low"] < extreme:
+                extreme = c["low"]
+            elif c["high"] - extreme > threshold:
+                pivots.append((extreme, False))
+                tracking_high, extreme = True, c["high"]
+    pivots.append((extreme, tracking_high))  # bieżące, jeszcze niepotwierdzone ekstremum ("teraz")
+
+    # Fallback gdy w oknie nie znaleziono wystarczająco potwierdzonych punktów
+    # zwrotnych (np. zbyt krótka historia albo zbyt duży próg ATR) — użyj
+    # realnych ekstremów całego okna zamiast zdegenerowanej (zerowej) nogi.
+    window_high = max(c["high"] for c in window)
+    window_low  = min(c["low"] for c in window)
+
+    if direction == "down":
+        if pivots[-1][1]:  # ostatnie śledzone ekstremum to szczyt — noga w dół już się zakończyła
+            leg_low  = pivots[-2][0] if len(pivots) >= 2 else window_low
+            leg_high = pivots[-3][0] if len(pivots) >= 3 else window_high
+        else:
+            leg_low  = pivots[-1][0]
+            leg_high = pivots[-2][0] if len(pivots) >= 2 else window_high
+        return leg_high, leg_low
+    else:  # "up"
+        if not pivots[-1][1]:  # ostatnie śledzone ekstremum to dołek — noga w górę już się zakończyła
+            leg_high = pivots[-2][0] if len(pivots) >= 2 else window_high
+            leg_low  = pivots[-3][0] if len(pivots) >= 3 else window_low
+        else:
+            leg_high = pivots[-1][0]
+            leg_low  = pivots[-2][0] if len(pivots) >= 2 else window_low
+        return leg_high, leg_low
+
+
 def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles: int = 10):
     """Szuka konsolidacji — wąski zakres w ostatnich świecach H1.
     Iteruje od najszerszego okna do najwęższego, żeby uchwycić faktyczne granice
@@ -1198,6 +1264,83 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "market_context": _ctx_w,
                             "rejected_by_algo": True, "filter_reasons": _rej_w, "not_tradeable": True,
                         })
+
+            # trend_pullback_short — pullback potwierdzony na M15 (obserwacyjne, zawsze not_tradeable).
+            # Hipoteza: baseline/swing24h liczą fib ze sztywnego okna H1 niezależnie od tego, czy
+            # korekta faktycznie w tej chwili trwa. Korekty na tym instrumencie trwają zwykle
+            # kilkadziesiąt minut, nie godziny — więc zamiast okna H1 wymagamy realnego potwierdzenia
+            # odbicia na M15 (2-3 ostatnie świece kontra-trend) ORAZ że szerszy trend wciąż jest
+            # spadkowy (MA30<MA60, jak filtr MA w RANGE) — inaczej to może być już odwrócenie trendu,
+            # nie pullback. Dopiero po potwierdzeniu liczymy fib z lokalnego swingu (krótkie okno M15)
+            # zamiast starego okna H1. Sama geometria fib (38-50% / SL 61.8%) identyczna jak baseline —
+            # zmienia się tylko WARUNEK startu i ANCHOR, żeby porównanie izolowało wpływ triggera.
+            if strength >= 5:
+                last3_m15_pb = candles_m15[-3:]
+                bounce_candles = sum(1 for c in last3_m15_pb if c["close"] > c["open"])
+                m15_closes_pb = [c["close"] for c in candles_m15]
+                ma30_pb = sum(m15_closes_pb[-30:]) / min(30, len(m15_closes_pb)) if len(m15_closes_pb) >= 10 else None
+                ma60_pb = sum(m15_closes_pb[-60:]) / min(60, len(m15_closes_pb)) if len(m15_closes_pb) >= 30 else None
+                ma_trend_intact = ma30_pb is not None and ma60_pb is not None and ma30_pb < ma60_pb
+                pullback_confirmed = bounce_candles >= 2 and ma_trend_intact
+                log_lines.append(
+                    f"  → pullback_short [m15_confirmed]: odbicie {bounce_candles}/3 świec M15, "
+                    f"MA30={f'${ma30_pb:.2f}' if ma30_pb else 'N/A'} MA60={f'${ma60_pb:.2f}' if ma60_pb else 'N/A'} "
+                    f"trend_intact={ma_trend_intact} → {'START KOREKTY' if pullback_confirmed else 'brak korekty'}"
+                )
+                if pullback_confirmed:
+                    swing_high_m, swing_low_m = find_impulse_leg(candles_m15, direction, atr_m15_ctx)  # realny zasięg impulsu (zigzag via ATR)
+                    swing_low_m = min(swing_low_m, current_price)
+                    swing_high_m = max(swing_high_m, current_price)
+                    if swing_high_m > swing_low_m:
+                        swing_range_m = swing_high_m - swing_low_m
+                        entry_mid_m = 0.44  # (0.38+0.50)/2, jak baseline — nieprzeanalizowane założenie, patrz CLAUDE.md
+                        w_m   = round(swing_low_m + entry_mid_m * swing_range_m, 2)
+                        sl_m  = round(swing_low_m + 0.618 * swing_range_m + atr * 0.3, 2)
+                        tp1_m = round(swing_low_m + swing_range_m * 0.02, 2)
+                        tp2_m = round(swing_low_m - swing_range_m * 0.3, 2)
+                        rr_ok_m       = sl_m > w_m and tp1_m < w_m and (w_m - tp1_m) / (sl_m - w_m) >= 1.5
+                        above_price_m = w_m > current_price * 1.003
+                        dist_ok_m     = w_m - current_price <= max_entry_dist
+                        rr_val_m      = round((w_m - tp1_m) / (sl_m - w_m), 1) if (sl_m - w_m) > 0 else 0
+                        log_lines.append(
+                            f"    W=${w_m:.2f} SL=${sl_m:.2f} RR={rr_val_m} lokalny swing=${swing_low_m:.2f}-${swing_high_m:.2f} "
+                            f"dist=${w_m-current_price:.2f} above={above_price_m} dist_ok={dist_ok_m} rr_ok={rr_ok_m}"
+                        )
+                        _ctx_m = _setup_ctx(w_m, sl_m, fib_lvl=entry_mid_m, swing_h=swing_high_m, swing_l=swing_low_m)
+                        # Obserwacyjne — do sprawdzenia hipotezy "dynamika korekty + umiejscowienie
+                        # średnich" (patrz CLAUDE.md, otwarta hipoteza m15_confirmed). Nic z tego nie
+                        # wpływa na entry/SL/gating — czysto do analizy po fakcie.
+                        _ctx_m["impulse_leg_range"]   = round(swing_range_m, 2)
+                        _ctx_m["ma30_dist_to_entry"]  = round(ma30_pb - w_m, 2) if ma30_pb is not None else None
+                        _ctx_m["ma60_dist_to_entry"]  = round(ma60_pb - w_m, 2) if ma60_pb is not None else None
+                        _ctx_m["bounce_candle_count"] = bounce_candles
+                        if rr_ok_m and above_price_m and dist_ok_m:
+                            log_lines.append(f"    ✓ ACCEPTED [m15_confirmed] (not_tradeable)")
+                            setups.append({
+                                "type": "trend_pullback_short", "direction": "short",
+                                "entries": [w_m], "sl": sl_m, "sl_after_tp1": w_m,
+                                "tps": [tp1_m, tp2_m], "rr": rr_val_m,
+                                "score": strength, "variant": "m15_confirmed",
+                                "tp_strategy": "tp1_tp2",
+                                "not_tradeable": True,
+                                "market_context": _ctx_m,
+                                "reasoning": f"{regime_name}({strength}); m15 bounce {bounce_candles}/3, "
+                                             f"swing ${swing_low_m:.0f}-${swing_high_m:.0f} [m15_confirmed]",
+                            })
+                        else:
+                            _rej_m = []
+                            if not rr_ok_m: _rej_m.append(f"RR<1.5({rr_val_m})")
+                            if not above_price_m: _rej_m.append("W<=cena")
+                            if not dist_ok_m: _rej_m.append(f"dist>3%({w_m-current_price:.2f})")
+                            log_lines.append(f"    ✗ REJECTED [m15_confirmed]: {', '.join(_rej_m)}")
+                            setups.append({
+                                "type": "trend_pullback_short", "direction": "short",
+                                "entries": [w_m], "sl": sl_m, "sl_after_tp1": w_m,
+                                "tps": [tp1_m, tp2_m], "rr": rr_val_m,
+                                "score": strength, "variant": "m15_confirmed",
+                                "market_context": _ctx_m,
+                                "rejected_by_algo": True, "filter_reasons": _rej_m, "not_tradeable": True,
+                            })
 
             # trend_pullback_short ATR-based — entry = cena + 0.5*ATR, SL = cena + 1.2*ATR
             atr_m15_pb = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
@@ -1519,6 +1662,76 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             "market_context": _ctx_w,
                             "rejected_by_algo": True, "filter_reasons": _rej_w, "not_tradeable": True,
                         })
+
+            # trend_pullback_long — pullback potwierdzony na M15 (obserwacyjne, zawsze not_tradeable).
+            # Lustrzane odbicie eksperymentu m15_confirmed z gałęzi short — patrz komentarz tam.
+            if strength >= 5:
+                last3_m15_pb = candles_m15[-3:]
+                dip_candles = sum(1 for c in last3_m15_pb if c["close"] < c["open"])
+                m15_closes_pb = [c["close"] for c in candles_m15]
+                ma30_pb = sum(m15_closes_pb[-30:]) / min(30, len(m15_closes_pb)) if len(m15_closes_pb) >= 10 else None
+                ma60_pb = sum(m15_closes_pb[-60:]) / min(60, len(m15_closes_pb)) if len(m15_closes_pb) >= 30 else None
+                ma_trend_intact = ma30_pb is not None and ma60_pb is not None and ma30_pb > ma60_pb
+                pullback_confirmed = dip_candles >= 2 and ma_trend_intact
+                log_lines.append(
+                    f"  → pullback_long [m15_confirmed]: korekta {dip_candles}/3 świec M15, "
+                    f"MA30={f'${ma30_pb:.2f}' if ma30_pb else 'N/A'} MA60={f'${ma60_pb:.2f}' if ma60_pb else 'N/A'} "
+                    f"trend_intact={ma_trend_intact} → {'START KOREKTY' if pullback_confirmed else 'brak korekty'}"
+                )
+                if pullback_confirmed:
+                    swing_high_m, swing_low_m = find_impulse_leg(candles_m15, direction, atr_m15_ctx)  # realny zasięg impulsu (zigzag via ATR)
+                    swing_low_m = min(swing_low_m, current_price)
+                    swing_high_m = max(swing_high_m, current_price)
+                    if swing_high_m > swing_low_m:
+                        swing_range_m = swing_high_m - swing_low_m
+                        entry_mid_m = 0.44  # (0.38+0.50)/2, jak baseline — nieprzeanalizowane założenie, patrz CLAUDE.md
+                        w_m   = round(swing_high_m - entry_mid_m * swing_range_m, 2)
+                        sl_m  = round(swing_high_m - 0.618 * swing_range_m - atr * 0.3, 2)
+                        tp1_m = round(swing_high_m - swing_range_m * 0.02, 2)
+                        tp2_m = round(swing_high_m + swing_range_m * 0.3, 2)
+                        rr_ok_m       = sl_m < w_m and tp1_m > w_m and (tp1_m - w_m) / (w_m - sl_m) >= 1.5
+                        below_price_m = w_m < current_price * 0.997
+                        dist_ok_m     = current_price - w_m <= max_entry_dist
+                        rr_val_m      = round((tp1_m - w_m) / (w_m - sl_m), 1) if (w_m - sl_m) > 0 else 0
+                        log_lines.append(
+                            f"    W=${w_m:.2f} SL=${sl_m:.2f} RR={rr_val_m} lokalny swing=${swing_low_m:.2f}-${swing_high_m:.2f} "
+                            f"dist=${current_price-w_m:.2f} below={below_price_m} dist_ok={dist_ok_m} rr_ok={rr_ok_m}"
+                        )
+                        _ctx_m = _setup_ctx(w_m, sl_m, fib_lvl=entry_mid_m, swing_h=swing_high_m, swing_l=swing_low_m)
+                        # Obserwacyjne — do sprawdzenia hipotezy "dynamika korekty + umiejscowienie
+                        # średnich" (patrz CLAUDE.md, otwarta hipoteza m15_confirmed). Nic z tego nie
+                        # wpływa na entry/SL/gating — czysto do analizy po fakcie.
+                        _ctx_m["impulse_leg_range"]   = round(swing_range_m, 2)
+                        _ctx_m["ma30_dist_to_entry"]  = round(ma30_pb - w_m, 2) if ma30_pb is not None else None
+                        _ctx_m["ma60_dist_to_entry"]  = round(ma60_pb - w_m, 2) if ma60_pb is not None else None
+                        _ctx_m["bounce_candle_count"] = dip_candles
+                        if rr_ok_m and below_price_m and dist_ok_m:
+                            log_lines.append(f"    ✓ ACCEPTED [m15_confirmed] (not_tradeable)")
+                            setups.append({
+                                "type": "trend_pullback_long", "direction": "long",
+                                "entries": [w_m], "sl": sl_m, "sl_after_tp1": w_m,
+                                "tps": [tp1_m, tp2_m], "rr": rr_val_m,
+                                "score": strength, "variant": "m15_confirmed",
+                                "tp_strategy": "tp1_tp2",
+                                "not_tradeable": True,
+                                "market_context": _ctx_m,
+                                "reasoning": f"{regime_name}({strength}); m15 dip {dip_candles}/3, "
+                                             f"swing ${swing_low_m:.0f}-${swing_high_m:.0f} [m15_confirmed]",
+                            })
+                        else:
+                            _rej_m = []
+                            if not rr_ok_m: _rej_m.append(f"RR<1.5({rr_val_m})")
+                            if not below_price_m: _rej_m.append("W>=cena")
+                            if not dist_ok_m: _rej_m.append(f"dist>3%({current_price-w_m:.2f})")
+                            log_lines.append(f"    ✗ REJECTED [m15_confirmed]: {', '.join(_rej_m)}")
+                            setups.append({
+                                "type": "trend_pullback_long", "direction": "long",
+                                "entries": [w_m], "sl": sl_m, "sl_after_tp1": w_m,
+                                "tps": [tp1_m, tp2_m], "rr": rr_val_m,
+                                "score": strength, "variant": "m15_confirmed",
+                                "market_context": _ctx_m,
+                                "rejected_by_algo": True, "filter_reasons": _rej_m, "not_tradeable": True,
+                            })
 
             # trend_pullback_long ATR-based — entry = cena - 0.5*ATR, SL = cena - 1.2*ATR
             atr_m15_pb = calc_atr(candles_m15[-20:]) if len(candles_m15) >= 20 else calc_atr(candles_m15)
