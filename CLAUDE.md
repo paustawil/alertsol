@@ -212,7 +212,7 @@ extra accepted setups have clearly worse win rate than baseline's.
   clearly accepts more often *and* doesn't show worse quality — otherwise the hypothesis
   is rejected and nothing changes in live trading.
 
-### Experiment: `m15_confirmed` (trigger pullback on a live M15 bounce, not a static window) — started 2026-07-13
+### Experiment: `m15_confirmed` (trigger pullback on a live M15 bounce, not a static window) — started 2026-07-13, revised 2026-07-14
 
 **Problem found:** `baseline` (and `swing24h`) compute the fib pullback entry from a rolling H1
 swing window every cycle regardless of whether a correction is actually happening right now —
@@ -223,34 +223,65 @@ dropped ~$5 with multiple real pullbacks along the way: `trend_pullback_short ba
 entered (1/19 over 7 days) and the one entry that did land was a loss — the algorithm wasn't
 distinguishing "a correction is underway" from "swing window fib retracement, unconditionally."
 
-**What was shipped (log-only, zero effect on live trading):** in `algo_detect_setups()`, a new
+A second flaw was found before this variant was ever merged or run live: once the M15-bounce
+trigger fires, the original draft still anchored the fib retracement to
+`find_swing_points(candles_m15, n=12)` — a fixed ~3h window. That's the same structural flaw as
+the H1 window, just shorter and still arbitrary rather than tied to the actual impulse leg being
+corrected. Confirmed by hand against two real Bitget SOL/USDT charts: a fixed window either
+clips a real leg short or (worse) picks up an unrelated earlier leg separated by its own
+intermediate reversal, mixing two separate moves into one fib zone.
+
+**What was shipped (log-only, zero effect on live trading):** in `algo_detect_setups()`, a
 shadow candidate per side (`trend_pullback_short`/`trend_pullback_long`) that only fires once a
 real corrective move is confirmed on M15 — corrections on this instrument typically run tens of
 minutes, not hours, so H1 is too coarse a timeframe to react to them. Trigger: at least 2 of the
 last 3 M15 candles close counter-trend (bullish for the short side, bearish for the long side)
 **and** MA30/MA60 still confirm the underlying trend is intact (MA30<MA60 for short, MA30>MA60
 for long — same idea as the MA filter already used in RANGE detection) — this second condition
-guards against catching what's actually a trend reversal rather than a pullback. Only once both
-conditions hold do we compute the fib entry (same 38–50% retracement / SL at 61.8% geometry as
-baseline) — but anchored to a short M15 swing window (`find_swing_points(candles_m15, n=12)`,
-~3h) capturing the local extremes of *this* correction, instead of the old H1 window. Tagged
+guards against catching what's actually a trend reversal rather than a pullback. Once confirmed,
+the fib entry (same 38–50% retracement / SL at 61.8% geometry as baseline, unchanged) is now
+anchored to the real impulse leg via `find_impulse_leg()` — a proper zigzag over the M15 window
+(up to 48 candles, ~12h) that confirms a swing point only once price has genuinely reversed away
+from it by more than 1.2×ATR(M15), instead of a fixed-length window. Tagged
 `variant="m15_confirmed"`, always `not_tradeable=True`, saved accepted-or-rejected like every
 other variant.
 
+Also newly logged (observational only, `market_context`): `impulse_leg_range`,
+`ma30_dist_to_entry`, `ma60_dist_to_entry`, `bounce_candle_count` — see **Open hypothesis** below.
+
+**Open hypothesis (not yet implemented, needs data first):** during design it was suggested that
+correction *dynamics* (how strong/fast the counter-trend bounce is) and moving-average
+*placement* relative to the fib zone might predict how deep a correction goes, and could be used
+to place entry more precisely than a fixed 38-50% midpoint. There is no rule for this yet — it's
+an open, unvalidated hypothesis. The newly logged fields above exist so this can be checked
+against real resolved `m15_confirmed` outcomes later. **Do not build an MA-driven entry/SL
+mechanism until this has been checked against data** — this repo's whole experiment methodology
+is hypothesis → observe → decide, not decide → observe.
+
+Separately (also unresolved, out of scope for this task): the 44% fib midpoint entry
+(`entry_mid = (fib_lo + fib_hi) / 2`) used by `baseline` and every variant that copies it has no
+documented rationale anywhere in this repo — it's an inherited, unexamined assumption predating
+this experiment. Worth questioning at some point, not solved here.
+
 **Hypothesis (falsifiable):** gating entry on a confirmed live M15 bounce (plus MA trend-intact
-check) produces a meaningfully higher entry rate and better win rate/expectancy than `baseline`
-over the same period, because it only computes a fib zone once an actual correction is in
-progress instead of projecting one unconditionally from a rolling window. Falsified if
-`m15_confirmed` enters about as rarely as `baseline` (meaning the trigger isn't actually
-catching real corrections), or if its accepted setups don't show better win rate/expectancy.
+check), anchored to the real impulse leg via zigzag instead of a fixed window, produces a
+meaningfully higher entry rate and better win rate/expectancy than `baseline` over the same
+period. Falsified if `m15_confirmed` enters about as rarely as `baseline` (meaning the trigger
+isn't actually catching real corrections), or if its accepted setups don't show better win
+rate/expectancy.
 
 **To check back (after a few weeks):**
 - Query `setups` where `type LIKE 'trend_pullback_%'` and `variant = 'm15_confirmed'`.
 - Compare entry rate (`entry_hit_at IS NOT NULL`) and win rate/expectancy against `baseline` for
   the same period — same caveat as `swing24h`, these are shadow so it's hypothetical performance,
   not real P&L.
-- Only consider wiring the M15-confirmation trigger into the live `baseline` path if
-  `m15_confirmed` clearly enters more often *and* shows better quality — otherwise the
+- For the open hypothesis above: split resolved `m15_confirmed` rows by
+  `market_context->>'ma30_dist_to_entry'`/`ma60_dist_to_entry` (close to zero vs far) and by
+  `bounce_candle_count` (2 vs 3), and see whether either correlates with correction depth or
+  outcome. Only design an MA/dynamics-driven entry mechanism if this shows a real, meaningful
+  signal — otherwise the hypothesis is rejected and nothing changes.
+- Only consider wiring the M15-confirmation trigger + impulse-leg anchor into the live `baseline`
+  path if `m15_confirmed` clearly enters more often *and* shows better quality — otherwise the
   hypothesis is rejected and nothing changes in live trading.
 
 ---

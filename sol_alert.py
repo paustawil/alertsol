@@ -910,6 +910,72 @@ def find_swing_points(candles_h1: list[dict], n: int = 12):
     return max(c["high"] for c in recent), min(c["low"] for c in recent)
 
 
+def find_impulse_leg(candles: list[dict], direction: str, atr: float,
+                      reversal_mult: float = 1.2, max_lookback: int = 48):
+    """Zigzag do przodu przez ostatnie max_lookback świec: śledzi jedno
+    kandydujące ekstremum na raz (szczyt albo dołek) i rozszerza je, dopóki
+    cena robi nowe ekstrema w tym samym kierunku. Gdy cena cofnie się od
+    NIEGO (od ostatniego kandydata, nie od jakiegoś odległego punktu) o
+    więcej niż reversal_mult*atr — to potwierdzony punkt zwrotny: zapisujemy
+    go i zaczynamy śledzić przeciwne ekstremum od tego miejsca. Dzięki temu
+    poprawnie oddziela osobne nogi trendu niezależnie od tego, jak długa jest
+    aktualna noga względem ATR (w przeciwieństwie do porównywania z globalnym
+    dołkiem/szczytem całego okna, co fałszywie "kończyłoby" długą, czystą
+    nogę już po kilku świecach).
+
+    Zwraca (leg_high, leg_low) — ten sam kształt co find_swing_points().
+    "Lokalny szczyt/dołek" to tu punkt potwierdzony tym, że cena realnie od
+    niego odeszła o więcej niż typowa zmienność — nie po prostu max/min z
+    dowolnego okna.
+    """
+    window = candles[-max_lookback:] if len(candles) > max_lookback else candles[:]
+    if len(window) < 2 or atr <= 0:
+        return find_swing_points(candles, n=12)  # fallback: cold-start / zdegenerowany ATR
+
+    threshold = reversal_mult * atr
+    pivots: list[tuple[float, bool]] = []  # (cena, is_high) potwierdzone punkty zwrotne, chronologicznie
+    tracking_high = window[1]["close"] >= window[0]["close"]
+    extreme = window[0]["high"] if tracking_high else window[0]["low"]
+
+    for c in window[1:]:
+        if tracking_high:
+            if c["high"] > extreme:
+                extreme = c["high"]
+            elif extreme - c["low"] > threshold:
+                pivots.append((extreme, True))
+                tracking_high, extreme = False, c["low"]
+        else:
+            if c["low"] < extreme:
+                extreme = c["low"]
+            elif c["high"] - extreme > threshold:
+                pivots.append((extreme, False))
+                tracking_high, extreme = True, c["high"]
+    pivots.append((extreme, tracking_high))  # bieżące, jeszcze niepotwierdzone ekstremum ("teraz")
+
+    # Fallback gdy w oknie nie znaleziono wystarczająco potwierdzonych punktów
+    # zwrotnych (np. zbyt krótka historia albo zbyt duży próg ATR) — użyj
+    # realnych ekstremów całego okna zamiast zdegenerowanej (zerowej) nogi.
+    window_high = max(c["high"] for c in window)
+    window_low  = min(c["low"] for c in window)
+
+    if direction == "down":
+        if pivots[-1][1]:  # ostatnie śledzone ekstremum to szczyt — noga w dół już się zakończyła
+            leg_low  = pivots[-2][0] if len(pivots) >= 2 else window_low
+            leg_high = pivots[-3][0] if len(pivots) >= 3 else window_high
+        else:
+            leg_low  = pivots[-1][0]
+            leg_high = pivots[-2][0] if len(pivots) >= 2 else window_high
+        return leg_high, leg_low
+    else:  # "up"
+        if not pivots[-1][1]:  # ostatnie śledzone ekstremum to dołek — noga w górę już się zakończyła
+            leg_high = pivots[-2][0] if len(pivots) >= 2 else window_high
+            leg_low  = pivots[-3][0] if len(pivots) >= 3 else window_low
+        else:
+            leg_high = pivots[-1][0]
+            leg_low  = pivots[-2][0] if len(pivots) >= 2 else window_low
+        return leg_high, leg_low
+
+
 def find_consolidation(candles_h1: list[dict], min_candles: int = 4, max_candles: int = 10):
     """Szuka konsolidacji — wąski zakres w ostatnich świecach H1.
     Iteruje od najszerszego okna do najwęższego, żeby uchwycić faktyczne granice
@@ -1222,12 +1288,12 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     f"trend_intact={ma_trend_intact} → {'START KOREKTY' if pullback_confirmed else 'brak korekty'}"
                 )
                 if pullback_confirmed:
-                    swing_high_m, swing_low_m = find_swing_points(candles_m15, n=12)  # ~3h lokalne okno
+                    swing_high_m, swing_low_m = find_impulse_leg(candles_m15, direction, atr_m15_ctx)  # realny zasięg impulsu (zigzag via ATR)
                     swing_low_m = min(swing_low_m, current_price)
                     swing_high_m = max(swing_high_m, current_price)
                     if swing_high_m > swing_low_m:
                         swing_range_m = swing_high_m - swing_low_m
-                        entry_mid_m = 0.44  # (0.38+0.50)/2, jak baseline
+                        entry_mid_m = 0.44  # (0.38+0.50)/2, jak baseline — nieprzeanalizowane założenie, patrz CLAUDE.md
                         w_m   = round(swing_low_m + entry_mid_m * swing_range_m, 2)
                         sl_m  = round(swing_low_m + 0.618 * swing_range_m + atr * 0.3, 2)
                         tp1_m = round(swing_low_m + swing_range_m * 0.02, 2)
@@ -1241,6 +1307,13 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             f"dist=${w_m-current_price:.2f} above={above_price_m} dist_ok={dist_ok_m} rr_ok={rr_ok_m}"
                         )
                         _ctx_m = _setup_ctx(w_m, sl_m, fib_lvl=entry_mid_m, swing_h=swing_high_m, swing_l=swing_low_m)
+                        # Obserwacyjne — do sprawdzenia hipotezy "dynamika korekty + umiejscowienie
+                        # średnich" (patrz CLAUDE.md, otwarta hipoteza m15_confirmed). Nic z tego nie
+                        # wpływa na entry/SL/gating — czysto do analizy po fakcie.
+                        _ctx_m["impulse_leg_range"]   = round(swing_range_m, 2)
+                        _ctx_m["ma30_dist_to_entry"]  = round(ma30_pb - w_m, 2) if ma30_pb is not None else None
+                        _ctx_m["ma60_dist_to_entry"]  = round(ma60_pb - w_m, 2) if ma60_pb is not None else None
+                        _ctx_m["bounce_candle_count"] = bounce_candles
                         if rr_ok_m and above_price_m and dist_ok_m:
                             log_lines.append(f"    ✓ ACCEPTED [m15_confirmed] (not_tradeable)")
                             setups.append({
@@ -1606,12 +1679,12 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                     f"trend_intact={ma_trend_intact} → {'START KOREKTY' if pullback_confirmed else 'brak korekty'}"
                 )
                 if pullback_confirmed:
-                    swing_high_m, swing_low_m = find_swing_points(candles_m15, n=12)  # ~3h lokalne okno
+                    swing_high_m, swing_low_m = find_impulse_leg(candles_m15, direction, atr_m15_ctx)  # realny zasięg impulsu (zigzag via ATR)
                     swing_low_m = min(swing_low_m, current_price)
                     swing_high_m = max(swing_high_m, current_price)
                     if swing_high_m > swing_low_m:
                         swing_range_m = swing_high_m - swing_low_m
-                        entry_mid_m = 0.44  # (0.38+0.50)/2, jak baseline
+                        entry_mid_m = 0.44  # (0.38+0.50)/2, jak baseline — nieprzeanalizowane założenie, patrz CLAUDE.md
                         w_m   = round(swing_high_m - entry_mid_m * swing_range_m, 2)
                         sl_m  = round(swing_high_m - 0.618 * swing_range_m - atr * 0.3, 2)
                         tp1_m = round(swing_high_m - swing_range_m * 0.02, 2)
@@ -1625,6 +1698,13 @@ def algo_detect_setups(regime: dict, candles_m15: list[dict], candles_h1: list[d
                             f"dist=${current_price-w_m:.2f} below={below_price_m} dist_ok={dist_ok_m} rr_ok={rr_ok_m}"
                         )
                         _ctx_m = _setup_ctx(w_m, sl_m, fib_lvl=entry_mid_m, swing_h=swing_high_m, swing_l=swing_low_m)
+                        # Obserwacyjne — do sprawdzenia hipotezy "dynamika korekty + umiejscowienie
+                        # średnich" (patrz CLAUDE.md, otwarta hipoteza m15_confirmed). Nic z tego nie
+                        # wpływa na entry/SL/gating — czysto do analizy po fakcie.
+                        _ctx_m["impulse_leg_range"]   = round(swing_range_m, 2)
+                        _ctx_m["ma30_dist_to_entry"]  = round(ma30_pb - w_m, 2) if ma30_pb is not None else None
+                        _ctx_m["ma60_dist_to_entry"]  = round(ma60_pb - w_m, 2) if ma60_pb is not None else None
+                        _ctx_m["bounce_candle_count"] = dip_candles
                         if rr_ok_m and below_price_m and dist_ok_m:
                             log_lines.append(f"    ✓ ACCEPTED [m15_confirmed] (not_tradeable)")
                             setups.append({
