@@ -971,6 +971,53 @@ def legacy_dashboard():
       </tr>
     </table>
   </div>
+
+  <!-- Sweep symulatora portfela -->
+  <h4 style="color:#80deea;margin:20px 0 6px">Sweep symulatora portfela (różne daty startu + kombinacje wariantów)</h4>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+    <label style="color:#aaa;font-size:0.85em">Kapitał:</label>
+    <input id="vs-capital" type="number" value="1000" min="1"
+           style="width:70px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:3px 6px;font-family:monospace">
+    <label style="color:#aaa;font-size:0.85em">Model:</label>
+    <select id="vs-pnl-mode" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:3px 6px;font-family:monospace">
+      <option value="tp12">TP1+TP2</option>
+      <option value="tp1">TP1 only</option>
+    </select>
+    <label style="color:#aaa;font-size:0.85em">Top N do kombinacji:</label>
+    <input id="vs-top-n" type="number" value="8" min="1" max="20"
+           style="width:50px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:3px 6px;font-family:monospace">
+    <button class="btn-action" onclick="runVariantSweep()">▶ Uruchom sweep</button>
+    <span id="vs-status" style="color:#888;font-size:0.85em"></span>
+    <a id="vs-singles-csv-link" href="/api/variant-sweep/csv?which=singles" download="variant_sweep_singles.csv"
+       style="display:none;color:#80deea;font-size:0.85em">⬇ CSV warianty</a>
+    <a id="vs-combos-csv-link" href="/api/variant-sweep/csv?which=combos" download="variant_sweep_combos.csv"
+       style="display:none;color:#80deea;font-size:0.85em">⬇ CSV kombinacje</a>
+  </div>
+  <div id="vs-summary" style="display:none">
+    <p style="color:#888;font-size:0.8em;margin:4px 0">
+      Okno 30-dniowe przesuwane dzień po dniu od najwcześniejszej dostępnej daty do (dziś − 30 dni);
+      posortowane po najgorszym wyniku (worst%) — faworyzuje warianty stabilne niezależnie od punktu startu,
+      nie tylko najlepszy przypadek.
+    </p>
+    <h5 style="color:#ccc;margin:10px 0 4px">Warianty pojedyncze — sweep 30d</h5>
+    <div style="overflow-x:auto">
+      <table id="vs-singles-table" style="min-width:700px">
+        <tr><th>Wariant</th><th>N</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr>
+      </table>
+    </div>
+    <h5 style="color:#ccc;margin:14px 0 4px">Warianty pojedyncze — okno 90d (tylko z wystarczającą historią)</h5>
+    <div style="overflow-x:auto">
+      <table id="vs-90d-table" style="min-width:500px">
+        <tr><th>Wariant</th><th>Trades</th><th>Return%</th><th>MaxDD%</th></tr>
+      </table>
+    </div>
+    <h5 style="color:#ccc;margin:14px 0 4px">Top kombinacje (1-4 warianty) — sweep 30d</h5>
+    <div style="overflow-x:auto">
+      <table id="vs-combos-table" style="min-width:820px">
+        <tr><th>Kombinacja</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr>
+      </table>
+    </div>
+  </div>
 </div>
 
 <h3>Per model</h3>
@@ -1880,6 +1927,141 @@ fetch('/api/backtest-variants/status')
       document.getElementById('bt-status').textContent = '⏳ Trwa...';
       if (_btPollTimer) clearInterval(_btPollTimer);
       _btPollTimer = setInterval(pollBacktestStatus, 5000);
+    }}
+  }}).catch(function(){{}});
+
+var _vsPollTimer = null;
+
+function runVariantSweep() {{
+  var capital = parseFloat(document.getElementById('vs-capital').value) || 1000;
+  var pnlMode = document.getElementById('vs-pnl-mode').value;
+  var topN = parseInt(document.getElementById('vs-top-n').value) || 8;
+  var statusEl = document.getElementById('vs-status');
+  var summaryEl = document.getElementById('vs-summary');
+  statusEl.textContent = 'Uruchamianie...';
+  document.getElementById('vs-singles-csv-link').style.display = 'none';
+  document.getElementById('vs-combos-csv-link').style.display = 'none';
+  summaryEl.style.display = 'none';
+
+  var qs = 'capital=' + capital + '&pnl_mode=' + pnlMode + '&top_n=' + topN;
+  fetch('/admin/run-variant-sweep?' + qs, {{method: 'POST'}})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (!data.ok) {{ statusEl.textContent = '⚠️ ' + data.message; return; }}
+      statusEl.textContent = '⏳ Liczenie sweepu (może potrwać dłuższą chwilę)...';
+      if (_vsPollTimer) clearInterval(_vsPollTimer);
+      _vsPollTimer = setInterval(pollVariantSweepStatus, 5000);
+    }})
+    .catch(function(e) {{ statusEl.textContent = '⚠️ ' + e.message; }});
+}}
+
+function pollVariantSweepStatus() {{
+  fetch('/api/variant-sweep/status')
+    .then(function(r) {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
+    .then(function(s) {{
+      var statusEl = document.getElementById('vs-status');
+      if (s.running) {{
+        statusEl.textContent = '⏳ Trwa... (started: ' + (s.started_at || '').substring(11,16) + ' UTC)';
+      }} else if (s.done) {{
+        clearInterval(_vsPollTimer);
+        statusEl.textContent = '✅ Gotowe!';
+        document.getElementById('vs-singles-csv-link').style.display = 'inline';
+        document.getElementById('vs-combos-csv-link').style.display = 'inline';
+        loadVariantSweepSummary();
+      }} else if (s.error) {{
+        clearInterval(_vsPollTimer);
+        statusEl.textContent = '❌ Błąd: ' + s.error;
+      }}
+    }})
+    .catch(function(e) {{ document.getElementById('vs-status').textContent = '⚠️ Błąd połączenia: ' + e.message; }});
+}}
+
+function loadVariantSweepSummary() {{
+  fetch('/api/variant-sweep/result')
+    .then(function(r) {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
+    .then(function(data) {{
+      if (data.error) {{ document.getElementById('vs-status').textContent = '⚠️ ' + data.error; return; }}
+      var pctColor = function(v) {{ return v > 0 ? '#81c995' : v < 0 ? '#f28b82' : '#e0e0e0'; }};
+
+      var singlesTbl = document.getElementById('vs-singles-table');
+      while (singlesTbl.rows.length > 1) singlesTbl.deleteRow(1);
+      (data.singles_ranked || []).forEach(function(s) {{
+        var w = s.w30;
+        var tr = singlesTbl.insertRow();
+        [s.label, s.n_trades, w.n_windows,
+         (w.worst_pct >= 0 ? '+' : '') + w.worst_pct + '%',
+         (w.avg_pct   >= 0 ? '+' : '') + w.avg_pct   + '%',
+         (w.best_pct  >= 0 ? '+' : '') + w.best_pct  + '%',
+        ].forEach(function(val, i) {{
+          var td = tr.insertCell(); td.textContent = val;
+          if (i === 3) td.style.color = pctColor(w.worst_pct);
+          if (i === 4) td.style.color = pctColor(w.avg_pct);
+          if (i === 5) td.style.color = pctColor(w.best_pct);
+        }});
+      }});
+      (data.not_eligible || []).forEach(function(s) {{
+        var tr = singlesTbl.insertRow();
+        var td = tr.insertCell();
+        td.colSpan = 6;
+        td.style.color = '#888';
+        td.textContent = s.label + ' — pominięty (' + (s.w30 ? s.w30.reason : 'brak danych') + ')';
+      }});
+
+      var d90Tbl = document.getElementById('vs-90d-table');
+      while (d90Tbl.rows.length > 1) d90Tbl.deleteRow(1);
+      var any90 = false;
+      (data.singles_ranked || []).concat(data.not_eligible || []).forEach(function(s) {{
+        if (!s.w90 || !s.w90.eligible) return;
+        any90 = true;
+        var tr = d90Tbl.insertRow();
+        [s.label, s.w90.trades,
+         (s.w90.return_pct >= 0 ? '+' : '') + s.w90.return_pct + '%',
+         s.w90.max_drawdown_pct + '%',
+        ].forEach(function(val, i) {{
+          var td = tr.insertCell(); td.textContent = val;
+          if (i === 2) td.style.color = pctColor(s.w90.return_pct);
+        }});
+      }});
+      if (!any90) {{
+        var tr = d90Tbl.insertRow();
+        var td = tr.insertCell(); td.colSpan = 4; td.style.color = '#888';
+        td.textContent = 'Żaden wariant nie ma jeszcze 90 dni historii.';
+      }}
+
+      var combosTbl = document.getElementById('vs-combos-table');
+      while (combosTbl.rows.length > 1) combosTbl.deleteRow(1);
+      (data.combos || []).slice(0, 20).forEach(function(c) {{
+        var w = c.w30;
+        var tr = combosTbl.insertRow();
+        [c.label, w.n_windows,
+         (w.worst_pct >= 0 ? '+' : '') + w.worst_pct + '%',
+         (w.avg_pct   >= 0 ? '+' : '') + w.avg_pct   + '%',
+         (w.best_pct  >= 0 ? '+' : '') + w.best_pct  + '%',
+        ].forEach(function(val, i) {{
+          var td = tr.insertCell(); td.textContent = val;
+          if (i === 2) td.style.color = pctColor(w.worst_pct);
+          if (i === 3) td.style.color = pctColor(w.avg_pct);
+          if (i === 4) td.style.color = pctColor(w.best_pct);
+        }});
+      }});
+
+      document.getElementById('vs-summary').style.display = 'block';
+    }})
+    .catch(function(e) {{ document.getElementById('vs-status').textContent = '⚠️ Błąd ładowania wyników: ' + e.message; }});
+}}
+
+fetch('/api/variant-sweep/status')
+  .then(function(r) {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
+  .then(function(s) {{
+    if (s.done) {{
+      document.getElementById('vs-status').textContent = '✅ Ostatni sweep gotowy';
+      document.getElementById('vs-singles-csv-link').style.display = 'inline';
+      document.getElementById('vs-combos-csv-link').style.display = 'inline';
+      loadVariantSweepSummary();
+    }} else if (s.running) {{
+      document.getElementById('vs-status').textContent = '⏳ Trwa...';
+      if (_vsPollTimer) clearInterval(_vsPollTimer);
+      _vsPollTimer = setInterval(pollVariantSweepStatus, 5000);
     }}
   }}).catch(function(){{}});
 
@@ -3777,6 +3959,84 @@ def api_backtest_variants_csv():
         media_type="text/csv",
         filename="backtest_variants_result.csv",
     )
+
+
+_variant_sweep_status: dict = {"running": False, "done": False, "error": None, "started_at": None}
+_variant_sweep_result: dict | None = None
+_VARIANT_SWEEP_SINGLES_CSV = "/tmp/variant_sweep_singles.csv"
+_VARIANT_SWEEP_COMBOS_CSV = "/tmp/variant_sweep_combos.csv"
+
+
+@app.post("/admin/run-variant-sweep")
+def admin_run_variant_sweep(
+    capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
+    step_days: int = 1, min_regime_score: int | None = None,
+):
+    """Uruchamia w tle sweep Symulatora portfela (variant_sweep.py): przesuwa okno 30-dniowe
+    po wszystkich możliwych datach startu (+ jedno okno 90-dniowe dla wariantów z dość
+    historii) dla każdego wariantu, i testuje kombinacje 1-4 najlepszych wariantów.
+
+    Wyniki: GET /api/variant-sweep/status, /api/variant-sweep/result,
+    /api/variant-sweep/csv?which=singles|combos
+    """
+    global _variant_sweep_status
+    if _variant_sweep_status["running"]:
+        return {"ok": False, "message": "Sweep już działa — poczekaj na zakończenie."}
+
+    import threading
+    import variant_sweep
+
+    def _run():
+        global _variant_sweep_status, _variant_sweep_result
+        _variant_sweep_status = {
+            "running": True, "done": False, "error": None,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            result = variant_sweep.run_sweep(
+                capital=capital, pnl_mode=pnl_mode, top_n=top_n,
+                step_days=step_days, min_regime_score=min_regime_score,
+            )
+            variant_sweep._write_singles_csv(result["singles"], _VARIANT_SWEEP_SINGLES_CSV)
+            variant_sweep._write_combos_csv(result["combos"], _VARIANT_SWEEP_COMBOS_CSV)
+            _variant_sweep_result = result
+            _variant_sweep_status.update({"running": False, "done": True})
+        except Exception as e:
+            logging.error(f"[variant-sweep] Błąd: {e}", exc_info=True)
+            _variant_sweep_status.update({"running": False, "done": False, "error": str(e)})
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "message": "Sweep wariantów uruchomiony w tle. Sprawdź status: GET /api/variant-sweep/status"}
+
+
+@app.get("/api/variant-sweep/status")
+def api_variant_sweep_status():
+    return _variant_sweep_status
+
+
+@app.get("/api/variant-sweep/result")
+def api_variant_sweep_result():
+    """Wyniki sweepu jako JSON: warianty pojedyncze (posortowane po worst_pct) + kombinacje."""
+    if _variant_sweep_result is None:
+        return {"error": "Brak wyników — uruchom najpierw POST /admin/run-variant-sweep"}
+    r = _variant_sweep_result
+    return {
+        "today": r["today"], "capital": r["capital"], "pnl_mode": r["pnl_mode"],
+        "singles_ranked": r["singles_ranked"],
+        "not_eligible": [s for s in r["singles"] if not (s["w30"] and s["w30"]["eligible"])],
+        "combos": r["combos"],
+    }
+
+
+@app.get("/api/variant-sweep/csv")
+def api_variant_sweep_csv(which: str = "singles"):
+    """Pobierz CSV z wynikami sweepu. which=singles|combos"""
+    import os
+    from fastapi.responses import FileResponse
+    path = _VARIANT_SWEEP_SINGLES_CSV if which == "singles" else _VARIANT_SWEEP_COMBOS_CSV
+    if not os.path.exists(path):
+        return {"error": "Brak wyników — uruchom najpierw POST /admin/run-variant-sweep"}
+    return FileResponse(path, media_type="text/csv", filename=os.path.basename(path))
 
 
 @app.post("/admin/run-gpt5-backtest")
