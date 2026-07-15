@@ -177,8 +177,12 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
     for pair, trades in sorted(by_pair.items()):
         w30 = sweep_window(trades, WINDOW_30D, step_days, today, capital, pnl_mode)
         w90 = run_90d(trades, today, capital, pnl_mode)
+        first_trade_date = min(t["entry_time"] for t in trades).date()
+        last_trade_date = max(t["entry_time"] for t in trades).date()
         singles.append({
             "pair": pair, "label": pair_label(pair), "n_trades": len(trades),
+            "first_trade_date": first_trade_date, "last_trade_date": last_trade_date,
+            "history_days": (today.date() - first_trade_date).days,
             "w30": w30, "w90": w90,
         })
 
@@ -190,10 +194,7 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
     eligible.sort(key=lambda s: s["w30"]["worst_pct"], reverse=True)
 
     # data startu każdego wariantu — potrzebna do wyznaczenia daty startu kombinacji (MAX)
-    first_date_by_pair = {
-        s["pair"]: min(t["entry_time"] for t in by_pair[s["pair"]]).date()
-        for s in eligible
-    }
+    first_date_by_pair = {s["pair"]: s["first_trade_date"] for s in singles}
 
     top_pairs = [s["pair"] for s in eligible[:top_n]]
     combos = []
@@ -218,6 +219,20 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
 
 
 # ── Wyjście: CSV + podsumowanie w konsoli ────────────────────────────────────
+
+def _print_history(singles: list[dict]) -> None:
+    """Ile historii ma KAŻDY wariant/typ setupu (nie tylko trend_pullback) — odpowiedź
+    na 'ile historii mają range/impulse/itp.', niezależnie od tego czy się kwalifikują
+    do sweepu 30d/90d."""
+    print("\n" + "=" * 100)
+    print("Historia danych per typ+wariant (wszystkie typy setupów, nie tylko trend_pullback):")
+    print(f"{'Wariant':<45} {'N':>5} {'Od':>12} {'Do':>12} {'Dni historii':>13}")
+    print("-" * 100)
+    for s in sorted(singles, key=lambda s: -s["history_days"]):
+        print(f"{s['label']:<45} {s['n_trades']:>5} {str(s['first_trade_date']):>12} "
+              f"{str(s['last_trade_date']):>12} {s['history_days']:>13}")
+    print("=" * 100)
+
 
 def _print_singles(ranked: list[dict]) -> None:
     print("\n" + "=" * 100)
@@ -273,6 +288,8 @@ def _write_singles_csv(singles: list[dict], path: str) -> None:
         w30, w90 = s["w30"] or {}, s["w90"] or {}
         rows.append({
             "type": s["pair"][0], "variant": s["pair"][1], "n_trades": s["n_trades"],
+            "first_trade_date": s["first_trade_date"], "last_trade_date": s["last_trade_date"],
+            "history_days": s["history_days"],
             "w30_eligible": w30.get("eligible", False),
             "w30_n_windows": w30.get("n_windows"),
             "w30_worst_pct": w30.get("worst_pct"), "w30_worst_start": w30.get("worst_start"),
@@ -314,6 +331,7 @@ def main():
     result = run_sweep(capital=args.capital, pnl_mode=args.pnl_mode, top_n=args.top_n,
                         step_days=args.step_days, min_regime_score=args.min_regime_score)
 
+    _print_history(result["singles"])
     _print_singles(result["singles_ranked"])
     _print_not_eligible(result["singles"])
     _print_90d(result["singles"])
