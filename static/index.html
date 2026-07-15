@@ -756,7 +756,7 @@ function ViewSetups() {
   const [expandedRows,setExpandedRows]=useState(new Set());
   const [tradeUsdt,setTradeUsdt]=useState(100);
   const [currentPrice,setCurrentPrice]=useState(null);
-  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'},{v:'odrzucone',l:'Odrzucone (algo)'}];
   const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'bitget',l:'Bitget'},{v:'shadow',l:'Shadow'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   // Załaduj enabled types z ustawień przy montowaniu
@@ -1022,6 +1022,7 @@ function ViewSetups() {
                   <div style={{display:'flex',gap:16,fontSize:10,color:'var(--text2)',fontFamily:'var(--mono)',flexWrap:'wrap',alignItems:'center'}}>
                     <span style={{color:'var(--text3)'}}>#{r.id}</span>
                     <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened}/>
+                    {r.rejection&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--red-dim)',color:'var(--red)',border:'1px solid #ff4d6a33'}} title="Odrzucony algorytmicznie — śledzony dalej tylko jako dane obserwacyjne/ML">ODRZUCONY: {r.rejection}</span>}
                     <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{r.t_def||'—'}</span>
                     <span><span style={{color:'var(--text3)'}}>Wejście:&nbsp;</span>{fmtTs(r.t_entry)}</span>
                     <span><span style={{color:'var(--text3)'}}>Wyjście:&nbsp;</span>{r.t_exit||'—'}</span>
@@ -1795,7 +1796,194 @@ function ViewSimulator() {
           Brak zamkniętych pozycji w wybranym okresie i wariantach.
         </div>
       }
+
+      <VariantSweepPanel/>
     </>
+  );
+}
+
+/* ── Sweep dat startu + kombinacje wariantów ── */
+function VariantSweepPanel() {
+  const [capital,setCapital]=useState(1000);
+  const [pnlMode,setPnlMode]=useState('tp12');
+  const [topN,setTopN]=useState(8);
+  const [status,setStatus]=useState(null);
+  const [running,setRunning]=useState(false);
+  const [result,setResult]=useState(null);
+  const pollRef=React.useRef(null);
+
+  const loadResult=React.useCallback(()=>{
+    fetch('/api/variant-sweep/result').then(r=>r.ok?r.json():null).then(d=>{
+      if(d&&!d.error) setResult(d);
+    }).catch(()=>{});
+  },[]);
+
+  const checkStatus=React.useCallback(()=>{
+    fetch('/api/variant-sweep/status').then(r=>r.ok?r.json():null).then(s=>{
+      if(!s) return;
+      setStatus(s);
+      if(s.done){
+        if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+        setRunning(false);
+        loadResult();
+      } else if(s.error){
+        if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+        setRunning(false);
+      } else if(s.running){
+        setRunning(true);
+      }
+    }).catch(()=>{});
+  },[loadResult]);
+
+  useEffect(()=>{
+    checkStatus();
+    return ()=>{if(pollRef.current) clearInterval(pollRef.current);};
+  },[]);
+
+  const runSweep=()=>{
+    setRunning(true);
+    const p=new URLSearchParams({capital:String(capital),pnl_mode:pnlMode,top_n:String(topN)});
+    fetch('/admin/run-variant-sweep?'+p.toString(),{method:'POST'})
+      .then(r=>r.json())
+      .then(d=>{
+        if(!d.ok){setRunning(false);setStatus({error:d.message});return;}
+        if(pollRef.current) clearInterval(pollRef.current);
+        pollRef.current=setInterval(checkStatus,5000);
+      })
+      .catch(e=>{setRunning(false);setStatus({error:e.message});});
+  };
+
+  const pctColor=(v)=>v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  const fmtPct=(v)=>`${v>=0?'+':''}${v}%`;
+  const allSingles=result?[...result.singles_ranked,...result.not_eligible]:[];
+  const any90=allSingles.some(s=>s.w90&&s.w90.eligible);
+
+  return (
+    <div className="panel" style={{flexShrink:0,marginTop:4}}>
+      <div className="panel-head">
+        <span className="panel-title">Sweep dat startu + kombinacje wariantów</span>
+        <span className="panel-badge">wszystkie możliwe daty startu, okno 30d + 90d</span>
+      </div>
+      <div style={{padding:'12px 16px',display:'flex',flexDirection:'column',gap:10}}>
+        <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
+          Przesuwa okno 30-dniowe dzień po dniu od najwcześniejszej dostępnej daty do (dziś−30d) dla każdego
+          wariantu (+ jedno okno 90-dniowe dla wariantów z dość historii), i zbiera best/avg/worst zwrotu na
+          koniec okna. Ranking po najgorszym wyniku (worst%) — faworyzuje warianty stabilne niezależnie od
+          punktu startu, nie tylko najlepszy przypadek. Testuje też wszystkie kombinacje 1-4 wariantów wśród
+          top N. Może potrwać dłuższą chwilę.
+        </p>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Kapitał:</span>
+          <input type="number" value={capital} onChange={e=>setCapital(Math.max(1,Number(e.target.value)||1))}
+            style={{width:80,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+          <div className="seg-tabs">
+            <div className={`seg-tab ${pnlMode==='tp12'?'active':''}`} onClick={()=>setPnlMode('tp12')}>TP1+TP2</div>
+            <div className={`seg-tab ${pnlMode==='tp1'?'active':''}`} onClick={()=>setPnlMode('tp1')}>TP1 only</div>
+          </div>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Top N (kombinacje):</span>
+          <input type="number" min={1} max={20} value={topN} onChange={e=>setTopN(Math.min(20,Math.max(1,Number(e.target.value)||1)))}
+            style={{width:50,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+          <button className="filter-chip active" disabled={running} style={{opacity:running?0.5:1,cursor:running?'default':'pointer'}} onClick={runSweep}>
+            {running?'⏳ Liczenie…':'▶ Uruchom sweep'}
+          </button>
+          {status&&status.error&&<span style={{color:'var(--red)',fontSize:11}}>⚠️ {status.error}</span>}
+          {running&&status&&status.started_at&&<span style={{color:'var(--text3)',fontSize:10,fontFamily:'var(--mono)'}}>started {String(status.started_at).slice(11,16)} UTC</span>}
+        </div>
+      </div>
+
+      {result&&<div style={{padding:'0 16px 14px',display:'flex',flexDirection:'column',gap:16}}>
+        <div>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Historia danych per wariant (wszystkie typy — range, impulse, trend_pullback, breakout...)</h5>
+          <div style={{overflowX:'auto'}}>
+            <table className="tbl">
+              <thead><tr><th>Wariant</th><th>N</th><th>Od</th><th>Do</th><th>Dni historii</th></tr></thead>
+              <tbody>
+                {[...allSingles].sort((a,b)=>(b.history_days||0)-(a.history_days||0)).map(s=>
+                  <tr key={s.label}>
+                    <td style={{fontSize:11}}>{s.label}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{s.n_trades}</td>
+                    <td style={{fontFamily:'var(--mono)',fontSize:11}}>{s.first_trade_date}</td>
+                    <td style={{fontFamily:'var(--mono)',fontSize:11}}>{s.last_trade_date}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{s.history_days}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Warianty — sweep 30d (posortowane po worst%)</h5>
+          <div style={{overflowX:'auto'}}>
+            <table className="tbl">
+              <thead><tr><th>Wariant</th><th>N</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr></thead>
+              <tbody>
+                {result.singles_ranked.map(s=>
+                  <tr key={s.label}>
+                    <td style={{fontSize:11}}>{s.label}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{s.n_trades}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{s.w30.n_windows}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.w30.worst_pct)}}>{fmtPct(s.w30.worst_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.w30.avg_pct)}}>{fmtPct(s.w30.avg_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.w30.best_pct)}}>{fmtPct(s.w30.best_pct)}</td>
+                  </tr>
+                )}
+                {result.not_eligible.map(s=>
+                  <tr key={s.label} style={{opacity:0.5}}>
+                    <td colSpan={6} style={{fontSize:11}}>{s.label} — pominięty ({s.w30?s.w30.reason:'brak danych'})</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Okno 90d (tylko z wystarczającą historią)</h5>
+          <div style={{overflowX:'auto'}}>
+            <table className="tbl">
+              <thead><tr><th>Wariant</th><th>Trades</th><th>Return%</th><th>MaxDD%</th></tr></thead>
+              <tbody>
+                {any90?allSingles.filter(s=>s.w90&&s.w90.eligible).map(s=>
+                  <tr key={s.label}>
+                    <td style={{fontSize:11}}>{s.label}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{s.w90.trades}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.w90.return_pct)}}>{fmtPct(s.w90.return_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{s.w90.max_drawdown_pct}%</td>
+                  </tr>
+                ):<tr><td colSpan={4} style={{color:'var(--text3)',fontSize:11}}>Żaden wariant nie ma jeszcze 90 dni historii.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Top kombinacje (1-4 warianty)</h5>
+          <div style={{overflowX:'auto'}}>
+            <table className="tbl">
+              <thead><tr><th>Kombinacja</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr></thead>
+              <tbody>
+                {result.combos.slice(0,20).map((c,i)=>
+                  <tr key={i}>
+                    <td style={{fontSize:11}}>{c.label}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{c.w30.n_windows}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.w30.worst_pct)}}>{fmtPct(c.w30.worst_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.w30.avg_pct)}}>{fmtPct(c.w30.avg_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.w30.best_pct)}}>{fmtPct(c.w30.best_pct)}</td>
+                  </tr>
+                )}
+                {result.combos.length===0&&<tr><td colSpan={5} style={{color:'var(--text3)',fontSize:11}}>Brak kwalifikujących się kombinacji.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style={{display:'flex',gap:14}}>
+          <a href="/api/variant-sweep/csv?which=singles" download="variant_sweep_singles.csv" style={{color:'var(--blue)',fontSize:11}}>⬇ CSV warianty</a>
+          <a href="/api/variant-sweep/csv?which=combos" download="variant_sweep_combos.csv" style={{color:'var(--blue)',fontSize:11}}>⬇ CSV kombinacje</a>
+        </div>
+      </div>}
+    </div>
   );
 }
 
@@ -2454,7 +2642,7 @@ function TabSetups() {
   const [showTypeFilter,setShowTypeFilter]=useState(false);
   const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
   const [dateTo,setDateTo]=useState('');
-  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'}];
+  const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'},{v:'odrzucone',l:'Odrzucone (algo)'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   useEffect(()=>{
     fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
@@ -2587,6 +2775,7 @@ function TabSetups() {
             </div>
           </div>
           <div className="hist-typ" style={{marginBottom:4}}>{r.typ} · <span style={{color:'var(--text3)'}}>{r.variant}</span>{r.regime&&<span style={{marginLeft:6,fontFamily:'var(--mono)',fontSize:9,color:r.regime.includes('UP')?'var(--green)':r.regime.includes('DOWN')?'var(--red)':'var(--text3)'}}>{r.regime.replace('_',' ')}{r.regime_score!=null?`(${r.regime_score})`:''}</span>}</div>
+          {r.rejection&&<div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--red)',marginBottom:4}}>ODRZUCONY: {r.rejection}</div>}
           <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--text2)',marginBottom:4,display:'flex',flexWrap:'wrap',gap:'4px 10px'}}>
             <span>W1: <span style={{color:'var(--text1)'}}>{r.entries&&r.entries[0]!=null?`$${Number(r.entries[0]).toFixed(2)}`:'—'}</span></span>
             <span>TP1: <span style={{color:'var(--green)'}}>{r.tps&&r.tps[0]!=null?`$${Number(r.tps[0]).toFixed(2)}`:'—'}</span></span>

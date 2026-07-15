@@ -999,7 +999,13 @@ def legacy_dashboard():
       posortowane po najgorszym wyniku (worst%) — faworyzuje warianty stabilne niezależnie od punktu startu,
       nie tylko najlepszy przypadek.
     </p>
-    <h5 style="color:#ccc;margin:10px 0 4px">Warianty pojedyncze — sweep 30d</h5>
+    <h5 style="color:#ccc;margin:10px 0 4px">Historia danych per wariant (wszystkie typy setupów — range, impulse, trend_pullback, breakout...)</h5>
+    <div style="overflow-x:auto">
+      <table id="vs-history-table" style="min-width:600px">
+        <tr><th>Wariant</th><th>N (trades)</th><th>Od</th><th>Do</th><th>Dni historii</th></tr>
+      </table>
+    </div>
+    <h5 style="color:#ccc;margin:14px 0 4px">Warianty pojedyncze — sweep 30d</h5>
     <div style="overflow-x:auto">
       <table id="vs-singles-table" style="min-width:700px">
         <tr><th>Wariant</th><th>N</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr>
@@ -1982,6 +1988,16 @@ function loadVariantSweepSummary() {{
     .then(function(data) {{
       if (data.error) {{ document.getElementById('vs-status').textContent = '⚠️ ' + data.error; return; }}
       var pctColor = function(v) {{ return v > 0 ? '#81c995' : v < 0 ? '#f28b82' : '#e0e0e0'; }};
+
+      var historyTbl = document.getElementById('vs-history-table');
+      while (historyTbl.rows.length > 1) historyTbl.deleteRow(1);
+      var allSingles = (data.singles_ranked || []).concat(data.not_eligible || []);
+      allSingles.sort(function(a, b) {{ return (b.history_days||0) - (a.history_days||0); }});
+      allSingles.forEach(function(s) {{
+        var tr = historyTbl.insertRow();
+        [s.label, s.n_trades, s.first_trade_date, s.last_trade_date, s.history_days]
+          .forEach(function(val) {{ tr.insertCell().textContent = val; }});
+      }});
 
       var singlesTbl = document.getElementById('vs-singles-table');
       while (singlesTbl.rows.length > 1) singlesTbl.deleteRow(1);
@@ -4297,6 +4313,7 @@ def api_all_setups(
             "t_exit":                   _dt(s.get("exit_time"), 16),
             "status_key":               status_key,
             "status":                   status_label,
+            "rejection":                s.get("rejection") or None,
             "resolved":                 s.get("resolved", False),
             "result":                   _map_result_display(s) if s.get("resolved") else None,
             "pnl_tp1":                  _f(s.get("tp1_only_pnl")),

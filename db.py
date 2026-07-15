@@ -1793,13 +1793,16 @@ def get_all_setups_filtered(
     offset: int = 0,
 ) -> dict:
     """Zwraca wszystkie setupy (aktywne i zamknięte) z filtrami.
-    Obsługiwane statusy: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo."""
+    Obsługiwane statusy: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo, odrzucone.
+    'odrzucone' to setupy odrzucone algorytmicznie (rejection niepuste, patrz
+    algo_detect_setups()/rejected_by_algo w sol_alert.py) — niezależnie od tego, czy
+    hipotetycznie i tak weszły/rozstrzygnęły się (śledzone dalej jako dane ML)."""
     where: list[str] = []
     params: dict = {}
 
     if statuses:
         status_conds: list[str] = []
-        normal = [s for s in statuses if s not in ("zamkniete", "anulowane", "nie_weszlo")]
+        normal = [s for s in statuses if s not in ("zamkniete", "anulowane", "nie_weszlo", "odrzucone")]
         if normal:
             status_conds.append("status = ANY(%(statuses_normal)s)")
             params["statuses_normal"] = normal
@@ -1817,6 +1820,8 @@ def get_all_setups_filtered(
                 "(status = 'closed' AND entry_hit_at IS NULL AND cancel_reason IS NULL"
                 " AND (result IS NULL OR result NOT IN ('anulowany')))"
             )
+        if "odrzucone" in statuses:
+            status_conds.append("COALESCE(rejection, '') <> ''")
         if status_conds:
             where.append(f"({' OR '.join(status_conds)})")
 
@@ -1907,7 +1912,7 @@ def get_all_setups_filtered(
                 f"""
                 SELECT setup_id, alert_time, entry_hit_at, exit_time, model,
                        direction, type, variant, score, rr, status, resolved,
-                       result, avg_entry, avg_exit,
+                       result, avg_entry, avg_exit, rejection,
                        ROUND(({pnl_calc_f})::numeric, 2)          AS pnl_usd,
                        ROUND(({pnl_pct_calc_f})::numeric, 2)      AS pnl_pct,
                        cancel_reason, shadow, tradeable,
