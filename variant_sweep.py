@@ -17,8 +17,7 @@ Co robi:
      zwrotu % na koniec okna.
   2. To samo, ale jedno stałe okno 90-dniowe (dziś − 90 dni → dziś) — tylko dla
      wariantów mających co najmniej 90 dni historii (na razie mało która to spełnia).
-  3. Ranking wariantów po (2) i (1) — best/avg/worst, posortowany po najgorszym wyniku
-     (żeby faworyzować warianty stabilne, a nie tylko "raz się udało").
+  3. Ranking wariantów po (2) i (1) — best/avg/worst, posortowany po średnim wyniku (avg).
   4. Dla top N wariantów: wszystkie kombinacje rozmiaru 1-4 (wspólny kapitał, limit
      jednej pozycji na raz — tak jak wybór kilku wariantów jednocześnie w Symulatorze),
      ten sam sweep 30-dniowy, ranking kombinacji.
@@ -210,11 +209,9 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
         })
 
     # Ranking: tylko warianty z wystarczającą historią na sweep 30d, posortowane
-    # po najgorszym wyniku (worst_pct) malejąco — patrz CLAUDE.md/prośba: "każda
-    # z wartości (best/avg/worst) możliwie wysoka", więc faworyzujemy odporność
-    # na zły punkt startu zamiast tylko najlepszego przypadku.
+    # po średnim wyniku (avg_pct) malejąco.
     eligible = [s for s in singles if s["w30"] and s["w30"]["eligible"]]
-    eligible.sort(key=lambda s: s["w30"]["worst_pct"], reverse=True)
+    eligible.sort(key=lambda s: s["w30"]["avg_pct"], reverse=True)
 
     # data startu każdego wariantu — potrzebna do wyznaczenia daty startu kombinacji (MAX)
     first_date_by_pair = {s["pair"]: s["first_trade_date"] for s in singles}
@@ -233,7 +230,7 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
                 "combo": combo, "label": " + ".join(pair_label(p) for p in combo),
                 "size": r, "n_trades": len(trades), "w30": w30,
             })
-    combos.sort(key=lambda c: c["w30"]["worst_pct"], reverse=True)
+    combos.sort(key=lambda c: c["w30"]["avg_pct"], reverse=True)
 
     return {
         "today": today.isoformat(), "capital": capital, "pnl_mode": pnl_mode,
