@@ -1431,12 +1431,16 @@ function ViewSimulator() {
     fetch('/api/simulator?'+p.toString())
       .then(r=>r.ok?r.json():[])
       .then(data=>{
-        const selectedTypes=new Set(selectedPairs.map(x=>x.split(':')[0]));
-        const selectedVars=new Set(selectedPairs.map(x=>x.split(':')[1]||'baseline'));
+        // Uwaga: dopasowanie musi być po DOKŁADNEJ parze type:variant, nie po przecięciu
+        // zbiorów typów i wariantów osobno — inaczej np. przy wybraniu tylko
+        // "pullback_long:baseline" + "pullback_short:atr_based" wciekałby też
+        // "pullback_long:atr_based" (long jest w wybranych typach, atr_based w
+        // wybranych wariantach, ale ta konkretna para nigdy nie została zaznaczona).
+        const pairSet=new Set(selectedPairs);
         const filtered=data.filter(t=>{
           const tp=t.type||'';
           const vr=t.variant||'baseline';
-          return selectedTypes.has(tp)&&selectedVars.has(vr);
+          return pairSet.has(`${tp}:${vr}`);
         });
         setTrades(filtered);
       })
