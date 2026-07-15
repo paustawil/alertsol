@@ -88,13 +88,28 @@ def simulate_equity(trades: list[dict], start_capital: float, pnl_mode: str) -> 
 
 # ── Ładowanie i grupowanie danych ─────────────────────────────────────────────
 
+def _to_naive_utc(dt: datetime | None) -> datetime | None:
+    """db.get_simulator_trades() zwraca entry_time jako naiwny timestamp (Postgres
+    "AT TIME ZONE 'UTC'" na timestamptz daje timestamp bez strefy), ale exit_time bywa
+    timezone-aware — COALESCE(exit_time, <wyrażenie AT TIME ZONE>) w tamtym zapytaniu
+    ujednolica typ do timestamptz, gdy sama kolumna exit_time jest timestamptz. Mieszanie
+    naiwnych i aware datetime w porównaniach rzuca TypeError, więc normalizujemy tu."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def load_trades_by_pair(min_regime_score: int | None = None) -> dict[tuple[str, str], list[dict]]:
     """Jedno zapytanie do bazy, potem grupowanie w Pythonie — szybsze i prostsze niż
     osobne zapytanie na każde okno/kombinację."""
     all_trades = db.get_simulator_trades(min_regime_score=min_regime_score)
     by_pair: dict[tuple[str, str], list[dict]] = {}
     for t in all_trades:
-        if t.get("entry_time") is None or t.get("exit_time") is None:
+        t["entry_time"] = _to_naive_utc(t.get("entry_time"))
+        t["exit_time"] = _to_naive_utc(t.get("exit_time"))
+        if t["entry_time"] is None or t["exit_time"] is None:
             continue
         key = (t.get("type") or "unknown", t.get("variant") or "baseline")
         by_pair.setdefault(key, []).append(t)
