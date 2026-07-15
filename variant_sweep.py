@@ -103,8 +103,16 @@ def _to_naive_utc(dt: datetime | None) -> datetime | None:
 
 def load_trades_by_pair(min_regime_score: int | None = None) -> dict[tuple[str, str], list[dict]]:
     """Jedno zapytanie do bazy, potem grupowanie w Pythonie — szybsze i prostsze niż
-    osobne zapytanie na każde okno/kombinację."""
-    all_trades = db.get_simulator_trades(min_regime_score=min_regime_score)
+    osobne zapytanie na każde okno/kombinację.
+
+    model='Algo2' — inne modele (Grok, Gemini2, GPT backtesty, ręczne alerty) nie mają
+    krótkich kluczy wariantów jak Algo2 (baseline/shallow/m15_confirmed/...); ich type/
+    variant bywają wolnym tekstem opisu setupu ("Czekam na pullback do X i wchodzę long"),
+    co bez tego filtra zalewa ranking dziesiątkami fałszywych "wariantów" — jeden na
+    każdy unikalny opis. Główny panel Symulatora portfela unika tego pośrednio (jego
+    filtr Typ/Wariant jest zasilany z drzewa Algo2), ale ten sweep grupuje surowe pary
+    (type,variant) wprost, więc potrzebuje tego filtra jawnie."""
+    all_trades = db.get_simulator_trades(min_regime_score=min_regime_score, model="Algo2")
     by_pair: dict[tuple[str, str], list[dict]] = {}
     for t in all_trades:
         t["entry_time"] = _to_naive_utc(t.get("entry_time"))
