@@ -1868,9 +1868,8 @@ function VariantSweepPanel() {
         <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
           Przesuwa okno 30-dniowe dzień po dniu od najwcześniejszej dostępnej daty do (dziś−30d) dla każdego
           wariantu (+ jedno okno 90-dniowe dla wariantów z dość historii), i zbiera best/avg/worst zwrotu na
-          koniec okna. Ranking po najgorszym wyniku (worst%) — faworyzuje warianty stabilne niezależnie od
-          punktu startu, nie tylko najlepszy przypadek. Testuje też wszystkie kombinacje 1-4 wariantów wśród
-          top N. Może potrwać dłuższą chwilę.
+          koniec okna. Ranking po średnim wyniku (avg%) ze wszystkich przesunięć okna startu. Testuje też
+          wszystkie kombinacje 1-4 wariantów wśród top N. Może potrwać dłuższą chwilę.
         </p>
         <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
           <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Kapitał:</span>
@@ -1913,7 +1912,7 @@ function VariantSweepPanel() {
         </div>
 
         <div>
-          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Warianty — sweep 30d (posortowane po worst%)</h5>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Warianty — sweep 30d (posortowane po avg%)</h5>
           <div style={{overflowX:'auto'}}>
             <table className="tbl">
               <thead><tr><th>Wariant</th><th>N</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr></thead>

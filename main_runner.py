@@ -996,8 +996,7 @@ def legacy_dashboard():
   <div id="vs-summary" style="display:none">
     <p style="color:#888;font-size:0.8em;margin:4px 0">
       Okno 30-dniowe przesuwane dzień po dniu od najwcześniejszej dostępnej daty do (dziś − 30 dni);
-      posortowane po najgorszym wyniku (worst%) — faworyzuje warianty stabilne niezależnie od punktu startu,
-      nie tylko najlepszy przypadek.
+      posortowane po średnim wyniku (avg%) ze wszystkich przesunięć okna startu.
     </p>
     <h5 style="color:#ccc;margin:10px 0 4px">Historia danych per wariant (wszystkie typy setupów — range, impulse, trend_pullback, breakout...)</h5>
     <div style="overflow-x:auto">

@@ -1156,8 +1156,13 @@ def get_simulator_trades(
     date_to: str | None = None,
     variants: list[str] | None = None,
     min_regime_score: int | None = None,
+    model: str | None = None,
 ) -> list[dict]:
-    """Zwraca zamknięte setupy z entry_hit_at, exit_time, pnl_pct — do symulatora portfela."""
+    """Zwraca zamknięte setupy z entry_hit_at, exit_time, pnl_pct — do symulatora portfela.
+
+    model: opcjonalny filtr (np. 'Algo2') — bez niego zwraca setupy z KAŻDEGO modelu,
+    w tym starszych/innych źródeł (Grok, Gemini2, GPT backtesty, ręczne alerty), gdzie
+    type/variant bywają wolnym tekstem opisu setupu zamiast krótkiego klucza wariantu."""
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage = 20
     _tu = f"COALESCE(trade_usdt, {trade_usdt})"
@@ -1205,6 +1210,9 @@ def get_simulator_trades(
     if variants:
         where.append("COALESCE(variant, 'baseline') = ANY(%(variants)s)")
         params["variants"] = variants
+    if model:
+        where.append("model = %(model)s")
+        params["model"] = model
     if date_from:
         where.append("resolved_at >= %(date_from)s::date")
         params["date_from"] = date_from
