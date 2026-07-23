@@ -3976,34 +3976,39 @@ def api_backtest_variants_csv():
     )
 
 
-_variant_sweep_status: dict = {"running": False, "done": False, "error": None, "started_at": None}
-_variant_sweep_result: dict | None = None
-_VARIANT_SWEEP_SINGLES_CSV = "/tmp/variant_sweep_singles.csv"
-_VARIANT_SWEEP_COMBOS_CSV = "/tmp/variant_sweep_combos.csv"
+_variant_sweep_status: dict[int, dict] = {}
+_variant_sweep_result: dict[int, dict | None] = {}
+_VARIANT_SWEEP_SINGLES_CSV = "/tmp/variant_sweep_singles_{}.csv"
+_VARIANT_SWEEP_COMBOS_CSV = "/tmp/variant_sweep_combos_{}.csv"
 
 
 @app.post("/admin/run-variant-sweep")
 def admin_run_variant_sweep(
     capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
-    step_days: int = 1, min_regime_score: int | None = None,
+    step_days: int = 1, min_regime_score: int | None = None, window_days: int = 30,
 ):
-    """Uruchamia w tle sweep Symulatora portfela (variant_sweep.py): przesuwa okno 30-dniowe
-    po wszystkich możliwych datach startu (+ jedno okno 90-dniowe dla wariantów z dość
-    historii) dla każdego wariantu, i testuje kombinacje 1-4 najlepszych wariantów.
+    """Uruchamia w tle sweep Symulatora portfela (variant_sweep.py): przesuwa okno
+    długości `window_days` (domyślnie 30) po wszystkich możliwych datach startu
+    (+ jedno stałe okno 90-dniowe dla wariantów z dość historii, niezależnie od
+    window_days) dla każdego wariantu, i testuje kombinacje 1-4 najlepszych wariantów.
 
-    Wyniki: GET /api/variant-sweep/status, /api/variant-sweep/result,
-    /api/variant-sweep/csv?which=singles|combos
+    window_days=90 to osobne uruchomienie tego samego sweepu, ale dla okien
+    90-dniowych — inaczej niż stałe okno 90d liczone zawsze przy okazji, to
+    przesuwa okno 90-dniowe po wszystkich datach startu i daje best/avg/worst,
+    tak jak domyślny sweep 30-dniowy. Wynik jest cache'owany osobno per window_days,
+    więc sweep 30d i 90d nie nadpisują się nawzajem.
+
+    Wyniki: GET /api/variant-sweep/status?window_days=, /api/variant-sweep/result?window_days=,
+    /api/variant-sweep/csv?which=singles|combos&window_days=
     """
-    global _variant_sweep_status
-    if _variant_sweep_status["running"]:
-        return {"ok": False, "message": "Sweep już działa — poczekaj na zakończenie."}
+    if _variant_sweep_status.get(window_days, {}).get("running"):
+        return {"ok": False, "message": "Sweep dla tego window_days już działa — poczekaj na zakończenie."}
 
     import threading
     import variant_sweep
 
     def _run():
-        global _variant_sweep_status, _variant_sweep_result
-        _variant_sweep_status = {
+        _variant_sweep_status[window_days] = {
             "running": True, "done": False, "error": None,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -4011,44 +4016,48 @@ def admin_run_variant_sweep(
             result = variant_sweep.run_sweep(
                 capital=capital, pnl_mode=pnl_mode, top_n=top_n,
                 step_days=step_days, min_regime_score=min_regime_score,
+                window_days=window_days,
             )
-            variant_sweep._write_singles_csv(result["singles"], _VARIANT_SWEEP_SINGLES_CSV)
-            variant_sweep._write_combos_csv(result["combos"], _VARIANT_SWEEP_COMBOS_CSV)
-            _variant_sweep_result = result
-            _variant_sweep_status.update({"running": False, "done": True})
+            variant_sweep._write_singles_csv(
+                result["singles"], _VARIANT_SWEEP_SINGLES_CSV.format(window_days), window_days=window_days,
+            )
+            variant_sweep._write_combos_csv(result["combos"], _VARIANT_SWEEP_COMBOS_CSV.format(window_days))
+            _variant_sweep_result[window_days] = result
+            _variant_sweep_status[window_days].update({"running": False, "done": True})
         except Exception as e:
             logging.error(f"[variant-sweep] Błąd: {e}", exc_info=True)
-            _variant_sweep_status.update({"running": False, "done": False, "error": str(e)})
+            _variant_sweep_status[window_days].update({"running": False, "done": False, "error": str(e)})
 
     threading.Thread(target=_run, daemon=True).start()
     return {"ok": True, "message": "Sweep wariantów uruchomiony w tle. Sprawdź status: GET /api/variant-sweep/status"}
 
 
 @app.get("/api/variant-sweep/status")
-def api_variant_sweep_status():
-    return _variant_sweep_status
+def api_variant_sweep_status(window_days: int = 30):
+    return _variant_sweep_status.get(window_days, {"running": False, "done": False, "error": None, "started_at": None})
 
 
 @app.get("/api/variant-sweep/result")
-def api_variant_sweep_result():
+def api_variant_sweep_result(window_days: int = 30):
     """Wyniki sweepu jako JSON: warianty pojedyncze (posortowane po worst_pct) + kombinacje."""
-    if _variant_sweep_result is None:
+    r = _variant_sweep_result.get(window_days)
+    if r is None:
         return {"error": "Brak wyników — uruchom najpierw POST /admin/run-variant-sweep"}
-    r = _variant_sweep_result
     return {
         "today": r["today"], "capital": r["capital"], "pnl_mode": r["pnl_mode"],
+        "window_days": r["window_days"],
         "singles_ranked": r["singles_ranked"],
-        "not_eligible": [s for s in r["singles"] if not (s["w30"] and s["w30"]["eligible"])],
+        "not_eligible": [s for s in r["singles"] if not (s["wsweep"] and s["wsweep"]["eligible"])],
         "combos": r["combos"],
     }
 
 
 @app.get("/api/variant-sweep/csv")
-def api_variant_sweep_csv(which: str = "singles"):
+def api_variant_sweep_csv(which: str = "singles", window_days: int = 30):
     """Pobierz CSV z wynikami sweepu. which=singles|combos"""
     import os
     from fastapi.responses import FileResponse
-    path = _VARIANT_SWEEP_SINGLES_CSV if which == "singles" else _VARIANT_SWEEP_COMBOS_CSV
+    path = (_VARIANT_SWEEP_SINGLES_CSV if which == "singles" else _VARIANT_SWEEP_COMBOS_CSV).format(window_days)
     if not os.path.exists(path):
         return {"error": "Brak wyników — uruchom najpierw POST /admin/run-variant-sweep"}
     return FileResponse(path, media_type="text/csv", filename=os.path.basename(path))

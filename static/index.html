@@ -1811,25 +1811,26 @@ function VariantSweepPanel() {
   const [capital,setCapital]=useState(1000);
   const [pnlMode,setPnlMode]=useState('tp12');
   const [topN,setTopN]=useState(8);
+  const [windowDays,setWindowDays]=useState(30);
   const [status,setStatus]=useState(null);
   const [running,setRunning]=useState(false);
   const [result,setResult]=useState(null);
   const pollRef=React.useRef(null);
 
-  const loadResult=React.useCallback(()=>{
-    fetch('/api/variant-sweep/result').then(r=>r.ok?r.json():null).then(d=>{
-      if(d&&!d.error) setResult(d);
+  const loadResult=React.useCallback((wd)=>{
+    fetch('/api/variant-sweep/result?window_days='+wd).then(r=>r.ok?r.json():null).then(d=>{
+      if(d&&!d.error) setResult(d); else setResult(null);
     }).catch(()=>{});
   },[]);
 
-  const checkStatus=React.useCallback(()=>{
-    fetch('/api/variant-sweep/status').then(r=>r.ok?r.json():null).then(s=>{
+  const checkStatus=React.useCallback((wd)=>{
+    fetch('/api/variant-sweep/status?window_days='+wd).then(r=>r.ok?r.json():null).then(s=>{
       if(!s) return;
       setStatus(s);
       if(s.done){
         if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
         setRunning(false);
-        loadResult();
+        loadResult(wd);
       } else if(s.error){
         if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
         setRunning(false);
@@ -1840,19 +1841,22 @@ function VariantSweepPanel() {
   },[loadResult]);
 
   useEffect(()=>{
-    checkStatus();
+    setResult(null);setStatus(null);setRunning(false);
+    if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+    checkStatus(windowDays);
+    loadResult(windowDays);
     return ()=>{if(pollRef.current) clearInterval(pollRef.current);};
-  },[]);
+  },[windowDays]);
 
   const runSweep=()=>{
     setRunning(true);
-    const p=new URLSearchParams({capital:String(capital),pnl_mode:pnlMode,top_n:String(topN)});
+    const p=new URLSearchParams({capital:String(capital),pnl_mode:pnlMode,top_n:String(topN),window_days:String(windowDays)});
     fetch('/admin/run-variant-sweep?'+p.toString(),{method:'POST'})
       .then(r=>r.json())
       .then(d=>{
         if(!d.ok){setRunning(false);setStatus({error:d.message});return;}
         if(pollRef.current) clearInterval(pollRef.current);
-        pollRef.current=setInterval(checkStatus,5000);
+        pollRef.current=setInterval(()=>checkStatus(windowDays),5000);
       })
       .catch(e=>{setRunning(false);setStatus({error:e.message});});
   };
@@ -1866,16 +1870,22 @@ function VariantSweepPanel() {
     <div className="panel" style={{flexShrink:0,marginTop:4}}>
       <div className="panel-head">
         <span className="panel-title">Sweep dat startu + kombinacje wariantów</span>
-        <span className="panel-badge">wszystkie możliwe daty startu, okno 30d + 90d</span>
+        <span className="panel-badge">wszystkie możliwe daty startu, okno {windowDays}d</span>
       </div>
       <div style={{padding:'12px 16px',display:'flex',flexDirection:'column',gap:10}}>
         <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
-          Przesuwa okno 30-dniowe dzień po dniu od najwcześniejszej dostępnej daty do (dziś−30d) dla każdego
-          wariantu (+ jedno okno 90-dniowe dla wariantów z dość historii), i zbiera best/avg/worst zwrotu na
-          koniec okna. Ranking po średnim wyniku (avg%) ze wszystkich przesunięć okna startu. Testuje też
-          wszystkie kombinacje 1-4 wariantów wśród top N. Może potrwać dłuższą chwilę.
+          Przesuwa okno {windowDays}-dniowe dzień po dniu od najwcześniejszej dostępnej daty do (dziś−{windowDays}d)
+          dla każdego wariantu, i zbiera best/avg/worst zwrotu na koniec okna. Ranking po średnim wyniku (avg%)
+          ze wszystkich przesunięć okna startu. Testuje też wszystkie kombinacje 1-4 wariantów wśród top N.
+          Osobno (niezależnie od wyboru poniżej) zawsze doliczane jest jedno stałe okno 90-dniowe (dziś−90d
+          → dziś, bez przesuwania) jako szybki punkt odniesienia. Może potrwać dłuższą chwilę.
         </p>
         <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Okno sweepu:</span>
+          <div className="seg-tabs">
+            <div className={`seg-tab ${windowDays===30?'active':''}`} onClick={()=>setWindowDays(30)}>30d</div>
+            <div className={`seg-tab ${windowDays===90?'active':''}`} onClick={()=>setWindowDays(90)}>90d</div>
+          </div>
           <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Kapitał:</span>
           <input type="number" value={capital} onChange={e=>setCapital(Math.max(1,Number(e.target.value)||1))}
             style={{width:80,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
@@ -1887,10 +1897,11 @@ function VariantSweepPanel() {
           <input type="number" min={1} max={20} value={topN} onChange={e=>setTopN(Math.min(20,Math.max(1,Number(e.target.value)||1)))}
             style={{width:50,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
           <button className="filter-chip active" disabled={running} style={{opacity:running?0.5:1,cursor:running?'default':'pointer'}} onClick={runSweep}>
-            {running?'⏳ Liczenie…':'▶ Uruchom sweep'}
+            {running?'⏳ Liczenie…':`▶ Uruchom sweep ${windowDays}d`}
           </button>
           {status&&status.error&&<span style={{color:'var(--red)',fontSize:11}}>⚠️ {status.error}</span>}
           {running&&status&&status.started_at&&<span style={{color:'var(--text3)',fontSize:10,fontFamily:'var(--mono)'}}>started {String(status.started_at).slice(11,16)} UTC</span>}
+          {!running&&result&&<span style={{color:'var(--text3)',fontSize:10,fontFamily:'var(--mono)'}}>ostatni sweep {windowDays}d liczony: {String(result.today).slice(0,16).replace('T',' ')} UTC</span>}
         </div>
       </div>
 
@@ -1916,7 +1927,7 @@ function VariantSweepPanel() {
         </div>
 
         <div>
-          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Warianty — sweep 30d (posortowane po avg%)</h5>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Warianty — sweep {windowDays}d (posortowane po avg%)</h5>
           <div style={{overflowX:'auto'}}>
             <table className="tbl">
               <thead><tr><th>Wariant</th><th>N</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr></thead>
@@ -1925,15 +1936,15 @@ function VariantSweepPanel() {
                   <tr key={s.label}>
                     <td style={{fontSize:11}}>{s.label}</td>
                     <td style={{fontFamily:'var(--mono)'}}>{s.n_trades}</td>
-                    <td style={{fontFamily:'var(--mono)'}}>{s.w30.n_windows}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.w30.worst_pct)}}>{fmtPct(s.w30.worst_pct)}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.w30.avg_pct)}}>{fmtPct(s.w30.avg_pct)}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.w30.best_pct)}}>{fmtPct(s.w30.best_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{s.wsweep.n_windows}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.wsweep.worst_pct)}}>{fmtPct(s.wsweep.worst_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.wsweep.avg_pct)}}>{fmtPct(s.wsweep.avg_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(s.wsweep.best_pct)}}>{fmtPct(s.wsweep.best_pct)}</td>
                   </tr>
                 )}
                 {result.not_eligible.map(s=>
                   <tr key={s.label} style={{opacity:0.5}}>
-                    <td colSpan={6} style={{fontSize:11}}>{s.label} — pominięty ({s.w30?s.w30.reason:'brak danych'})</td>
+                    <td colSpan={6} style={{fontSize:11}}>{s.label} — pominięty ({s.wsweep?s.wsweep.reason:'brak danych'})</td>
                   </tr>
                 )}
               </tbody>
@@ -1961,7 +1972,7 @@ function VariantSweepPanel() {
         </div>
 
         <div>
-          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Top kombinacje (1-4 warianty)</h5>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Top kombinacje (1-4 warianty), sweep {windowDays}d</h5>
           <div style={{overflowX:'auto'}}>
             <table className="tbl">
               <thead><tr><th>Kombinacja</th><th>Okna</th><th>Worst%</th><th>Avg%</th><th>Best%</th></tr></thead>
@@ -1969,10 +1980,10 @@ function VariantSweepPanel() {
                 {result.combos.slice(0,20).map((c,i)=>
                   <tr key={i}>
                     <td style={{fontSize:11}}>{c.label}</td>
-                    <td style={{fontFamily:'var(--mono)'}}>{c.w30.n_windows}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.w30.worst_pct)}}>{fmtPct(c.w30.worst_pct)}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.w30.avg_pct)}}>{fmtPct(c.w30.avg_pct)}</td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.w30.best_pct)}}>{fmtPct(c.w30.best_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)'}}>{c.wsweep.n_windows}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.wsweep.worst_pct)}}>{fmtPct(c.wsweep.worst_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.wsweep.avg_pct)}}>{fmtPct(c.wsweep.avg_pct)}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:pctColor(c.wsweep.best_pct)}}>{fmtPct(c.wsweep.best_pct)}</td>
                   </tr>
                 )}
                 {result.combos.length===0&&<tr><td colSpan={5} style={{color:'var(--text3)',fontSize:11}}>Brak kwalifikujących się kombinacji.</td></tr>}
@@ -1982,8 +1993,8 @@ function VariantSweepPanel() {
         </div>
 
         <div style={{display:'flex',gap:14}}>
-          <a href="/api/variant-sweep/csv?which=singles" download="variant_sweep_singles.csv" style={{color:'var(--blue)',fontSize:11}}>⬇ CSV warianty</a>
-          <a href="/api/variant-sweep/csv?which=combos" download="variant_sweep_combos.csv" style={{color:'var(--blue)',fontSize:11}}>⬇ CSV kombinacje</a>
+          <a href={`/api/variant-sweep/csv?which=singles&window_days=${windowDays}`} download={`variant_sweep_singles_${windowDays}d.csv`} style={{color:'var(--blue)',fontSize:11}}>⬇ CSV warianty</a>
+          <a href={`/api/variant-sweep/csv?which=combos&window_days=${windowDays}`} download={`variant_sweep_combos_${windowDays}d.csv`} style={{color:'var(--blue)',fontSize:11}}>⬇ CSV kombinacje</a>
         </div>
       </div>}
     </div>

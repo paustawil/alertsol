@@ -12,20 +12,28 @@ harmonogram wypłat jest zakotwiczony w realnym kalendarzu, więc nie przenosi s
 sensownie na przesunięte okna historyczne; jeśli potrzebne, można dodać później).
 
 Co robi:
-  1. Dla każdego wariantu (pary type+variant): przesuwa 30-dniowe okno dzień po dniu,
-     od najwcześniejszej dostępnej daty do (dziś − 30 dni), i zbiera best/avg/worst
-     zwrotu % na koniec okna.
-  2. To samo, ale jedno stałe okno 90-dniowe (dziś − 90 dni → dziś) — tylko dla
-     wariantów mających co najmniej 90 dni historii (na razie mało która to spełnia).
-  3. Ranking wariantów po (2) i (1) — best/avg/worst, posortowany po średnim wyniku (avg).
+  1. Dla każdego wariantu (pary type+variant): przesuwa okno długości `window_days`
+     (domyślnie 30) dzień po dniu, od najwcześniejszej dostępnej daty do (dziś −
+     window_days), i zbiera best/avg/worst zwrotu % na koniec okna.
+     Uruchomienie z window_days=90 (osobne wywołanie: --window-days 90) robi
+     dokładnie to samo, tylko dla okien 90-dniowych — czyli to, co dla 30d robi (1),
+     ale przesuwane po wszystkich datach startu, a NIE jedno stałe okno jak (2) niżej.
+  2. Dodatkowo zawsze liczone jest jedno stałe okno 90-dniowe (dziś − 90 dni → dziś,
+     bez przesuwania) — tylko dla wariantów mających co najmniej 90 dni historii.
+     To jest szybki punkt odniesienia "gdyby granie zaczęło się dokładnie 90 dni temu
+     i trwało do dziś", niezależny od window_days z (1).
+  3. Ranking wariantów po (1) — best/avg/worst, posortowany po średnim wyniku (avg).
   4. Dla top N wariantów: wszystkie kombinacje rozmiaru 1-4 (wspólny kapitał, limit
      jednej pozycji na raz — tak jak wybór kilku wariantów jednocześnie w Symulatorze),
-     ten sam sweep 30-dniowy, ranking kombinacji.
+     ten sam sweep (window_days), ranking kombinacji.
 
 Użycie:
   python variant_sweep.py [--capital 1000] [--pnl-mode tp12|tp1] [--top-n 8]
-                          [--step-days 1] [--min-regime-score 3]
+                          [--step-days 1] [--min-regime-score 3] [--window-days 30]
                           [--out-prefix variant_sweep]
+
+  Osobne uruchomienie sweepu 90-dniowego (przesuwanego, nie stałego jak w (2) wyżej):
+  python variant_sweep.py --window-days 90
 
 Wymaga: psycopg2 (już w projekcie), dostęp do tej samej bazy co main_runner.py.
 """
@@ -189,7 +197,13 @@ def pair_label(pair: tuple[str, str]) -> str:
 
 
 def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
-              step_days: int = 1, min_regime_score: int | None = None) -> dict:
+              step_days: int = 1, min_regime_score: int | None = None,
+              window_days: int = WINDOW_30D) -> dict:
+    """window_days: długość okna przesuwanego po wszystkich możliwych datach startu
+    (best/avg/worst). Domyślnie 30 (zachowanie sprzed wprowadzenia tego parametru).
+    Osobne uruchomienie z window_days=90 daje odpowiednik tego samego sweepu, ale
+    dla okien 90-dniowych — inaczej niż w30_90d/run_90d poniżej, który liczy TYLKO
+    jedno stałe okno (dziś-90d -> dziś), a nie przesuwa go po datach startu."""
     # naive UTC — spójne z entry_time/exit_time zwracanymi przez db.get_simulator_trades()
     # (kolumny konwertowane w SQL przez "AT TIME ZONE 'UTC'", psycopg2 zwraca je bez tzinfo)
     today = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -197,7 +211,7 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
 
     singles = []
     for pair, trades in sorted(by_pair.items()):
-        w30 = sweep_window(trades, WINDOW_30D, step_days, today, capital, pnl_mode)
+        wsweep = sweep_window(trades, window_days, step_days, today, capital, pnl_mode)
         w90 = run_90d(trades, today, capital, pnl_mode)
         first_trade_date = min(t["entry_time"] for t in trades).date()
         last_trade_date = max(t["entry_time"] for t in trades).date()
@@ -205,13 +219,13 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
             "pair": pair, "label": pair_label(pair), "n_trades": len(trades),
             "first_trade_date": first_trade_date, "last_trade_date": last_trade_date,
             "history_days": (today.date() - first_trade_date).days,
-            "w30": w30, "w90": w90,
+            "wsweep": wsweep, "w90": w90,
         })
 
-    # Ranking: tylko warianty z wystarczającą historią na sweep 30d, posortowane
+    # Ranking: tylko warianty z wystarczającą historią na sweep, posortowane
     # po średnim wyniku (avg_pct) malejąco.
-    eligible = [s for s in singles if s["w30"] and s["w30"]["eligible"]]
-    eligible.sort(key=lambda s: s["w30"]["avg_pct"], reverse=True)
+    eligible = [s for s in singles if s["wsweep"] and s["wsweep"]["eligible"]]
+    eligible.sort(key=lambda s: s["wsweep"]["avg_pct"], reverse=True)
 
     # data startu każdego wariantu — potrzebna do wyznaczenia daty startu kombinacji (MAX)
     first_date_by_pair = {s["pair"]: s["first_trade_date"] for s in singles}
@@ -222,18 +236,19 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
         for combo in itertools.combinations(top_pairs, r):
             trades = merge_trades(*[by_pair[p] for p in combo])
             combo_first_date = max(first_date_by_pair[p] for p in combo)
-            w30 = sweep_window(trades, WINDOW_30D, step_days, today, capital, pnl_mode,
-                                first_date=combo_first_date)
-            if not w30 or not w30["eligible"]:
+            wsweep = sweep_window(trades, window_days, step_days, today, capital, pnl_mode,
+                                   first_date=combo_first_date)
+            if not wsweep or not wsweep["eligible"]:
                 continue
             combos.append({
                 "combo": combo, "label": " + ".join(pair_label(p) for p in combo),
-                "size": r, "n_trades": len(trades), "w30": w30,
+                "size": r, "n_trades": len(trades), "wsweep": wsweep,
             })
-    combos.sort(key=lambda c: c["w30"]["avg_pct"], reverse=True)
+    combos.sort(key=lambda c: c["wsweep"]["avg_pct"], reverse=True)
 
     return {
         "today": today.isoformat(), "capital": capital, "pnl_mode": pnl_mode,
+        "window_days": window_days,
         "singles": singles, "singles_ranked": eligible, "combos": combos,
     }
 
@@ -254,24 +269,25 @@ def _print_history(singles: list[dict]) -> None:
     print("=" * 100)
 
 
-def _print_singles(ranked: list[dict]) -> None:
+def _print_singles(ranked: list[dict], window_days: int = WINDOW_30D) -> None:
     print("\n" + "=" * 100)
+    print(f"Sweep {window_days}-dniowy (wszystkie możliwe daty startu):")
     print(f"{'Wariant':<45} {'N':>5} {'Okna':>5} {'Worst%':>8} {'Avg%':>8} {'Best%':>8}")
     print("-" * 100)
     for s in ranked:
-        w30 = s["w30"]
-        print(f"{s['label']:<45} {s['n_trades']:>5} {w30['n_windows']:>5} "
-              f"{w30['worst_pct']:>+8.1f} {w30['avg_pct']:>+8.1f} {w30['best_pct']:>+8.1f}")
+        wsweep = s["wsweep"]
+        print(f"{s['label']:<45} {s['n_trades']:>5} {wsweep['n_windows']:>5} "
+              f"{wsweep['worst_pct']:>+8.1f} {wsweep['avg_pct']:>+8.1f} {wsweep['best_pct']:>+8.1f}")
     print("=" * 100)
 
 
-def _print_not_eligible(singles: list[dict]) -> None:
-    skipped = [s for s in singles if not (s["w30"] and s["w30"]["eligible"])]
+def _print_not_eligible(singles: list[dict], window_days: int = WINDOW_30D) -> None:
+    skipped = [s for s in singles if not (s["wsweep"] and s["wsweep"]["eligible"])]
     if not skipped:
         return
-    print("\nPominięte (za mało historii na sweep 30d):")
+    print(f"\nPominięte (za mało historii na sweep {window_days}d):")
     for s in skipped:
-        reason = s["w30"]["reason"] if s["w30"] else "brak rozstrzygniętych trade'ów"
+        reason = s["wsweep"]["reason"] if s["wsweep"] else "brak rozstrzygniętych trade'ów"
         print(f"  {s['label']}: {reason}")
 
 
@@ -290,31 +306,31 @@ def _print_90d(singles: list[dict]) -> None:
     print("=" * 100)
 
 
-def _print_combos(combos: list[dict], limit: int = 20) -> None:
+def _print_combos(combos: list[dict], limit: int = 20, window_days: int = WINDOW_30D) -> None:
     print("\n" + "=" * 100)
-    print(f"Top {min(limit, len(combos))} kombinacji (1-4 warianty), sweep 30-dniowy:")
+    print(f"Top {min(limit, len(combos))} kombinacji (1-4 warianty), sweep {window_days}-dniowy:")
     print(f"{'Kombinacja':<70} {'Okna':>5} {'Worst%':>8} {'Avg%':>8} {'Best%':>8}")
     print("-" * 100)
     for c in combos[:limit]:
-        w30 = c["w30"]
-        print(f"{c['label']:<70} {w30['n_windows']:>5} "
-              f"{w30['worst_pct']:>+8.1f} {w30['avg_pct']:>+8.1f} {w30['best_pct']:>+8.1f}")
+        wsweep = c["wsweep"]
+        print(f"{c['label']:<70} {wsweep['n_windows']:>5} "
+              f"{wsweep['worst_pct']:>+8.1f} {wsweep['avg_pct']:>+8.1f} {wsweep['best_pct']:>+8.1f}")
     print("=" * 100)
 
 
-def _write_singles_csv(singles: list[dict], path: str) -> None:
+def _write_singles_csv(singles: list[dict], path: str, window_days: int = WINDOW_30D) -> None:
     rows = []
     for s in singles:
-        w30, w90 = s["w30"] or {}, s["w90"] or {}
+        wsweep, w90 = s["wsweep"] or {}, s["w90"] or {}
         rows.append({
             "type": s["pair"][0], "variant": s["pair"][1], "n_trades": s["n_trades"],
             "first_trade_date": s["first_trade_date"], "last_trade_date": s["last_trade_date"],
             "history_days": s["history_days"],
-            "w30_eligible": w30.get("eligible", False),
-            "w30_n_windows": w30.get("n_windows"),
-            "w30_worst_pct": w30.get("worst_pct"), "w30_worst_start": w30.get("worst_start"),
-            "w30_avg_pct": w30.get("avg_pct"),
-            "w30_best_pct": w30.get("best_pct"), "w30_best_start": w30.get("best_start"),
+            f"sweep{window_days}d_eligible": wsweep.get("eligible", False),
+            f"sweep{window_days}d_n_windows": wsweep.get("n_windows"),
+            f"sweep{window_days}d_worst_pct": wsweep.get("worst_pct"), f"sweep{window_days}d_worst_start": wsweep.get("worst_start"),
+            f"sweep{window_days}d_avg_pct": wsweep.get("avg_pct"),
+            f"sweep{window_days}d_best_pct": wsweep.get("best_pct"), f"sweep{window_days}d_best_start": wsweep.get("best_start"),
             "w90_eligible": w90.get("eligible", False),
             "w90_return_pct": w90.get("return_pct"),
             "w90_max_drawdown_pct": w90.get("max_drawdown_pct"),
@@ -328,9 +344,9 @@ def _write_singles_csv(singles: list[dict], path: str) -> None:
 def _write_combos_csv(combos: list[dict], path: str) -> None:
     rows = [{
         "size": c["size"], "combo": c["label"], "n_trades": c["n_trades"],
-        "w30_n_windows": c["w30"]["n_windows"],
-        "w30_worst_pct": c["w30"]["worst_pct"], "w30_avg_pct": c["w30"]["avg_pct"],
-        "w30_best_pct": c["w30"]["best_pct"],
+        "n_windows": c["wsweep"]["n_windows"],
+        "worst_pct": c["wsweep"]["worst_pct"], "avg_pct": c["wsweep"]["avg_pct"],
+        "best_pct": c["wsweep"]["best_pct"],
     } for c in combos]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else [])
@@ -345,19 +361,23 @@ def main():
     ap.add_argument("--top-n", type=int, default=8, help="ile najlepszych wariantów bierze udział w kombinacjach")
     ap.add_argument("--step-days", type=int, default=1, help="co ile dni przesuwać okno startu (1 = każdy możliwy dzień)")
     ap.add_argument("--min-regime-score", type=int, default=None)
+    ap.add_argument("--window-days", type=int, default=WINDOW_30D,
+                     help="długość przesuwanego okna sweepu (domyślnie 30; osobne uruchomienie z 90 "
+                          "daje best/avg/worst po wszystkich datach startu dla okien 90-dniowych)")
     ap.add_argument("--out-prefix", type=str, default="variant_sweep")
     args = ap.parse_args()
 
     result = run_sweep(capital=args.capital, pnl_mode=args.pnl_mode, top_n=args.top_n,
-                        step_days=args.step_days, min_regime_score=args.min_regime_score)
+                        step_days=args.step_days, min_regime_score=args.min_regime_score,
+                        window_days=args.window_days)
 
     _print_history(result["singles"])
-    _print_singles(result["singles_ranked"])
-    _print_not_eligible(result["singles"])
+    _print_singles(result["singles_ranked"], window_days=args.window_days)
+    _print_not_eligible(result["singles"], window_days=args.window_days)
     _print_90d(result["singles"])
-    _print_combos(result["combos"])
+    _print_combos(result["combos"], window_days=args.window_days)
 
-    _write_singles_csv(result["singles"], f"{args.out_prefix}_singles.csv")
+    _write_singles_csv(result["singles"], f"{args.out_prefix}_singles.csv", window_days=args.window_days)
     _write_combos_csv(result["combos"], f"{args.out_prefix}_combos.csv")
     print(f"\nZapisano: {args.out_prefix}_singles.csv, {args.out_prefix}_combos.csv")
 
