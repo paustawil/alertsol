@@ -104,13 +104,25 @@ and the regime falls through to `RANGE` even though a real trend exists. Confirm
 a live SOL chart showing an obvious multi-day uptrend that the bot had classified as RANGE.
 
 This matters because `RANGE` classification gates which setups can even be generated
-(`regime['direction']` becomes `"none"`, so `trend_pullback` never fires), and it's the
-suspected root cause of why `trend_pullback_short` and `range_resistance_short` — the two
-counter-trend (short) variants — have shown much worse win rates than their long-side
-mirrors (`trend_pullback_long`, `range_support_long`) despite identical code/filters on both
-sides: SOL trended up for most of the analyzed period (~April–July 2026), so this bug
-would silently suppress correct-direction long-side trend detection less often than it lets
-bad counter-trend shorts through in the RANGE branch's own (too-short-lookback) filters.
+(`regime['direction']` becomes `"none"`, so `trend_pullback` never fires), and the
+misclassification bug itself is real and confirmed (setup #-level example above). It was
+initially assumed to be the root cause of why `trend_pullback_short` and
+`range_resistance_short` — the two counter-trend (short) variants — have shown much worse
+win rates than their long-side mirrors (`trend_pullback_long`, `range_support_long`), on the
+theory that SOL trended up for most of the analyzed period (~April–July 2026) and so this
+bug would suppress correct-direction long detection less often than it lets bad
+counter-trend shorts through.
+
+**Correction (checked against the actual chart, not just assumed):** that premise is wrong.
+April–July 2026 was not a sustained uptrend — it was a rally to an early-May high (~$96-100),
+a ~40% crash into a June low (~$60), and a partial recovery into July that stalled well below
+the May high (net change March→July roughly flat, slightly negative). A large part of this
+window was a genuine downtrend where short was the correct-direction side, not long. So the
+"long benefited from misclassification less often because of a broad uptrend" explanation
+does not hold up, and the actual reason for the long/short win-rate gap is **unresolved** —
+don't cite the uptrend theory as the explanation anywhere else; treat it as an open question
+until checked against data (e.g. win rate broken out by sub-period, separating the May-June
+downtrend from the rest, rather than assumed from a general "SOL trended up" premise).
 
 **What was shipped (all log-only, zero effect on live trading — see PRs #287, #288):**
 1. `regime_alt` field: when regime falls to `RANGE`, additionally checks if `change_4h`/
