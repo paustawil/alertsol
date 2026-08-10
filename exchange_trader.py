@@ -1642,6 +1642,8 @@ def _sync_inner():
                                 "reason": "sl1_and_tp1_both_cancelled_externally",
                             })
                             db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
+                            # Nieznany faktyczny wynik — nie liczy się jako realny trade, tak jak shadow.
+                            db.update_setup(int(sid), tradeable=False)
                         continue
                     # TP1 executed — wpadamy w sekcję poniżej
                     tp1_oid = None  # czyścimy żeby sekcja TP1 go wykryła jako executed
@@ -1952,6 +1954,8 @@ def _sync_inner():
                 modified = True
                 if sid and sid != "?":
                     db.resolve_setup(int(sid), "nieokreslone", s.get("avg_entry"), None, None, None)
+                    # Nieznany faktyczny wynik — nie liczy się jako realny trade, tak jak shadow.
+                    db.update_setup(int(sid), tradeable=False)
 
     if modified:
         _save_pending(pending)

@@ -2251,9 +2251,65 @@ def health():
 
 @app.post("/admin/resolve-setup/{setup_id}")
 def admin_resolve_setup(setup_id: int):
-    """Tymczasowy endpoint do ręcznego zamknięcia setupu w bazie."""
-    db.resolve_setup(setup_id, "nieokreslone", None, None, 0, None)
-    return {"ok": True, "setup_id": setup_id, "result": "nieokreslone"}
+    """Ręczne zamknięcie setupu ze statusem 'nieokreślone' — do użycia gdy zlecenie
+    na Bitget z jakiegoś powodu nie zostało zrealizowane / straciliśmy pewność co
+    do jego losu i nie da się tego ustalić automatycznie. Wynik nie jest liczony
+    jako realny wygrany/przegrany trade (tak jak setupy shadow — tradeable=False),
+    bo nie znamy faktycznego PnL. Anuluje też best-effort wszelkie znane zlecenia
+    na giełdzie, żeby nie zostawić osieroconych TP/SL/plan orderów."""
+    import exchange_trader as et
+
+    with db._conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM setups WHERE setup_id = %s", (setup_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Setup #{setup_id} nie znaleziony")
+
+    s = db._row_to_dict(row)
+    if s.get("resolved"):
+        raise HTTPException(status_code=400, detail="Setup jest już zamknięty")
+
+    client = et._client()
+
+    # Zabezpieczenie: "nieokreślone" jest tylko dla przypadków gdy pozycja już nie
+    # istnieje na giełdzie (nie znamy wyniku), NIE dla wciąż żywej, chronionej
+    # pozycji — tam trzeba użyć "Anuluj" (zamyka rynkowo i liczy realny PnL),
+    # inaczej zostawilibyśmy niezabezpieczoną pozycję bez SL.
+    if client and s.get("exchange_position_opened"):
+        size, _ = et._get_open_position_info(client, s.get("direction", "long"))
+        if size and size > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Na Bitget wciąż jest otwarta pozycja dla tego setupu — użyj \"Anuluj\", "
+                       "żeby ją bezpiecznie zamknąć rynkowo. \"Nieokreślone\" jest tylko dla "
+                       "przypadków gdy pozycja już nie istnieje, a nie znamy jej wyniku.",
+            )
+
+    cancelled_on_bitget = []
+    if client:
+        for label, oid, plan_type in [
+            ("plan",  s.get("exchange_plan_oid"),  "normal_plan"),
+            ("plan2", s.get("exchange_plan2_oid"), "normal_plan"),
+            ("tp1",   s.get("exchange_tp1_oid"),   "profit_plan"),
+            ("tp2",   s.get("exchange_tp2_oid"),   "profit_plan"),
+            ("sl",    s.get("exchange_sl_oid"),    "loss_plan"),
+            ("sl2",   s.get("exchange_sl2_oid"),   "loss_plan"),
+        ]:
+            if oid:
+                et._cancel_order(client, oid, plan_type, setup_id=setup_id, reason="admin_resolve_undetermined")
+                cancelled_on_bitget.append(label)
+
+    db.resolve_setup(setup_id, "nieokreslone", None, None, None, None)
+    db.update_setup(setup_id, tradeable=False, exchange_done=True)
+    return {
+        "ok": True,
+        "setup_id": setup_id,
+        "result": "nieokreslone",
+        "cancelled_on_bitget": cancelled_on_bitget,
+        "message": "Setup oznaczony jako nieokreślone — wyłączony z realnych statystyk (tradeable=False). "
+                    "Jeśli znasz prawdziwy wynik, popraw go ręcznie na liście Setups.",
+    }
 
 
 @app.post("/admin/restore-after-tp1/{setup_id}")
@@ -3405,6 +3461,13 @@ def api_update_result(setup_id: int, body: ResultUpdate):
             pnl_usd = sign * half_qty * (tp1_setup - avg_entry) + sign * half_qty * (tp2_setup - avg_entry)
 
     db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)
+    if body.result == "nieokreslone":
+        # Nieznany faktyczny wynik — nie liczy się jako realny trade, tak jak shadow.
+        db.update_setup(setup_id, tradeable=False)
+    elif s.get("exchange_position_opened"):
+        # Ręczna korekta na konkretny wynik (np. z "nieokreslone") — to był realny
+        # trade na Bitget, więc od teraz znów liczy się do statystyk.
+        db.update_setup(setup_id, tradeable=True)
     return {
         "ok":       True,
         "setup_id": setup_id,

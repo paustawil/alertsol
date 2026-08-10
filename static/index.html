@@ -268,6 +268,7 @@ function SetupActions({ setup }) {
   const {refreshSetups}=useDash();
   const [tpModal,setTpModal]=useState(false);
   const [cancelling,setCancelling]=useState(false);
+  const [resolving,setResolving]=useState(false);
   const cancel=async()=>{
     if(!confirm(`Anulować setup #${setup.id}?`)) return;
     setCancelling(true);
@@ -278,11 +279,22 @@ function SetupActions({ setup }) {
     }catch{alert('Błąd połączenia');}
     setCancelling(false);
   };
+  const resolveUndetermined=async()=>{
+    if(!confirm(`Oznaczyć setup #${setup.id} jako nieokreślony?\n\nUżyj gdy zlecenie na Bitget z jakiegoś powodu się nie zrealizowało / stracono pewność co do jego losu i nie da się tego ustalić automatycznie. Nie będzie liczony jako realny wygrany/przegrany trade (jak setupy shadow). Jeśli poznasz prawdziwy wynik później, będzie go można poprawić ręcznie na liście Setups.`)) return;
+    setResolving(true);
+    try{
+      const r=await fetch(`/admin/resolve-setup/${setup.id}`,{method:'POST'});
+      if(r.ok) refreshSetups();
+      else {const d=await r.json().catch(()=>({}));alert(d.detail||'Błąd oznaczania jako nieokreślone');}
+    }catch{alert('Błąd połączenia');}
+    setResolving(false);
+  };
   return (
     <>
-      <div style={{display:'flex',gap:4}}>
+      <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
         <button className="action-btn red" onClick={cancel} disabled={cancelling}>{cancelling?'…':'Anuluj'}</button>
         <button className="action-btn gray" onClick={()=>setTpModal(true)}>Zmień TP</button>
+        <button className="action-btn gray" onClick={resolveUndetermined} disabled={resolving} title="Ręcznie oznacz jako nieokreślone — gdy zlecenie na Bitget się nie zrealizowało i nie wiadomo co się stało">{resolving?'…':'Nieokreślone'}</button>
       </div>
       {tpModal && <TPModal setup={setup} onClose={()=>setTpModal(false)} onSaved={()=>{setTpModal(false);refreshSetups();}}/>}
     </>
@@ -848,7 +860,8 @@ function ViewSetups() {
     if(cls) return <span className={`status-pill ${cls}`}><span className="status-dot"></span>{sl}</span>;
     return <span style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:10,fontFamily:'var(--mono)',padding:'2px 8px',borderRadius:10,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}><span className="status-dot"></span>{sl}</span>;
   };
-  const SrcBadge=({tradeable,exch})=>{
+  const SrcBadge=({tradeable,exch,result})=>{
+    if(!tradeable && exch && (result==='nieokreslone'||result==='Nieokreślone')) return <span title="Realne zlecenie na Bitget, którego wyniku nie dało się ustalić — wyłączone ze statystyk" style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--amber-dim, #f0b42933)',color:'var(--amber, #f0b429)',border:'1px solid #f0b42955'}}>BITGET?</span>;
     if(!tradeable) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
     if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
     return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
@@ -1021,7 +1034,7 @@ function ViewSetups() {
                 <td colSpan={13} style={{background:'var(--bg2)',padding:'7px 14px',borderTop:'none'}}>
                   <div style={{display:'flex',gap:16,fontSize:10,color:'var(--text2)',fontFamily:'var(--mono)',flexWrap:'wrap',alignItems:'center'}}>
                     <span style={{color:'var(--text3)'}}>#{r.id}</span>
-                    <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened}/>
+                    <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened} result={r.result}/>
                     {r.rejection&&<span style={{fontFamily:'var(--mono)',fontSize:9,padding:'2px 6px',borderRadius:3,background:'var(--red-dim)',color:'var(--red)',border:'1px solid #ff4d6a33'}} title="Odrzucony algorytmicznie — śledzony dalej tylko jako dane obserwacyjne/ML">ODRZUCONY: {r.rejection}</span>}
                     <span><span style={{color:'var(--text3)'}}>Alert:&nbsp;</span>{r.t_def||'—'}</span>
                     <span><span style={{color:'var(--text3)'}}>Wejście:&nbsp;</span>{fmtTs(r.t_entry)}</span>
@@ -2720,7 +2733,8 @@ function TabSetups() {
   const resC=(r)=>r==='SL'?'var(--red)':r==='Anulowane'||r==='Nie weszło'||r==='Nieokreślone'?'var(--text3)':r?'var(--green)':'var(--text3)';
   const fmtU=(v)=>v==null?'—':`${v>0?'+':''}${Number(v).toFixed(1)}$`;
   const pC=(v)=>v==null?'var(--text3)':v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
-  const SrcBadge=({tradeable,exch})=>{
+  const SrcBadge=({tradeable,exch,result})=>{
+    if(!tradeable && exch && (result==='nieokreslone'||result==='Nieokreślone')) return <span title="Realne zlecenie na Bitget, którego wyniku nie dało się ustalić — wyłączone ze statystyk" style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--amber-dim, #f0b42933)',color:'var(--amber, #f0b429)',border:'1px solid #f0b42955'}}>BITGET?</span>;
     if(!tradeable) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--bg3)',color:'var(--text3)',border:'1px solid var(--border2)'}}>SHADOW</span>;
     if(exch) return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--blue-dim)',color:'var(--blue)',border:'1px solid #4a9eff33'}}>BITGET</span>;
     return <span style={{fontFamily:'var(--mono)',fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--bg3)',color:'var(--text2)',border:'1px solid var(--border2)'}}>REAL</span>;
@@ -2784,7 +2798,7 @@ function TabSetups() {
               <span style={{fontSize:10,color:'var(--text3)'}}>{r.t_def||'—'}</span>
             </div>
             <div style={{display:'flex',alignItems:'center',gap:6}}>
-              <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened}/>
+              <SrcBadge tradeable={r.tradeable} exch={r.exchange_position_opened} result={r.result}/>
               <MobileResultChip/>
             </div>
           </div>
