@@ -319,11 +319,19 @@ def resolve_setup(
     avg_exit: float | None,
     pnl_usd: float | None,
     exit_ts: int | None = None,
+    tp1_hit_at: int | None = None,
 ) -> None:
     """
     Zamknij setup: zapisz wynik, PnL, czas wyjścia.
     Jeśli pnl_usd=None, oblicza PnL z danych setupu (entries, tps, sl, qty).
     pnl_pct obliczany automatycznie.
+
+    tp1_hit_at: opcjonalnie nadpisuje czas trafienia TP1 (unixtime), gdy setup rozstrzyga
+    się (np. na TP1+TP2) w tym samym przebiegu check_pending(), w którym TP1 padł — bez
+    tego kolumna zostawałaby NULL na stałe (mark_tp1_hit()/update_setup() nie są wtedy
+    wywoływane), co m.in. psuje logikę blokady TP1only w symulatorze portfela
+    (patrz tp1_close_time w get_simulator_trades). COALESCE — nie nadpisuje już
+    zapisanej wartości, gdy wywołujący jej nie poda.
     """
     exit_time = None
     if exit_ts:
@@ -394,19 +402,21 @@ def resolve_setup(
                     pnl_usd     = COALESCE(%(pnl_usd)s, pnl_usd),
                     pnl_pct     = COALESCE(%(pnl_pct)s, pnl_pct),
                     exit_time   = COALESCE(%(exit_time)s, exit_time),
+                    tp1_hit_at  = COALESCE(%(tp1_hit_at)s, tp1_hit_at),
                     resolved    = TRUE,
                     resolved_at = NOW(),
                     status      = 'closed'
                 WHERE setup_id = %(setup_id)s
                 """,
                 {
-                    "setup_id":  setup_id,
-                    "result":    result,
-                    "avg_entry": avg_entry,
-                    "avg_exit":  avg_exit,
-                    "pnl_usd":   pnl_usd,
-                    "pnl_pct":   pnl_pct,
-                    "exit_time": exit_time,
+                    "setup_id":   setup_id,
+                    "result":     result,
+                    "avg_entry":  avg_entry,
+                    "avg_exit":   avg_exit,
+                    "pnl_usd":    pnl_usd,
+                    "pnl_pct":    pnl_pct,
+                    "exit_time":  exit_time,
+                    "tp1_hit_at": tp1_hit_at,
                 },
             )
     log.info(f"[db] Setup #{setup_id} zamknięty: {result}, PnL={pnl_usd}")
