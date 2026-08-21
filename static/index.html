@@ -999,6 +999,7 @@ function ViewSetups() {
                 <td>
                   <StatusResultChip r={r}/>
                   {r.model&&<div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--text3)',marginTop:2}}>{r.model}{r.variant&&r.variant!=='baseline'?<span style={{color:'var(--border2)'}}> /{r.variant}</span>:''}</div>}
+                  {r.rejection&&<div style={{fontFamily:'var(--mono)',fontSize:9,color:'var(--red)',marginTop:2}} title="Odrzucony algorytmicznie — śledzony dalej tylko jako dane obserwacyjne/ML">ODRZUCONY: {r.rejection}</div>}
                 </td>
                 <td className="mono" style={{color:'var(--text3)',fontSize:10,whiteSpace:'nowrap'}}>{r.t_def?r.t_def.slice(5,16):'—'}</td>
                 <td><span className={`kier-badge ${(r.kier||'long').toLowerCase()}`}>{r.kier}</span></td>
@@ -1844,6 +1845,7 @@ function WindowDistributionPanel() {
   const [pnlMode,setPnlMode]=useState('tp12');
   const [windowDays,setWindowDays]=useState(30);
   const [minRegimeScore,setMinRegimeScore]=useState('');
+  const [includeRejected,setIncludeRejected]=useState(false);
   const [running,setRunning]=useState(false);
   const [error,setError]=useState(null);
   const [result,setResult]=useState(null);
@@ -1863,7 +1865,7 @@ function WindowDistributionPanel() {
   const runDist=()=>{
     if(!selectedPairs||selectedPairs.length===0){setError('Wybierz co najmniej jeden wariant.');setResult(null);return;}
     setRunning(true);setError(null);
-    const p=new URLSearchParams({pairs:selectedPairs.join(','),pnl_mode:pnlMode,window_days:String(windowDays)});
+    const p=new URLSearchParams({pairs:selectedPairs.join(','),pnl_mode:pnlMode,window_days:String(windowDays),include_rejected:String(includeRejected)});
     if(minRegimeScore!=='') p.set('min_regime_score',minRegimeScore);
     fetch('/api/window-distribution?'+p.toString())
       .then(r=>r.json())
@@ -1910,6 +1912,11 @@ function WindowDistributionPanel() {
             <div className={`seg-tab ${pnlMode==='tp12'?'active':''}`} onClick={()=>setPnlMode('tp12')}>TP1+TP2</div>
             <div className={`seg-tab ${pnlMode==='tp1'?'active':''}`} onClick={()=>setPnlMode('tp1')}>TP1 only</div>
           </div>
+        </div>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Odrzucone:</span>
+          <div className={`filter-chip ${includeRejected?'active':''}`}
+            onClick={()=>setIncludeRejected(p=>!p)}>{includeRejected?'Uwzględnione':'Wykluczone'}</div>
         </div>
         <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
           <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Regime:</span>
@@ -2075,25 +2082,26 @@ function VariantSweepPanel() {
   const [pnlMode,setPnlMode]=useState('tp12');
   const [topN,setTopN]=useState(8);
   const [windowDays,setWindowDays]=useState(30);
+  const [includeRejected,setIncludeRejected]=useState(false);
   const [status,setStatus]=useState(null);
   const [running,setRunning]=useState(false);
   const [result,setResult]=useState(null);
   const pollRef=React.useRef(null);
 
-  const loadResult=React.useCallback((wd)=>{
-    fetch('/api/variant-sweep/result?window_days='+wd).then(r=>r.ok?r.json():null).then(d=>{
+  const loadResult=React.useCallback((wd,incRej)=>{
+    fetch('/api/variant-sweep/result?window_days='+wd+'&include_rejected='+incRej).then(r=>r.ok?r.json():null).then(d=>{
       if(d&&!d.error) setResult(d); else setResult(null);
     }).catch(()=>{});
   },[]);
 
-  const checkStatus=React.useCallback((wd)=>{
-    fetch('/api/variant-sweep/status?window_days='+wd).then(r=>r.ok?r.json():null).then(s=>{
+  const checkStatus=React.useCallback((wd,incRej)=>{
+    fetch('/api/variant-sweep/status?window_days='+wd+'&include_rejected='+incRej).then(r=>r.ok?r.json():null).then(s=>{
       if(!s) return;
       setStatus(s);
       if(s.done){
         if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
         setRunning(false);
-        loadResult(wd);
+        loadResult(wd,incRej);
       } else if(s.error){
         if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
         setRunning(false);
@@ -2106,20 +2114,20 @@ function VariantSweepPanel() {
   useEffect(()=>{
     setResult(null);setStatus(null);setRunning(false);
     if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
-    checkStatus(windowDays);
-    loadResult(windowDays);
+    checkStatus(windowDays,includeRejected);
+    loadResult(windowDays,includeRejected);
     return ()=>{if(pollRef.current) clearInterval(pollRef.current);};
-  },[windowDays]);
+  },[windowDays,includeRejected]);
 
   const runSweep=()=>{
     setRunning(true);
-    const p=new URLSearchParams({capital:String(capital),pnl_mode:pnlMode,top_n:String(topN),window_days:String(windowDays)});
+    const p=new URLSearchParams({capital:String(capital),pnl_mode:pnlMode,top_n:String(topN),window_days:String(windowDays),include_rejected:String(includeRejected)});
     fetch('/admin/run-variant-sweep?'+p.toString(),{method:'POST'})
       .then(r=>r.json())
       .then(d=>{
         if(!d.ok){setRunning(false);setStatus({error:d.message});return;}
         if(pollRef.current) clearInterval(pollRef.current);
-        pollRef.current=setInterval(()=>checkStatus(windowDays),5000);
+        pollRef.current=setInterval(()=>checkStatus(windowDays,includeRejected),5000);
       })
       .catch(e=>{setRunning(false);setStatus({error:e.message});});
   };
@@ -2159,6 +2167,9 @@ function VariantSweepPanel() {
           <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Top N (kombinacje):</span>
           <input type="number" min={1} max={20} value={topN} onChange={e=>setTopN(Math.min(20,Math.max(1,Number(e.target.value)||1)))}
             style={{width:50,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)'}}>Odrzucone:</span>
+          <div className={`filter-chip ${includeRejected?'active':''}`}
+            onClick={()=>setIncludeRejected(p=>!p)}>{includeRejected?'Uwzględnione':'Wykluczone'}</div>
           <button className="filter-chip active" disabled={running} style={{opacity:running?0.5:1,cursor:running?'default':'pointer'}} onClick={runSweep}>
             {running?'⏳ Liczenie…':`▶ Uruchom sweep ${windowDays}d`}
           </button>
@@ -2256,8 +2267,8 @@ function VariantSweepPanel() {
         </div>
 
         <div style={{display:'flex',gap:14}}>
-          <a href={`/api/variant-sweep/csv?which=singles&window_days=${windowDays}`} download={`variant_sweep_singles_${windowDays}d.csv`} style={{color:'var(--blue)',fontSize:11}}>⬇ CSV warianty</a>
-          <a href={`/api/variant-sweep/csv?which=combos&window_days=${windowDays}`} download={`variant_sweep_combos_${windowDays}d.csv`} style={{color:'var(--blue)',fontSize:11}}>⬇ CSV kombinacje</a>
+          <a href={`/api/variant-sweep/csv?which=singles&window_days=${windowDays}&include_rejected=${includeRejected}`} download={`variant_sweep_singles_${windowDays}d.csv`} style={{color:'var(--blue)',fontSize:11}}>⬇ CSV warianty</a>
+          <a href={`/api/variant-sweep/csv?which=combos&window_days=${windowDays}&include_rejected=${includeRejected}`} download={`variant_sweep_combos_${windowDays}d.csv`} style={{color:'var(--blue)',fontSize:11}}>⬇ CSV kombinacje</a>
         </div>
       </div>}
     </div>

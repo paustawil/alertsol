@@ -112,7 +112,8 @@ def _to_naive_utc(dt: datetime | None) -> datetime | None:
     return dt
 
 
-def load_trades_by_pair(min_regime_score: int | None = None) -> dict[tuple[str, str], list[dict]]:
+def load_trades_by_pair(min_regime_score: int | None = None,
+                         include_rejected: bool = False) -> dict[tuple[str, str], list[dict]]:
     """Jedno zapytanie do bazy, potem grupowanie w Pythonie — szybsze i prostsze niż
     osobne zapytanie na każde okno/kombinację.
 
@@ -122,8 +123,12 @@ def load_trades_by_pair(min_regime_score: int | None = None) -> dict[tuple[str, 
     co bez tego filtra zalewa ranking dziesiątkami fałszywych "wariantów" — jeden na
     każdy unikalny opis. Główny panel Symulatora portfela unika tego pośrednio (jego
     filtr Typ/Wariant jest zasilany z drzewa Algo2), ale ten sweep grupuje surowe pary
-    (type,variant) wprost, więc potrzebuje tego filtra jawnie."""
-    all_trades = db.get_simulator_trades(min_regime_score=min_regime_score, model="Algo2")
+    (type,variant) wprost, więc potrzebuje tego filtra jawnie.
+
+    include_rejected: patrz db.get_simulator_trades — domyślnie False, wyklucza setupy
+    odrzucone algorytmicznie (śledzone dalej tylko do celów ML)."""
+    all_trades = db.get_simulator_trades(min_regime_score=min_regime_score, model="Algo2",
+                                          include_rejected=include_rejected)
     by_pair: dict[tuple[str, str], list[dict]] = {}
     for t in all_trades:
         t["entry_time"] = _to_naive_utc(t.get("entry_time"))
@@ -267,16 +272,18 @@ def pair_label(pair: tuple[str, str]) -> str:
 
 def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
               step_days: int = 1, min_regime_score: int | None = None,
-              window_days: int = WINDOW_30D) -> dict:
+              window_days: int = WINDOW_30D, include_rejected: bool = False) -> dict:
     """window_days: długość okna przesuwanego po wszystkich możliwych datach startu
     (best/avg/worst). Domyślnie 30 (zachowanie sprzed wprowadzenia tego parametru).
     Osobne uruchomienie z window_days=90 daje odpowiednik tego samego sweepu, ale
     dla okien 90-dniowych — inaczej niż w30_90d/run_90d poniżej, który liczy TYLKO
-    jedno stałe okno (dziś-90d -> dziś), a nie przesuwa go po datach startu."""
+    jedno stałe okno (dziś-90d -> dziś), a nie przesuwa go po datach startu.
+
+    include_rejected: patrz db.get_simulator_trades — domyślnie False."""
     # naive UTC — spójne z entry_time/exit_time zwracanymi przez db.get_simulator_trades()
     # (kolumny konwertowane w SQL przez "AT TIME ZONE 'UTC'", psycopg2 zwraca je bez tzinfo)
     today = datetime.now(timezone.utc).replace(tzinfo=None)
-    by_pair = load_trades_by_pair(min_regime_score)
+    by_pair = load_trades_by_pair(min_regime_score, include_rejected=include_rejected)
 
     singles = []
     for pair, trades in sorted(by_pair.items()):
@@ -317,7 +324,7 @@ def run_sweep(capital: float = 1000.0, pnl_mode: str = "tp12", top_n: int = 8,
 
     return {
         "today": today.isoformat(), "capital": capital, "pnl_mode": pnl_mode,
-        "window_days": window_days,
+        "window_days": window_days, "include_rejected": include_rejected,
         "singles": singles, "singles_ranked": eligible, "combos": combos,
     }
 
