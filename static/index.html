@@ -1369,6 +1369,7 @@ function ViewSimulator() {
   const [startCapital,setStartCapital]=useState(1000);
   const [pnlMode,setPnlMode]=useState('tp12');
   const [minRegimeScore,setMinRegimeScore]=useState('');
+  const [includeRejected,setIncludeRejected]=useState(false);
   const [withdrawEnabled,setWithdrawEnabled]=useState(false);
   const [withdrawMode,setWithdrawMode]=useState('weekly');
   const [withdrawPct,setWithdrawPct]=useState(50);
@@ -1438,6 +1439,7 @@ function ViewSimulator() {
       }
     }
     if(minRegimeScore!=='') p.set('min_regime_score',minRegimeScore);
+    if(includeRejected) p.set('include_rejected','true');
     fetch('/api/simulator?'+p.toString())
       .then(r=>r.ok?r.json():[])
       .then(data=>{
@@ -1456,9 +1458,9 @@ function ViewSimulator() {
       })
       .catch(()=>setTrades([]))
       .finally(()=>setLoading(false));
-  },[selectedPairs,allTreePairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore]);
+  },[selectedPairs,allTreePairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore,includeRejected]);
 
-  useEffect(()=>{runSim();},[selectedPairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore]);
+  useEffect(()=>{runSim();},[selectedPairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore,includeRejected]);
 
   const simulation=React.useMemo(()=>{
     if(!trades||trades.length===0) return null;
@@ -1629,6 +1631,14 @@ function ViewSimulator() {
               )}
             </div>
             <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>{minRegimeScore!==''?`Tylko setupy z regime score ≥ ${minRegimeScore}`:'Bez filtra siły reżimu'}</span>
+          </div>
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Odrzucone:</span>
+            <div className={`filter-chip ${includeRejected?'active':''}`}
+              onClick={()=>setIncludeRejected(p=>!p)}>{includeRejected?'Uwzględnione':'Wykluczone'}</div>
+            <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>
+              {includeRejected?'Setupy odrzucone algorytmicznie (rejection) też liczone w symulacji':'Setupy odrzucone algorytmicznie (śledzone tylko do ML) pominięte'}
+            </span>
           </div>
           <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
             <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Wypłaty:</span>
