@@ -4063,6 +4063,62 @@ def api_variant_sweep_csv(which: str = "singles", window_days: int = 30):
     return FileResponse(path, media_type="text/csv", filename=os.path.basename(path))
 
 
+@app.get("/api/window-distribution")
+def api_window_distribution(
+    pairs: str,
+    pnl_mode: str = "tp12",
+    window_days: int = 30,
+    min_regime_score: int | None = None,
+    n_bins: int = 12,
+):
+    """Rozkład wyników Symulatora portfela dla RĘCZNIE wybranego zestawu wariantów:
+    przesuwa okno `window_days` dzień po dniu po wszystkich możliwych datach startu
+    (tak jak Sweep) i zwraca min/max/średnią/medianę + histogram zwrotów % — pomiędzy
+    jednorazowym Symulatorem (jedno stałe okno) a Sweepem (auto-ranking wariantów).
+    Liczone synchronicznie w request — w przeciwieństwie do pełnego sweepu to jeden
+    zestaw i jedno okno, nie eksploracja wszystkich kombinacji, więc jest szybkie.
+
+    pairs: "type:variant,type:variant,..." (dokładne pary, łączone we wspólny portfel)."""
+    import variant_sweep
+
+    pair_list: list[tuple[str, str]] = []
+    for p in pairs.split(","):
+        p = p.strip()
+        if not p or ":" not in p:
+            continue
+        t, v = p.split(":", 1)
+        pair_list.append((t, v))
+    if not pair_list:
+        return {"error": "Brak wybranych wariantów"}
+    if window_days < 1:
+        return {"error": "window_days musi być >= 1"}
+
+    by_pair = variant_sweep.load_trades_by_pair(min_regime_score)
+    found_pairs = [p for p in pair_list if p in by_pair]
+    missing_pairs = [p for p in pair_list if p not in by_pair]
+    if not found_pairs:
+        return {
+            "eligible": False,
+            "reason": "Brak rozstrzygniętych setupów dla wybranych wariantów",
+            "missing": [variant_sweep.pair_label(p) for p in missing_pairs],
+        }
+
+    trades = variant_sweep.merge_trades(*[by_pair[p] for p in found_pairs])
+    first_date = max(min(t["entry_time"] for t in by_pair[p]).date() for p in found_pairs)
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    dist = variant_sweep.window_distribution(
+        trades, window_days, 1, today, 1000.0, pnl_mode,
+        first_date=first_date, n_bins=n_bins,
+    )
+    dist = dist or {"eligible": False, "reason": "brak rozstrzygniętych trade'ów"}
+    dist["pairs"] = [variant_sweep.pair_label(p) for p in found_pairs]
+    dist["missing"] = [variant_sweep.pair_label(p) for p in missing_pairs]
+    dist["window_days"] = window_days
+    dist["pnl_mode"] = pnl_mode
+    return dist
+
+
 @app.post("/admin/run-gpt5-backtest")
 def admin_run_gpt5_backtest():
     """Uruchamia backtest GPT5 (vision: wykresy PNG) w tle. Wyniki: arkusz 'GPT5 test'."""

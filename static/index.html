@@ -1807,7 +1807,245 @@ function ViewSimulator() {
       }
 
       <VariantSweepPanel/>
+      <WindowDistributionPanel/>
     </>
+  );
+}
+
+/* ── Rozkład wyników dla wybranego zestawu wariantów (pomiędzy Symulatorem a Sweepem):
+   Symulator liczy jedno stałe okno; Sweep automatycznie rankinguje warianty/kombinacje.
+   Tu użytkownik sam wybiera konkretny zestaw wariantów + TP1/TP1+TP2 + długość okna, a
+   my przesuwamy to okno po wszystkich możliwych datach startu i pokazujemy pełny rozkład
+   wyników (min/max/średnia/mediana + histogram), zamiast tylko best/avg/worst. ── */
+function WindowDistributionPanel() {
+  const [filterTree,setFilterTree]=useState([]);
+  const [selectedPairs,setSelectedPairs]=useState(null);
+  const [showTypeFilter,setShowTypeFilter]=useState(false);
+  const [pnlMode,setPnlMode]=useState('tp12');
+  const [windowDays,setWindowDays]=useState(30);
+  const [minRegimeScore,setMinRegimeScore]=useState('');
+  const [running,setRunning]=useState(false);
+  const [error,setError]=useState(null);
+  const [result,setResult]=useState(null);
+  const [showTable,setShowTable]=useState(false);
+
+  useEffect(()=>{
+    fetch('/api/algo2/variants-list').then(r=>r.ok?r.json():[])
+      .then(tree=>{
+        setFilterTree(tree);
+        setSelectedPairs(prev=>prev!==null?prev:tree.flatMap(n=>n.variants.filter(v=>v.active).map(v=>`${n.name}:${v.name}`)));
+      }).catch(()=>{});
+  },[]);
+
+  const allTreePairs=React.useMemo(()=>filterTree.flatMap(n=>n.variants.map(v=>`${n.name}:${v.name}`)),[filterTree]);
+  const pairsFiltered=selectedPairs!==null&&allTreePairs.length>0&&selectedPairs.length<allTreePairs.length;
+
+  const runDist=()=>{
+    if(!selectedPairs||selectedPairs.length===0){setError('Wybierz co najmniej jeden wariant.');setResult(null);return;}
+    setRunning(true);setError(null);
+    const p=new URLSearchParams({pairs:selectedPairs.join(','),pnl_mode:pnlMode,window_days:String(windowDays)});
+    if(minRegimeScore!=='') p.set('min_regime_score',minRegimeScore);
+    fetch('/api/window-distribution?'+p.toString())
+      .then(r=>r.json())
+      .then(d=>{
+        setRunning(false);
+        if(d.error){setError(d.error);setResult(null);return;}
+        if(!d.eligible){setError(d.reason||'Za mało historii dla wybranych wariantów i okna.');setResult(null);return;}
+        setResult(d);
+      })
+      .catch(e=>{setRunning(false);setError(e.message);setResult(null);});
+  };
+
+  const pctColor=(v)=>v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
+  const fmtPct=(v)=>`${v>=0?'+':''}${v}%`;
+
+  return (
+    <div className="panel" style={{flexShrink:0,marginTop:4}}>
+      <div className="panel-head">
+        <span className="panel-title">Rozkład wyników — wybrane warianty</span>
+        <span className="panel-badge">wszystkie możliwe okna {windowDays}d</span>
+      </div>
+      <div style={{padding:'12px 16px',display:'flex',flexDirection:'column',gap:10}}>
+        <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
+          Dla wybranego, stałego zestawu wariantów (wspólny kapitał, jak w Symulatorze) przesuwa okno
+          o zadanej długości dzień po dniu przez całą dostępną historię i liczy zwrot % na koniec każdego
+          takiego okna — czyli wszystkie możliwe wyniki, jakie dałby ten zestaw, gdyby zacząć grać w każdym
+          możliwym dniu. Zamiast tylko best/avg/worst (jak Sweep) pokazuje pełny rozrzut: min, max, średnią,
+          medianę i histogram.
+        </p>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Okno:</span>
+          <div className="seg-tabs">
+            <div className={`seg-tab ${windowDays===30?'active':''}`} onClick={()=>setWindowDays(30)}>30d</div>
+            <div className={`seg-tab ${windowDays===90?'active':''}`} onClick={()=>setWindowDays(90)}>90d</div>
+          </div>
+          <input type="number" min={1} max={3650} value={windowDays}
+            onChange={e=>setWindowDays(Math.max(1,Number(e.target.value)||1))}
+            style={{width:60,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+          <span style={{fontSize:10,color:'var(--text3)'}}>dni</span>
+        </div>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Model:</span>
+          <div className="seg-tabs">
+            <div className={`seg-tab ${pnlMode==='tp12'?'active':''}`} onClick={()=>setPnlMode('tp12')}>TP1+TP2</div>
+            <div className={`seg-tab ${pnlMode==='tp1'?'active':''}`} onClick={()=>setPnlMode('tp1')}>TP1 only</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Regime:</span>
+          <div style={{display:'flex',gap:4}}>
+            {['',1,2,3,4,5].map(v=>
+              <div key={v} className={`filter-chip ${minRegimeScore===v?'active':''}`}
+                onClick={()=>setMinRegimeScore(v)}>{v===''?'Wszystkie':`≥${v}`}</div>
+            )}
+          </div>
+        </div>
+        {filterTree.length>0&&selectedPairs!==null&&<div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Warianty:</span>
+          <div className={`filter-chip ${showTypeFilter?'active':''}`} style={{fontFamily:'var(--mono)',fontSize:9}} onClick={()=>setShowTypeFilter(p=>!p)}>
+            {selectedPairs.length} wybrane{pairsFiltered?' (filtr)':''} {showTypeFilter?'▴':'▾'}
+          </div>
+        </div>}
+        {showTypeFilter&&filterTree.length>0&&selectedPairs!==null&&<div style={{padding:'6px 0',borderTop:'1px solid var(--border)',maxHeight:280,overflowY:'auto'}}>
+          <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+            <span className="filter-chip" style={{fontSize:10,opacity:.6}} onClick={()=>setSelectedPairs(allTreePairs)}>wszystkie</span>
+            <span className="filter-chip" style={{fontSize:10,opacity:.35}} onClick={()=>setSelectedPairs([])}>✕ wyczyść</span>
+          </div>
+          {filterTree.map(sc=><div key={sc.name} style={{marginBottom:6}}>
+            <div style={{fontSize:10,fontWeight:700,color:'var(--text2)',fontFamily:'var(--mono)',marginBottom:3,padding:'0 4px'}}>{sc.name}</div>
+            <div style={{display:'flex',gap:4,flexWrap:'wrap',paddingLeft:8}}>
+              {sc.variants.map(v=>{
+                const pair=`${sc.name}:${v.name}`;
+                const sel=selectedPairs.includes(pair);
+                return <div key={v.name} className={`filter-chip ${sel?'active':''}`} style={{fontSize:10,opacity:v.active?1:.4}}
+                  onClick={()=>setSelectedPairs(p=>sel?p.filter(x=>x!==pair):[...p,pair])}>{v.name}</div>;
+              })}
+            </div>
+          </div>)}
+        </div>}
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <button className="filter-chip active" disabled={running} style={{opacity:running?0.5:1,cursor:running?'default':'pointer'}} onClick={runDist}>
+            {running?'⏳ Liczenie…':`▶ Policz rozkład ${windowDays}d`}
+          </button>
+          {error&&<span style={{color:'var(--red)',fontSize:11}}>⚠️ {error}</span>}
+          {result&&result.missing&&result.missing.length>0&&
+            <span style={{color:'var(--amber)',fontSize:10}}>brak danych: {result.missing.join(', ')}</span>}
+        </div>
+      </div>
+
+      {result&&<div style={{padding:'0 16px 14px',display:'flex',flexDirection:'column',gap:14}}>
+        <div className="quick-stat-grid">
+          <div className="qs-cell">
+            <div className="qs-val">{result.n_windows}</div>
+            <div className="qs-lbl">Liczba okien</div>
+          </div>
+          <div className="qs-cell">
+            <div className="qs-val" style={{color:pctColor(result.min_pct)}}>{fmtPct(result.min_pct)}</div>
+            <div className="qs-lbl">Min</div>
+          </div>
+          <div className="qs-cell">
+            <div className="qs-val" style={{color:pctColor(result.max_pct)}}>{fmtPct(result.max_pct)}</div>
+            <div className="qs-lbl">Max</div>
+          </div>
+          <div className="qs-cell">
+            <div className="qs-val" style={{color:pctColor(result.avg_pct)}}>{fmtPct(result.avg_pct)}</div>
+            <div className="qs-lbl">Średnia</div>
+          </div>
+          <div className="qs-cell">
+            <div className="qs-val" style={{color:pctColor(result.median_pct)}}>{fmtPct(result.median_pct)}</div>
+            <div className="qs-lbl">Mediana</div>
+          </div>
+        </div>
+
+        <div>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+            <h5 style={{color:'var(--text2)',fontSize:11,margin:0}}>Histogram zwrotów — {result.n_windows} okien, {result.histogram.length} przedziałów</h5>
+            <span className="filter-chip" style={{fontSize:9}} onClick={()=>setShowTable(p=>!p)}>{showTable?'wykres':'tabela'}</span>
+          </div>
+          {!showTable
+            ? <DistHistogram histogram={result.histogram} avgPct={result.avg_pct} medianPct={result.median_pct}
+                              minPct={result.min_pct} maxPct={result.max_pct}/>
+            : <div style={{overflowX:'auto'}}>
+                <table className="tbl">
+                  <thead><tr><th>Przedział</th><th>Liczba okien</th></tr></thead>
+                  <tbody>
+                    {result.histogram.map((b,i)=>
+                      <tr key={i}>
+                        <td style={{fontFamily:'var(--mono)',fontSize:11}}>{fmtPct(b.from)} … {fmtPct(b.to)}</td>
+                        <td style={{fontFamily:'var(--mono)',fontWeight:600}}>{b.count}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>}
+        </div>
+
+        <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
+          Najgorsze okno: {fmtPct(result.worst_pct)} (start {result.worst_start}). Najlepsze okno: {fmtPct(result.best_pct)} (start {result.best_start}).
+        </p>
+      </div>}
+    </div>
+  );
+}
+
+function DistHistogram({histogram,avgPct,medianPct,minPct,maxPct}) {
+  const [hover,setHover]=useState(null);
+  const VB_W=640,VB_H=220;
+  const padL=36,padR=12,padT=12,padB=26;
+  const chartW=VB_W-padL-padR, chartH=VB_H-padT-padB;
+  const n=histogram.length;
+  const gap=2;
+  const barW=Math.max(1,(chartW-gap*(n-1))/n);
+  const maxCount=Math.max(1,...histogram.map(b=>b.count));
+  const span=(maxPct-minPct)||1;
+
+  const fmtPct=(v)=>`${v>=0?'+':''}${v}%`;
+  const thin=n>14;
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${VB_W} ${VB_H}`} style={{width:'100%',height:220,display:'block'}}>
+        {[0,0.25,0.5,0.75,1].map(f=>{
+          const y=padT+chartH*(1-f);
+          const v=Math.round(maxCount*f);
+          return <g key={f}>
+            <line x1={padL} y1={y} x2={VB_W-padR} y2={y} stroke="var(--border2)" strokeWidth="0.5"/>
+            <text x={padL-6} y={y+3} fontSize="9" fill="var(--text3)" textAnchor="end" fontFamily="var(--mono)">{v}</text>
+          </g>;
+        })}
+        {histogram.map((b,i)=>{
+          const x=padL+i*(barW+gap);
+          const h=maxCount>0?(b.count/maxCount)*chartH:0;
+          const y=padT+chartH-h;
+          const mid=(b.from+b.to)/2;
+          const color=mid>=0?'var(--green)':'var(--red)';
+          return <rect key={i} x={x} y={y} width={barW} height={Math.max(0,h)} rx={2} fill={color}
+            opacity={hover===null||hover===i?0.9:0.4}
+            onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)} style={{cursor:'pointer'}}/>;
+        })}
+        {histogram.map((b,i)=>{
+          if(thin&&i%2!==0) return null;
+          const x=padL+i*(barW+gap)+barW/2;
+          return <text key={i} x={x} y={VB_H-padB+12} fontSize="8" fill="var(--text3)" fontFamily="var(--mono)" textAnchor="middle">{Math.round(b.from)}%</text>;
+        })}
+        <text x={padL+n*(barW+gap)} y={VB_H-padB+12} fontSize="8" fill="var(--text3)" fontFamily="var(--mono)" textAnchor="middle">
+          {Math.round(histogram[n-1].to)}%
+        </text>
+        {[{v:avgPct,color:'var(--blue)'},{v:medianPct,color:'var(--amber)'}].map((m,idx)=>{
+          const x=padL+((m.v-minPct)/span)*chartW;
+          return <line key={idx} x1={x} y1={padT} x2={x} y2={padT+chartH} stroke={m.color} strokeWidth="1.5" strokeDasharray="3,3"/>;
+        })}
+      </svg>
+      <div style={{display:'flex',gap:14,flexWrap:'wrap',fontSize:10,fontFamily:'var(--mono)',color:'var(--text3)',marginTop:2}}>
+        <span><span style={{display:'inline-block',width:8,height:8,borderRadius:2,background:'var(--green)',marginRight:4,verticalAlign:'middle'}}/>zysk</span>
+        <span><span style={{display:'inline-block',width:8,height:8,borderRadius:2,background:'var(--red)',marginRight:4,verticalAlign:'middle'}}/>strata</span>
+        <span><span style={{display:'inline-block',width:10,height:2,background:'var(--blue)',marginRight:4,verticalAlign:'middle'}}/>średnia {fmtPct(avgPct)}</span>
+        <span><span style={{display:'inline-block',width:10,height:2,background:'var(--amber)',marginRight:4,verticalAlign:'middle'}}/>mediana {fmtPct(medianPct)}</span>
+      </div>
+      <div style={{minHeight:16,fontSize:10,fontFamily:'var(--mono)',color:'var(--text2)',marginTop:2}}>
+        {hover!==null&&`${fmtPct(histogram[hover].from)} … ${fmtPct(histogram[hover].to)}: ${histogram[hover].count} okien`}
+      </div>
+    </div>
   );
 }
 
