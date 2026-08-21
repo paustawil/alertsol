@@ -1504,6 +1504,11 @@ function ViewSimulator() {
 
     for(const t of trades){
       const entryTime=new Date(t.entry_time).getTime();
+      // Przy symulacji TP1only pozycja zamyka się (i zwalnia kapitał) w momencie
+      // TP1, a nie w rzeczywistym exit_time (który odzwierciedla zamknięcie TP2/SL
+      // z prawdziwej strategii tp1_tp2). tp1_close_time z backendu spada z powrotem
+      // do exit_time, gdy TP1 nigdy nie padł (np. SL przed TP1).
+      const blockUntilTime=new Date(pnlMode==='tp1'?t.tp1_close_time:t.exit_time).getTime();
       const exitTime=new Date(t.exit_time).getTime();
       const pnlPct=parseFloat(pnlMode==='tp1'?t.tp1_only_pnl_pct:t.pnl_pct);
       const base={id:t.setup_id,type:t.type,variant:t.variant||'baseline',
@@ -1521,7 +1526,7 @@ function ViewSimulator() {
           capital_after:Math.round(capital*100)/100});
         continue;
       }
-      currentExitTime=exitTime;
+      currentExitTime=blockUntilTime;
       blockingId=t.setup_id;
       if(isNaN(pnlPct)) continue;
       const pnlUsd=capital*(pnlPct/100);
