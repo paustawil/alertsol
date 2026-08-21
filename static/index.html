@@ -743,6 +743,7 @@ function ViewDashboard() {
 const DEFAULT_STATUSES=['pending','open','after_tp1','zamkniete'];
 function ViewSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
+  const [resultFilters,setResultFilters]=useState([]);
   const [shadowFilter,setShadowFilter]=useState('all');
   const [showTypeFilter,setShowTypeFilter]=useState(false);
   const [filterTree,setFilterTree]=useState([]);
@@ -757,8 +758,10 @@ function ViewSetups() {
   const [tradeUsdt,setTradeUsdt]=useState(100);
   const [currentPrice,setCurrentPrice]=useState(null);
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'},{v:'odrzucone',l:'Odrzucone (algo)'}];
+  const RESULT_OPTS=[{v:'TP1',l:'TP1'},{v:'TP2',l:'TP2'},{v:'TP1+BE',l:'TP1+BE'},{v:'TP1+SL',l:'TP1+SL'},{v:'TP1+TP2',l:'TP1+TP2'},{v:'SL',l:'SL'},{v:'nieokreslone',l:'Nieokreślone'}];
   const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'bitget',l:'Bitget'},{v:'shadow',l:'Shadow'}];
   const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  const toggleResult=(s)=>setResultFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
   // Załaduj enabled types z ustawień przy montowaniu
   useEffect(()=>{
     fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
@@ -857,6 +860,7 @@ function ViewSetups() {
     if(settingsFilter===null) return;
     const p=new URLSearchParams({limit:200,shadow_filter:shadowFilter});
     if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
+    if(resultFilters.length>0) p.set('results',resultFilters.join(','));
     if(modelFilters.length>0) p.set('models',modelFilters.join(','));
     if(typeFilters.length>0) p.set('types',typeFilters.join(','));
     if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
@@ -865,7 +869,7 @@ function ViewSetups() {
     return fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>{});
-  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
+  },[statusFilters,resultFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
   useEffect(()=>{
     if(settingsFilter===null) return;
     setRows(null);
@@ -937,6 +941,12 @@ function ViewSetups() {
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Status:</span>
           {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
+        </div>
+        {/* Wynik */}
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Wynik:</span>
+          {RESULT_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${resultFilters.includes(v)?'active':''}`} onClick={()=>toggleResult(v)}>{l}</div>)}
+          {resultFilters.length>0&&<span style={{color:'var(--blue)',fontSize:10,cursor:'pointer',padding:'3px 4px'}} onClick={()=>setResultFilters([])}>✕ wyczyść</span>}
         </div>
         {/* Źródło + Typ/Wariant */}
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
