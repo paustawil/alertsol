@@ -4307,6 +4307,7 @@ def api_all_setups(
     types:         str = "",
     variants:      str = "",
     models:        str = "",
+    results:       str = "",
     shadow_filter: str = "all",
     date_from:     str = "",
     date_to:       str = "",
@@ -4315,6 +4316,9 @@ def api_all_setups(
 ):
     """Wszystkie setupy (aktywne + zamknięte) dla zunifikowanej zakładki Setups.
     statuses: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo (przecinkami)
+    results: TP1, TP2, TP1+BE, TP1+SL, TP1+TP2, SL, nieokreslone (przecinkami) — filtruje
+    po kolumnie `result`, niezależnie od statuses (np. do wyfiltrowania samych setupów
+    zamkniętych bez rozstrzygniętego wyniku: results=nieokreslone)
     """
     tradeable: bool | None = None
     bitget_only = False
@@ -4331,6 +4335,7 @@ def api_all_setups(
         types     = [t.strip() for t in types.split(",")     if t.strip()] or None,
         variants  = [v.strip() for v in variants.split(",")  if v.strip()] or None,
         models    = [m.strip() for m in models.split(",")    if m.strip()] or None,
+        results   = [r.strip() for r in results.split(",")   if r.strip()] or None,
         tradeable = tradeable,
         bitget_only = bitget_only,
         date_from = date_from or None,

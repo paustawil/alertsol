@@ -1802,6 +1802,7 @@ def get_all_setups_filtered(
     types: list[str] | None = None,
     variants: list[str] | None = None,
     models: list[str] | None = None,
+    results: list[str] | None = None,
     shadow: bool | None = None,
     tradeable: bool | None = None,
     bitget_only: bool = False,
@@ -1854,6 +1855,10 @@ def get_all_setups_filtered(
     if models:
         where.append("COALESCE(model, '?') = ANY(%(models)s)")
         params["models"] = models
+
+    if results:
+        where.append("result = ANY(%(results)s)")
+        params["results"] = results
 
     if tradeable is not None:
         where.append("tradeable = %(tradeable)s")
