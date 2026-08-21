@@ -1225,19 +1225,29 @@ def get_simulator_trades(
 
     where_sql = " AND ".join(where)
 
+    # Rzeczywisty czas zamknięcia setupu (TP2/SL) — używany jako koniec blokady
+    # dla symulacji strategii tp1_tp2. Fallback gdy exit_time brak: tp1_hit_at+4h,
+    # a jeśli TP1 nigdy nie padł — entry_hit_at+8h.
+    _exit_time_expr = """
+        COALESCE(
+            exit_time,
+            CASE WHEN tp1_hit_at IS NOT NULL
+                 THEN to_timestamp(tp1_hit_at) AT TIME ZONE 'UTC' + interval '4 hours'
+                 ELSE to_timestamp(entry_hit_at) AT TIME ZONE 'UTC' + interval '8 hours'
+            END
+        )"""
+
     with _conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 f"""
                 SELECT setup_id, type, variant, direction, result,
                        to_timestamp(entry_hit_at) AT TIME ZONE 'UTC' AS entry_time,
+                       {_exit_time_expr} AS exit_time,
                        COALESCE(
-                           exit_time,
-                           CASE WHEN tp1_hit_at IS NOT NULL
-                                THEN to_timestamp(tp1_hit_at) AT TIME ZONE 'UTC' + interval '4 hours'
-                                ELSE to_timestamp(entry_hit_at) AT TIME ZONE 'UTC' + interval '8 hours'
-                           END
-                       ) AS exit_time,
+                           to_timestamp(tp1_hit_at) AT TIME ZONE 'UTC',
+                           {_exit_time_expr}
+                       ) AS tp1_close_time,
                        {_entry} AS avg_entry,
                        avg_exit,
                        ROUND(({pnl_pct_calc})::numeric, 4) AS pnl_pct,

@@ -42,7 +42,7 @@ import argparse
 import csv
 import itertools
 from datetime import datetime, timedelta, timezone
-from statistics import mean
+from statistics import mean, median
 
 import db
 
@@ -62,13 +62,17 @@ def simulate_equity(trades: list[dict], start_capital: float, pnl_mode: str) -> 
 
     for t in trades:
         entry_time = t["entry_time"]
-        exit_time = t["exit_time"]
+        # W trybie tp1 pozycja zamyka się (i zwalnia kapitał) w momencie TP1, nie w
+        # rzeczywistym exit_time (zamknięcie TP2/SL prawdziwej strategii tp1_tp2) —
+        # patrz tp1_close_time w db.get_simulator_trades(). Musi być spójne z blokadą
+        # w ViewSimulator (static/index.html), z którego ta funkcja jest portem.
+        block_until = t["tp1_close_time"] if pnl_mode == "tp1" else t["exit_time"]
         pnl_pct = t["tp1_only_pnl_pct"] if pnl_mode == "tp1" else t["pnl_pct"]
 
         if current_exit_time is not None and entry_time < current_exit_time:
             skipped += 1
             continue
-        current_exit_time = exit_time
+        current_exit_time = block_until
         if pnl_pct is None:
             continue
         pnl_pct = float(pnl_pct)
@@ -124,6 +128,7 @@ def load_trades_by_pair(min_regime_score: int | None = None) -> dict[tuple[str, 
     for t in all_trades:
         t["entry_time"] = _to_naive_utc(t.get("entry_time"))
         t["exit_time"] = _to_naive_utc(t.get("exit_time"))
+        t["tp1_close_time"] = _to_naive_utc(t.get("tp1_close_time")) or t["exit_time"]
         if t["entry_time"] is None or t["exit_time"] is None:
             continue
         key = (t.get("type") or "unknown", t.get("variant") or "baseline")
@@ -139,10 +144,14 @@ def merge_trades(*trade_lists: list[dict]) -> list[dict]:
 
 # ── Sweep 30-dniowy (wszystkie możliwe daty startu) ──────────────────────────
 
-def sweep_window(trades: list[dict], window_days: int, step_days: int,
-                  today: datetime, start_capital: float, pnl_mode: str,
-                  first_date=None) -> dict | None:
-    """first_date: nadpisuje datę "od kiedy wariant/kombinacja jest dostępna". Domyślnie
+def _collect_window_results(trades: list[dict], window_days: int, step_days: int,
+                             today: datetime, start_capital: float, pnl_mode: str,
+                             first_date=None) -> list[dict] | None:
+    """Przesuwa okno `window_days` dzień po dniu (co `step_days`) od `first_date` do
+    (today − window_days) i liczy equity symulatora dla każdej daty startu. Zwraca
+    None gdy za mało historii na choćby jedno pełne okno.
+
+    first_date: nadpisuje datę "od kiedy wariant/kombinacja jest dostępna". Domyślnie
     (pojedynczy wariant) to najwcześniejszy trade. Dla kombinacji musi to być MAX
     (najpóźniejsza) z dat startu poszczególnych składników — inaczej wczesne okna
     testowałyby tylko część kombinacji (te warianty, które już wystartowały), a nie
@@ -153,7 +162,7 @@ def sweep_window(trades: list[dict], window_days: int, step_days: int,
         first_date = min(t["entry_time"] for t in trades).date()
     last_start = (today - timedelta(days=window_days)).date()
     if first_date > last_start:
-        return {"eligible": False, "reason": f"za mało historii (od {first_date}, potrzeba {window_days}d)"}
+        return None
 
     results = []
     d = first_date
@@ -164,6 +173,19 @@ def sweep_window(trades: list[dict], window_days: int, step_days: int,
         sim = simulate_equity(window_trades, start_capital, pnl_mode)
         results.append({"start": d.isoformat(), **sim})
         d += timedelta(days=step_days)
+    return results
+
+
+def sweep_window(trades: list[dict], window_days: int, step_days: int,
+                  today: datetime, start_capital: float, pnl_mode: str,
+                  first_date=None) -> dict | None:
+    if not trades:
+        return None
+    eff_first_date = first_date if first_date is not None else min(t["entry_time"] for t in trades).date()
+    results = _collect_window_results(trades, window_days, step_days, today, start_capital,
+                                       pnl_mode, first_date)
+    if results is None:
+        return {"eligible": False, "reason": f"za mało historii (od {eff_first_date}, potrzeba {window_days}d)"}
 
     returns = [r["return_pct"] for r in results]
     best = max(results, key=lambda r: r["return_pct"])
@@ -173,6 +195,53 @@ def sweep_window(trades: list[dict], window_days: int, step_days: int,
         "best_pct": best["return_pct"], "best_start": best["start"],
         "worst_pct": worst["return_pct"], "worst_start": worst["start"],
         "avg_pct": round(mean(returns), 2),
+    }
+
+
+def window_distribution(trades: list[dict], window_days: int, step_days: int,
+                         today: datetime, start_capital: float, pnl_mode: str,
+                         first_date=None, n_bins: int = 12) -> dict | None:
+    """Jak sweep_window, ale zamiast tylko best/avg/worst zwraca pełny rozkład: min/max/
+    średnia/mediana oraz histogram (n_bins równych przedziałów pomiędzy najgorszym
+    a najlepszym wynikiem, z liczbą okien wpadających w każdy z nich). Używane przez
+    panel 'Rozkład wyników' — pomiędzy jednorazowym Symulatorem (jedno stałe okno) a
+    Sweepem (auto-ranking wariantów/kombinacji): tu użytkownik sam wybiera konkretny
+    zestaw wariantów i patrzy na rozrzut wyników po wszystkich możliwych oknach."""
+    if not trades:
+        return None
+    eff_first_date = first_date if first_date is not None else min(t["entry_time"] for t in trades).date()
+    results = _collect_window_results(trades, window_days, step_days, today, start_capital,
+                                       pnl_mode, first_date)
+    if results is None:
+        return {"eligible": False, "reason": f"za mało historii (od {eff_first_date}, potrzeba {window_days}d)"}
+
+    returns = sorted(r["return_pct"] for r in results)
+    n = len(returns)
+    lo, hi = returns[0], returns[-1]
+    best = max(results, key=lambda r: r["return_pct"])
+    worst = min(results, key=lambda r: r["return_pct"])
+
+    if hi > lo:
+        bin_width = (hi - lo) / n_bins
+        histogram = [{"from": round(lo + i * bin_width, 2),
+                      "to": round(lo + (i + 1) * bin_width, 2), "count": 0}
+                     for i in range(n_bins)]
+        for v in returns:
+            idx = int((v - lo) / bin_width)
+            if idx >= n_bins:  # v == hi, prawy skraj ostatniego binu
+                idx = n_bins - 1
+            histogram[idx]["count"] += 1
+    else:
+        # wszystkie okna dały identyczny wynik — jeden bin obejmujący tę wartość
+        histogram = [{"from": round(lo, 2), "to": round(hi, 2), "count": n}]
+
+    return {
+        "eligible": True, "n_windows": n,
+        "min_pct": round(lo, 2), "max_pct": round(hi, 2),
+        "avg_pct": round(mean(returns), 2), "median_pct": round(median(returns), 2),
+        "best_pct": best["return_pct"], "best_start": best["start"],
+        "worst_pct": worst["return_pct"], "worst_start": worst["start"],
+        "histogram": histogram, "returns": returns,
     }
 
 
