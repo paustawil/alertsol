@@ -1157,12 +1157,21 @@ def get_simulator_trades(
     variants: list[str] | None = None,
     min_regime_score: int | None = None,
     model: str | None = None,
+    include_rejected: bool = False,
 ) -> list[dict]:
     """Zwraca zamknięte setupy z entry_hit_at, exit_time, pnl_pct — do symulatora portfela.
 
     model: opcjonalny filtr (np. 'Algo2') — bez niego zwraca setupy z KAŻDEGO modelu,
     w tym starszych/innych źródeł (Grok, Gemini2, GPT backtesty, ręczne alerty), gdzie
-    type/variant bywają wolnym tekstem opisu setupu zamiast krótkiego klucza wariantu."""
+    type/variant bywają wolnym tekstem opisu setupu zamiast krótkiego klucza wariantu.
+
+    include_rejected: domyślnie False — setupy odrzucone algorytmicznie (rejection
+    niepuste, patrz algo_detect_setups()/rejected_by_algo w sol_alert.py) są mimo to
+    dalej śledzone i rozstrzygane (mogą mieć entry_hit_at i prawdziwy result) wyłącznie
+    do celów ML — nigdy nie były prawdziwym ani hipotetycznie wchodzonym tradem, więc nie
+    powinny wchodzić do symulacji portfela razem z zaakceptowanymi setupami tego samego
+    type:variant. Ten sam filtr (COALESCE(rejection,'') = '') jest już konsekwentnie
+    stosowany przy każdej innej analityce Algo2 w tym pliku."""
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage = 20
     _tu = f"COALESCE(trade_usdt, {trade_usdt})"
@@ -1205,6 +1214,8 @@ def get_simulator_trades(
 
     where = ["resolved = TRUE", "entry_hit_at IS NOT NULL",
              "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"]
+    if not include_rejected:
+        where.append("COALESCE(rejection, '') = ''")
     params: dict = {}
 
     if variants:
