@@ -2269,7 +2269,7 @@ def log_to_wyniki(s: dict, result: str, entry_ts, exit_ts,
         # Alternatywny scenariusz: całość na TP1 (tylko dla TP2 i TP1+BE)
         alt_pnl_val = ""
         delta_val   = ""
-        if result in ("TP2", "TP1+BE", "TP1+SL") and eff_entry and tps:
+        if result in ("TP2", "TP1+TP2", "TP1+BE", "TP1+SL") and eff_entry and tps:
             tp1_p = float(tps[0])
             sign  = 1 if s.get("direction") == "long" else -1
             fq    = (s.get("exchange_qty_full") or "0").replace(",", ".")
@@ -2475,7 +2475,7 @@ def calc_pnl_scenarios(setup: dict, trade_usdt: float = 100.0, leverage: int = 2
     full_qty = max(math.floor((trade_usdt * leverage / entry) / 0.1) * 0.1, 0.1)
     half_qty = max(math.floor((full_qty / 2) / 0.1) * 0.1, 0.1)
 
-    tp1_reached = result in ("TP1", "TP2", "TP1+BE", "TP1+SL")
+    tp1_reached = result in ("TP1", "TP2", "TP1+TP2", "TP1+BE", "TP1+SL")
 
     # ── TP1only ──────────────────────────────────────────────────────────────
     if tp1_reached:
@@ -2485,7 +2485,7 @@ def calc_pnl_scenarios(setup: dict, trade_usdt: float = 100.0, leverage: int = 2
     tp1only_pct = round(tp1only_pnl / trade_usdt * 100, 1)
 
     # ── TP1+TP2 ──────────────────────────────────────────────────────────────
-    if result == "TP2" and tp2 is not None:
+    if result in ("TP2", "TP1+TP2") and tp2 is not None:
         # Połowa na TP1, połowa na TP2
         tp1tp2_pnl = round(
             sign * half_qty * (tp1 - entry) + sign * half_qty * (tp2 - entry), 2
@@ -2871,7 +2871,9 @@ def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
             tp1_now = tp1 is not None and _hits(c, tp1, d, "tp")
 
             if tp2_hit:
-                result = "TP2"
+                # TP2 zawsze implikuje wcześniejsze przejście przez TP1 — patrz analogiczny
+                # komentarz w check_pending() niżej w tym pliku.
+                result = "TP1+TP2"
                 break
             if tp1_now and sl_hit and tp1_hit_at is None:
                 result = "SL"
@@ -2900,7 +2902,7 @@ def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
             eff_exit = sl
         elif result == "TP1":
             eff_exit = tp1
-        elif result == "TP2":
+        elif result == "TP1+TP2":
             eff_exit = (tp1 + tp2) / 2 if tp1 else tp2
         else:  # TP1+BE, TP1+SL
             eff_exit = (tp1 + effective_sl) / 2 if tp1 else effective_sl
@@ -2918,7 +2920,7 @@ def _calc_hypo_result(setup: dict, candles_m15: list[dict]) -> None:
         elif result == "TP1":
             tp1_qty = full_qty if tp2 is None else half_qty
             hypo_pnl = round(sign * tp1_qty * (eff_exit - eff_entry), 2)
-        else:  # TP2, TP1+BE, TP1+SL — obie połówki
+        else:  # TP1+TP2, TP1+BE, TP1+SL — obie połówki
             hypo_pnl = round(sign * (half_qty + half_qty) * (eff_exit - eff_entry), 2)
 
         db.save_hypo_result(sid, result, hypo_pnl)
@@ -3030,7 +3032,18 @@ def check_pending(candles_m15: list[dict]):
             tp1_now = tp1 and _hits(c, tp1, d, "tp")
 
             if tp2_hit:
-                result, exit_ts = "TP2", c["time"]; break
+                # TP2 zawsze implikuje wcześniejsze przejście przez TP1 (TP1 jest bliżej
+                # entry niż TP2) — jeśli nie zostało jeszcze zarejestrowane (np. TP1 i TP2
+                # trafione na tej samej świecy, więc pętla nie zdążyła ustawić tp1_hit_at
+                # w gałęzi niżej), przyjmij czas tej świecy jako przybliżenie. Bez tego
+                # wynik zapisywał się jako goły "TP2" zamiast "TP1+TP2" (mimo że TP1 zawsze
+                # padał wcześniej), a tp1_hit_at zostawał NULL na stałe — co m.in. w
+                # symulatorze portfela błędnie wydłużało blokadę TP1only do czasu TP2.
+                if tp1_hit_at is None:
+                    tp1_hit_at = c["time"]
+                s["tp1_hit_at"] = tp1_hit_at
+                result, exit_ts = "TP1+TP2", c["time"]
+                break
 
             # TP1 i SL na tej samej świecy — nie znamy kolejności, bezpieczniej SL
             if tp1_now and sl_hit and tp1_hit_at is None:
@@ -3099,7 +3112,7 @@ def check_pending(candles_m15: list[dict]):
                 exit_prices = [sl]
             elif result == "TP1":
                 exit_prices = [tp1]
-            elif result == "TP2":
+            elif result == "TP1+TP2":
                 exit_prices = [tp1, tp2] if tp1 else [tp2]
             else:  # TP1+BE lub TP1+SL
                 exit_prices = [tp1, eff_sl_exit] if tp1 else [eff_sl_exit]
@@ -3115,7 +3128,8 @@ def check_pending(candles_m15: list[dict]):
         if result:
             sign = "+" if move >= 0 else ""
             print(f"[pending] {s['model']} {d}: {result} {sign}${move:.2f}")
-            db.resolve_setup(s["setup_id"], result, eff_entry, eff_exit, move, exit_ts)
+            db.resolve_setup(s["setup_id"], result, eff_entry, eff_exit, move, exit_ts,
+                              tp1_hit_at=s.get("tp1_hit_at"))
             icon = "💰" if move > 0 else ("⚖️" if move == 0 else "🔴")
             if s.get("tradeable"):
                 sid_txt = f" #{s['setup_id']}" if s.get("setup_id") else ""

@@ -319,11 +319,19 @@ def resolve_setup(
     avg_exit: float | None,
     pnl_usd: float | None,
     exit_ts: int | None = None,
+    tp1_hit_at: int | None = None,
 ) -> None:
     """
     Zamknij setup: zapisz wynik, PnL, czas wyjścia.
     Jeśli pnl_usd=None, oblicza PnL z danych setupu (entries, tps, sl, qty).
     pnl_pct obliczany automatycznie.
+
+    tp1_hit_at: opcjonalnie nadpisuje czas trafienia TP1 (unixtime), gdy setup rozstrzyga
+    się (np. na TP1+TP2) w tym samym przebiegu check_pending(), w którym TP1 padł — bez
+    tego kolumna zostawałaby NULL na stałe (mark_tp1_hit()/update_setup() nie są wtedy
+    wywoływane), co m.in. psuje logikę blokady TP1only w symulatorze portfela
+    (patrz tp1_close_time w get_simulator_trades). COALESCE — nie nadpisuje już
+    zapisanej wartości, gdy wywołujący jej nie poda.
     """
     exit_time = None
     if exit_ts:
@@ -394,22 +402,59 @@ def resolve_setup(
                     pnl_usd     = COALESCE(%(pnl_usd)s, pnl_usd),
                     pnl_pct     = COALESCE(%(pnl_pct)s, pnl_pct),
                     exit_time   = COALESCE(%(exit_time)s, exit_time),
+                    tp1_hit_at  = COALESCE(%(tp1_hit_at)s, tp1_hit_at),
                     resolved    = TRUE,
                     resolved_at = NOW(),
                     status      = 'closed'
                 WHERE setup_id = %(setup_id)s
                 """,
                 {
-                    "setup_id":  setup_id,
-                    "result":    result,
-                    "avg_entry": avg_entry,
-                    "avg_exit":  avg_exit,
-                    "pnl_usd":   pnl_usd,
-                    "pnl_pct":   pnl_pct,
-                    "exit_time": exit_time,
+                    "setup_id":   setup_id,
+                    "result":     result,
+                    "avg_entry":  avg_entry,
+                    "avg_exit":   avg_exit,
+                    "pnl_usd":    pnl_usd,
+                    "pnl_pct":    pnl_pct,
+                    "exit_time":  exit_time,
+                    "tp1_hit_at": tp1_hit_at,
                 },
             )
     log.info(f"[db] Setup #{setup_id} zamknięty: {result}, PnL={pnl_usd}")
+
+
+def get_tp2_mislabeled_setups() -> list[dict]:
+    """Setupy zapisane jako result='TP2' sprzed poprawki mislabelingu (patrz commit
+    'Fix TP2 mislabeled as bare TP2 instead of TP1+TP2') — TP2 zawsze implikuje
+    wcześniejsze TP1, więc to zawsze błędna etykieta, nigdy legalny odrębny wynik.
+    Używane przez backfill_tp1_tp2.py do jednorazowego relabelingu + odtworzenia
+    tp1_hit_at ze świec Bitget."""
+    with _conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT setup_id, direction, entry_hit_at, exit_time, tps, tp1_hit_at
+                FROM setups
+                WHERE result = 'TP2' AND entry_hit_at IS NOT NULL AND exit_time IS NOT NULL
+                ORDER BY entry_hit_at ASC
+                """
+            )
+            return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def backfill_tp1_tp2(setup_id: int, tp1_hit_at: int | None) -> None:
+    """Relabeluje jeden setup z result='TP2' na 'TP1+TP2' i (jeśli podano) ustawia
+    tp1_hit_at odtworzone ze świec. WHERE result='TP2' jako dodatkowe zabezpieczenie —
+    nie dotyka wiersza, jeśli ktoś/coś inne już go zmieniło w międzyczasie."""
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE setups
+                SET result = 'TP1+TP2', tp1_hit_at = COALESCE(%(tp1_hit_at)s, tp1_hit_at)
+                WHERE setup_id = %(setup_id)s AND result = 'TP2'
+                """,
+                {"setup_id": setup_id, "tp1_hit_at": tp1_hit_at},
+            )
 
 
 def mark_tp1_hit(
