@@ -1421,7 +1421,7 @@ function ViewSimulator() {
         p.set('date_to',d.toISOString().slice(0,10));
       }
     } else {
-      const days={'7d':7,'14d':14,'30d':30,'90d':90,'6m':180,'12m':365,'all':0}[periodMode]||30;
+      const days={'7d':7,'14d':14,'30d':30,'90d':90,'6m':180,'12m':365,'all':0}[periodMode]??30;
       if(days>0){
         const d=new Date(); d.setDate(d.getDate()-days);
         p.set('date_from',d.toISOString().slice(0,10));
