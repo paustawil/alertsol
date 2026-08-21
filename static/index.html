@@ -2815,9 +2815,105 @@ function ViewSettings() {
         >{saving ? 'Zapisuję…' : 'Zapisz'}</button>
         {msg && <span style={{fontSize:12, fontFamily:'var(--mono)', color:msg.ok?'var(--green)':'var(--red)'}}>{msg.text}</span>}
       </div>
+
+      <BackfillTp1Tp2Panel/>
     </div>
   );
 }
+
+/* ── Jednorazowy backfill: setupy result='TP2' -> 'TP1+TP2' + odtworzenie tp1_hit_at
+   ze świec Bitget (patrz backfill_tp1_tp2.py / POST /admin/backfill-tp1-tp2). Ten panel
+   pozwala odpalić to z dashboardu, bez terminala. ── */
+function BackfillTp1Tp2Panel() {
+  const [running,setRunning]=useState(false);
+  const [status,setStatus]=useState(null);
+  const [result,setResult]=useState(null);
+  const [error,setError]=useState(null);
+  const pollRef=React.useRef(null);
+
+  React.useEffect(()=>()=>{if(pollRef.current) clearInterval(pollRef.current);},[]);
+
+  const checkStatus=()=>{
+    fetch('/admin/backfill-tp1-tp2/status').then(r=>r.ok?r.json():null).then(s=>{
+      if(!s) return;
+      setStatus(s);
+      if(s.done){
+        if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+        setRunning(false);
+        fetch('/admin/backfill-tp1-tp2/result').then(r=>r.ok?r.json():null).then(d=>{
+          if(d&&!d.error) setResult(d);
+        }).catch(()=>{});
+      } else if(s.error){
+        if(pollRef.current){clearInterval(pollRef.current);pollRef.current=null;}
+        setRunning(false);
+        setError(s.error);
+      }
+    }).catch(()=>{});
+  };
+
+  const run=(apply)=>{
+    if(apply&&!window.confirm('To zapisze zmiany w bazie (result: TP2 -> TP1+TP2, odtworzone tp1_hit_at). Kontynuować?')) return;
+    setRunning(true);setError(null);setResult(null);
+    fetch('/admin/backfill-tp1-tp2?apply='+apply,{method:'POST'})
+      .then(r=>r.json())
+      .then(d=>{
+        if(!d.ok){setRunning(false);setError(d.message);return;}
+        if(pollRef.current) clearInterval(pollRef.current);
+        pollRef.current=setInterval(checkStatus,2000);
+      })
+      .catch(e=>{setRunning(false);setError(e.message);});
+  };
+
+  return (
+    <div className="panel" style={{flexShrink:0,marginTop:16}}>
+      <div className="panel-head">
+        <span className="panel-title">Backfill: TP2 → TP1+TP2 (historyczne setupy)</span>
+      </div>
+      <div style={{padding:'12px 16px',display:'flex',flexDirection:'column',gap:10}}>
+        <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
+          Jednorazowa poprawka dla setupów zapisanych jako wynik „TP2" sprzed poprawki błędu etykietowania —
+          trafienie TP2 zawsze oznacza wcześniejsze trafienie TP1, więc takie setupy dostaną etykietę
+          „TP1+TP2", a czas trafienia TP1 zostanie odtworzony ze świec Bitget (jeśli się uda). Najpierw
+          uruchom dry-run i sprawdź podgląd, dopiero potem „Zapisz zmiany".
+        </p>
+        <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+          <button className="filter-chip active" disabled={running} style={{opacity:running?0.5:1,cursor:running?'default':'pointer'}} onClick={()=>run(false)}>
+            {running?'⏳ Liczenie…':'▶ Dry-run (podgląd, nic nie zapisuje)'}
+          </button>
+          {result&&!running&&<button className="filter-chip" style={{color:'var(--red)'}} onClick={()=>run(true)}>
+            💾 Zapisz zmiany ({result.count} setupów)
+          </button>}
+          {error&&<span style={{color:'var(--red)',fontSize:11}}>⚠️ {error}</span>}
+          {running&&status&&status.started_at&&<span style={{color:'var(--text3)',fontSize:10,fontFamily:'var(--mono)'}}>started {String(status.started_at).slice(11,16)} UTC</span>}
+        </div>
+
+        {result&&<div style={{display:'flex',flexDirection:'column',gap:8}}>
+          <div style={{fontSize:11,fontFamily:'var(--mono)',color:result.apply?'var(--green)':'var(--text2)'}}>
+            {result.apply?'✓ Zapisano':'Podgląd (dry-run)'} — {result.count} setupów, {result.reconstructed} z odtworzonym tp1_hit_at
+            {result.count>result.reconstructed&&result.count>0&&<span style={{color:'var(--amber)'}}> ({result.count-result.reconstructed} bez odtworzonego czasu TP1 — świece niedostępne)</span>}
+          </div>
+          {result.count===0&&<div style={{fontSize:11,color:'var(--text3)'}}>Brak setupów z result='TP2' — nic do zrobienia.</div>}
+          {result.count>0&&<div style={{overflowX:'auto',maxHeight:300,overflowY:'auto'}}>
+            <table className="tbl">
+              <thead><tr><th>ID</th><th>Kier.</th><th>Stare tp1_hit_at</th><th>Nowe tp1_hit_at</th></tr></thead>
+              <tbody>
+                {result.rows.map(r=>
+                  <tr key={r.setup_id}>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600}}>{r.setup_id}</td>
+                    <td><span className={`kier-badge ${(r.direction||'long').toLowerCase()}`}>{(r.direction||'').toUpperCase()}</span></td>
+                    <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text3)'}}>{r.old_tp1_hit_at||'—'}</td>
+                    <td style={{fontFamily:'var(--mono)',fontSize:11,color:r.new_tp1_hit_at?'var(--green)':'var(--text3)'}}>{r.new_tp1_hit_at||'— (nieodtworzone)'}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>}
+        </div>}
+      </div>
+    </div>
+  );
+}
+
 /* ── Sidebar ── */
 function Sidebar({ tab, setTab }) {
   const {price, setups} = useDash();

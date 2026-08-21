@@ -4137,6 +4137,93 @@ def api_window_distribution(
     return dist
 
 
+_backfill_tp2_status: dict = {"running": False, "done": False, "error": None, "started_at": None}
+_backfill_tp2_result: dict | None = None
+
+
+@app.post("/admin/backfill-tp1-tp2")
+def admin_backfill_tp1_tp2(apply: bool = False):
+    """Jednorazowy backfill setupów zapisanych jako result='TP2' sprzed poprawki
+    mislabelingu (patrz backfill_tp1_tp2.py — ten endpoint robi dokładnie to samo,
+    tylko triggerowane z dashboardu zamiast z terminala/Railway CLI, dla wygody).
+    Relabeluje na 'TP1+TP2' i odtwarza tp1_hit_at ze świec Bitget (pierwsza świeca,
+    która trafia poziom TP1 w oknie [entry_hit_at, exit_time]).
+
+    apply=false (domyślnie): dry-run — liczy i zwraca podgląd, nic nie zapisuje w bazie.
+    apply=true: faktycznie robi UPDATE (przez db.backfill_tp1_tp2, które i tak dotyka
+    tylko wierszy nadal oznaczonych 'TP2' — bezpieczne przy ponownym uruchomieniu).
+
+    Wyniki: GET /admin/backfill-tp1-tp2/status, GET /admin/backfill-tp1-tp2/result
+    """
+    if _backfill_tp2_status.get("running"):
+        return {"ok": False, "message": "Backfill już trwa — poczekaj na zakończenie."}
+
+    import threading
+    import backfill_tp1_tp2 as bf
+
+    def _run():
+        global _backfill_tp2_result
+        _backfill_tp2_status.update({
+            "running": True, "done": False, "error": None,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        try:
+            rows = db.get_tp2_mislabeled_setups()
+            preview = []
+            for row in rows:
+                setup_id = row["setup_id"]
+                tps = row.get("tps") or []
+                old_tp1_hit_at = row.get("tp1_hit_at")
+                tp1_hit_at = old_tp1_hit_at
+
+                if tps:
+                    try:
+                        tp1 = float(tps[0])
+                        entry_ts = int(row["entry_hit_at"])
+                        exit_ts = int(row["exit_time"].timestamp())
+                        candles = bf.fetch_window(entry_ts, exit_ts)
+                        found = bf.find_tp1_hit(row["direction"], tp1, candles)
+                        if found is not None:
+                            tp1_hit_at = found
+                    except Exception as e:
+                        logging.warning(f"[backfill-tp1-tp2] #{setup_id} błąd świec: {e}")
+
+                preview.append({
+                    "setup_id": setup_id, "direction": row.get("direction"),
+                    "old_tp1_hit_at": old_tp1_hit_at, "new_tp1_hit_at": tp1_hit_at,
+                })
+                if apply:
+                    db.backfill_tp1_tp2(setup_id, tp1_hit_at)
+
+            reconstructed = sum(
+                1 for p in preview
+                if p["new_tp1_hit_at"] is not None and p["new_tp1_hit_at"] != p["old_tp1_hit_at"]
+            )
+            _backfill_tp2_result = {
+                "apply": apply, "count": len(preview), "reconstructed": reconstructed,
+                "rows": preview,
+            }
+            _backfill_tp2_status.update({"running": False, "done": True})
+        except Exception as e:
+            logging.error(f"[backfill-tp1-tp2] Błąd: {e}", exc_info=True)
+            _backfill_tp2_status.update({"running": False, "done": False, "error": str(e)})
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "message": f"Backfill uruchomiony w tle ({'APPLY' if apply else 'dry-run'})."}
+
+
+@app.get("/admin/backfill-tp1-tp2/status")
+def admin_backfill_tp1_tp2_status():
+    return _backfill_tp2_status
+
+
+@app.get("/admin/backfill-tp1-tp2/result")
+def admin_backfill_tp1_tp2_result():
+    if _backfill_tp2_result is None:
+        return {"error": "Brak wyników — uruchom najpierw POST /admin/backfill-tp1-tp2"}
+    return _backfill_tp2_result
+
+
 @app.post("/admin/run-gpt5-backtest")
 def admin_run_gpt5_backtest():
     """Uruchamia backtest GPT5 (vision: wykresy PNG) w tle. Wyniki: arkusz 'GPT5 test'."""
