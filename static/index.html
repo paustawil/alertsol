@@ -1661,7 +1661,7 @@ function ViewSimulator() {
           <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
             <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Max SL:</span>
             <div style={{display:'flex',gap:4}}>
-              {['',10,15,20,30].map(v=>
+              {['',10,20,30,40,50].map(v=>
                 <div key={v} className={`filter-chip ${maxSlLossPct===v?'active':''}`}
                   onClick={()=>setMaxSlLossPct(v)}>{v===''?'Wszystkie':`≤${v}%`}</div>
               )}
@@ -1878,6 +1878,7 @@ function WindowDistributionPanel() {
   const [windowDays,setWindowDays]=useState(30);
   const [minRegimeScore,setMinRegimeScore]=useState('');
   const [includeRejected,setIncludeRejected]=useState(false);
+  const [maxSlLossPct,setMaxSlLossPct]=useState('');
   const [running,setRunning]=useState(false);
   const [error,setError]=useState(null);
   const [result,setResult]=useState(null);
@@ -1899,6 +1900,7 @@ function WindowDistributionPanel() {
     setRunning(true);setError(null);
     const p=new URLSearchParams({pairs:selectedPairs.join(','),pnl_mode:pnlMode,window_days:String(windowDays),include_rejected:String(includeRejected)});
     if(minRegimeScore!=='') p.set('min_regime_score',minRegimeScore);
+    if(maxSlLossPct!=='') p.set('max_sl_loss_pct',maxSlLossPct);
     fetch('/api/window-distribution?'+p.toString())
       .then(r=>r.json())
       .then(d=>{
@@ -1958,6 +1960,18 @@ function WindowDistributionPanel() {
                 onClick={()=>setMinRegimeScore(v)}>{v===''?'Wszystkie':`≥${v}`}</div>
             )}
           </div>
+        </div>
+        <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Max SL:</span>
+          <div style={{display:'flex',gap:4}}>
+            {['',10,20,30,40,50].map(v=>
+              <div key={v} className={`filter-chip ${maxSlLossPct===v?'active':''}`}
+                onClick={()=>setMaxSlLossPct(v)}>{v===''?'Wszystkie':`≤${v}%`}</div>
+            )}
+          </div>
+          <input type="number" min="0" step="1" placeholder="własny %" value={maxSlLossPct}
+            onChange={e=>setMaxSlLossPct(e.target.value===''?'':Math.max(0,Number(e.target.value)))}
+            style={{width:70,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
         </div>
         {filterTree.length>0&&selectedPairs!==null&&<div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:70}}>Warianty:</span>

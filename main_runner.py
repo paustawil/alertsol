@@ -4091,6 +4091,7 @@ def api_window_distribution(
     min_regime_score: int | None = None,
     n_bins: int = 12,
     include_rejected: bool = False,
+    max_sl_loss_pct: float | None = None,
 ):
     """Rozkład wyników Symulatora portfela dla RĘCZNIE wybranego zestawu wariantów:
     przesuwa okno `window_days` dzień po dniu po wszystkich możliwych datach startu
@@ -4100,7 +4101,8 @@ def api_window_distribution(
     zestaw i jedno okno, nie eksploracja wszystkich kombinacji, więc jest szybkie.
 
     pairs: "type:variant,type:variant,..." (dokładne pary, łączone we wspólny portfel).
-    include_rejected: domyślnie False — patrz db.get_simulator_trades."""
+    include_rejected: domyślnie False — patrz db.get_simulator_trades.
+    max_sl_loss_pct: domyślnie brak filtra — patrz db.get_simulator_trades."""
     import variant_sweep
 
     pair_list: list[tuple[str, str]] = []
@@ -4115,7 +4117,8 @@ def api_window_distribution(
     if window_days < 1:
         return {"error": "window_days musi być >= 1"}
 
-    by_pair = variant_sweep.load_trades_by_pair(min_regime_score, include_rejected=include_rejected)
+    by_pair = variant_sweep.load_trades_by_pair(min_regime_score, include_rejected=include_rejected,
+                                                 max_sl_loss_pct=max_sl_loss_pct)
     found_pairs = [p for p in pair_list if p in by_pair]
     missing_pairs = [p for p in pair_list if p not in by_pair]
     if not found_pairs:

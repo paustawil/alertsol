@@ -113,7 +113,8 @@ def _to_naive_utc(dt: datetime | None) -> datetime | None:
 
 
 def load_trades_by_pair(min_regime_score: int | None = None,
-                         include_rejected: bool = False) -> dict[tuple[str, str], list[dict]]:
+                         include_rejected: bool = False,
+                         max_sl_loss_pct: float | None = None) -> dict[tuple[str, str], list[dict]]:
     """Jedno zapytanie do bazy, potem grupowanie w Pythonie — szybsze i prostsze niż
     osobne zapytanie na każde okno/kombinację.
 
@@ -126,9 +127,11 @@ def load_trades_by_pair(min_regime_score: int | None = None,
     (type,variant) wprost, więc potrzebuje tego filtra jawnie.
 
     include_rejected: patrz db.get_simulator_trades — domyślnie False, wyklucza setupy
-    odrzucone algorytmicznie (śledzone dalej tylko do celów ML)."""
+    odrzucone algorytmicznie (śledzone dalej tylko do celów ML).
+    max_sl_loss_pct: patrz db.get_simulator_trades — domyślnie brak filtra."""
     all_trades = db.get_simulator_trades(min_regime_score=min_regime_score, model="Algo2",
-                                          include_rejected=include_rejected)
+                                          include_rejected=include_rejected,
+                                          max_sl_loss_pct=max_sl_loss_pct)
     by_pair: dict[tuple[str, str], list[dict]] = {}
     for t in all_trades:
         t["entry_time"] = _to_naive_utc(t.get("entry_time"))
