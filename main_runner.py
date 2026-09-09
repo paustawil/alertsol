@@ -2720,9 +2720,12 @@ def api_bitget_live():
 
 @app.get("/api/budget-info")
 def api_budget_info():
-    """Zwraca saldo Bitget (settled), zaangażowany kapitał z DB oraz planowaną kwotę kolejnego zlecenia."""
+    """Zwraca saldo Bitget (settled), zaangażowany kapitał z DB oraz planowaną kwotę kolejnego zlecenia.
+    balance_error: powód niepowodzenia pobrania balansu z Bitget, gdy balance=null — diagnostyka
+    (np. po zmianie trybu konta Classic → Unified Trading Account), patrz
+    exchange_trader.get_account_balance_debug()."""
     import exchange_trader as et
-    balance = et.get_account_balance()
+    balance, balance_error = et.get_account_balance_debug()
     committed = db.get_committed_trade_usdt()
     if balance is not None:
         next_trade = round(max(balance, 0), 2)
@@ -2735,6 +2738,7 @@ def api_budget_info():
     last_transfer = transfer_history[-1] if transfer_history else None
     return {
         "balance":       round(balance, 2) if balance is not None else None,
+        "balance_error": balance_error,
         "committed":     round(committed, 2),
         "next_trade":    next_trade,
         "weekly_pnl":    round(weekly_pnl, 2),
