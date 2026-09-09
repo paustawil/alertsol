@@ -2,10 +2,12 @@
 """
 main_runner.py — główny proces Railway dla AlertSol
 
-Uruchamia 3 zadania w tle:
-  1. exchange_monitor  — co 15 sekund (natychmiastowa reakcja na order fills)
-  2. sol_alert_job     — co 15 minut (wykrywanie setupów)
-  3. sheets_export_job — co 5 minut (eksport zamkniętych setupów do Google Sheets)
+Uruchamia zadania w tle (APScheduler, patrz init_scheduler()):
+  1. exchange_monitor — co 15 sekund (natychmiastowa reakcja na order fills)
+  2. sol_alert        — co 5 minut (wykrywanie setupów, throttle wewnętrzny)
+  3. breakout_scan    — co 3 minuty
+  4. grok_shadow      — co 5 minut (throttle wewnętrzny)
+  5. weekly_transfer  — piątki 8:00 Warsaw
 
 + FastAPI web dashboard dostępny pod URL przydzielonym przez Railway.
 """
@@ -70,16 +72,6 @@ def run_breakout_scan():
         sol_alert.breakout_scan()
     except Exception:
         log.exception("breakout_scan() BŁĄD")
-
-
-def run_sheets_export():
-    """Google Sheets export — wyłączony."""
-    pass
-
-
-def run_profit_calculator_export():
-    """Google Sheets profit calculator — wyłączony."""
-    pass
 
 
 def run_grok_shadow():
@@ -2445,27 +2437,6 @@ def admin_get_setup(setup_id: int):
     return dict(row)
 
 
-@app.post("/admin/init-sheets")
-def admin_init_sheets():
-    """Tworzy brakujące zakładki Google Sheets (Alerty, Wyniki_Railway, Anulowane_Grok)."""
-    try:
-        import sol_alert
-        sol_alert._get_sheets()
-        return {"ok": True, "message": "Zakładki zainicjalizowane (lub już istniały)."}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-@app.post("/admin/run-sheets-export")
-def admin_run_sheets_export():
-    return {"ok": False, "message": "Google Sheets integration wyłączona."}
-
-
-@app.post("/admin/run-profit-calculator")
-def admin_run_profit_calculator():
-    return {"ok": False, "message": "Google Sheets integration wyłączona."}
-
-
 @app.get("/admin/test-candles")
 def admin_test_candles():
     """Test świeżości danych z Bitget: pobiera świece i zwraca zakres dat + wiek najnowszej."""
@@ -2495,19 +2466,6 @@ def admin_test_candles():
             result[interval] = {"error": str(e)}
     result["server_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     return result
-
-
-@app.post("/admin/reset-sheets-export")
-def admin_reset_sheets_export():
-    """Resetuje sheets_exported=FALSE dla wszystkich zamkniętych setupów.
-    Użyj jednorazowo po naprawie buga z eksportem do Sheets."""
-    with db._conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE setups SET sheets_exported = FALSE WHERE resolved = TRUE AND sheets_exported = TRUE"
-            )
-            count = cur.rowcount
-    return {"ok": True, "reset_count": count, "message": f"Zresetowano {count} setupów — zostaną wyeksportowane przy następnym cyklu (co 5 min)"}
 
 
 @app.get("/admin/diagnose-positions")
@@ -4231,74 +4189,6 @@ def admin_backfill_tp1_tp2_result():
     if _backfill_tp2_result is None:
         return {"error": "Brak wyników — uruchom najpierw POST /admin/backfill-tp1-tp2"}
     return _backfill_tp2_result
-
-
-@app.post("/admin/run-gpt5-backtest")
-def admin_run_gpt5_backtest():
-    """Uruchamia backtest GPT5 (vision: wykresy PNG) w tle. Wyniki: arkusz 'GPT5 test'."""
-    import threading
-    import gpt5_backtest
-
-    def _run():
-        try:
-            gpt5_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt5-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT5 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT5 test' (~60-90 min)."}
-
-
-@app.post("/admin/run-gpt4-backtest")
-def admin_run_gpt4_backtest():
-    """Uruchamia backtest GPT4 w tle. Wyniki trafiają do arkusza 'GPT4 test'."""
-    import threading
-    import gpt4_backtest
-
-    def _run():
-        try:
-            gpt4_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt4-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT4 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT4 test' (~30-60 min)."}
-
-
-@app.post("/admin/run-gpt3-backtest")
-def admin_run_gpt3_backtest():
-    """Uruchamia backtest GPT3 w tle. Wyniki trafiają do arkusza 'GPT3 test'."""
-    import threading
-    import gpt3_backtest
-
-    def _run():
-        try:
-            gpt3_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt3-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT3 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT3 test' (~30-60 min)."}
-
-
-@app.post("/admin/run-gpt-relaxed-backtest")
-def admin_run_gpt_relaxed_backtest():
-    """Uruchamia backtest GPT-Relaxed (web search) w tle. Wyniki: arkusz 'GPT-Relaxed test'."""
-    import threading
-    import gpt_relaxed_backtest
-
-    def _run():
-        try:
-            gpt_relaxed_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt-relaxed-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT-Relaxed uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT-Relaxed test' (~60-90 min)."}
 
 
 # ── Dashboard v2 API ──────────────────────────────────────────────────────────
