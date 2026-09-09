@@ -678,7 +678,12 @@ function BudgetBar() {
   return (
     <div style={{display:'flex',alignItems:'center',gap:20,padding:'8px 16px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,flexWrap:'wrap',flexShrink:0}}>
       <span style={{fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'.1em',color:'var(--text3)'}}>Budżet</span>
-      <div style={cell}><div style={lbl}>Saldo Bitget</div><div style={val}>{fmt(b&&b.balance)}</div></div>
+      <div style={cell}>
+        <div style={lbl}>Saldo Bitget</div>
+        <div style={val}>{fmt(b&&b.balance)}</div>
+        {b&&b.balance==null&&b.balance_error&&
+          <div style={{fontSize:9,color:'var(--red)',fontFamily:'var(--mono)',maxWidth:260}} title={b.balance_error}>⚠️ {b.balance_error}</div>}
+      </div>
       <div style={cell}><div style={lbl}>Zaangażowane</div><div style={{...val,color:'var(--amber)'}}>{fmt(b&&b.committed)}</div></div>
       <div style={cell}><div style={lbl}>Nast. zlecenie</div><div style={{...val,color:'var(--blue)'}}>{fmt(b&&b.next_trade)}</div></div>
       <div style={sep}/>

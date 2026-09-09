@@ -314,9 +314,17 @@ def transfer_futures_to_spot(amount: float) -> dict:
 def get_account_balance() -> float | None:
     """Zwraca equity konta futures USDT (całkowita wartość konta, bez odjęcia marginu).
     Używamy equity, nie available — bo committed_db już odejmuje zaangażowany kapitał."""
+    balance, _ = get_account_balance_debug()
+    return balance
+
+
+def get_account_balance_debug() -> tuple[float | None, str | None]:
+    """Jak get_account_balance(), ale dodatkowo zwraca surowy powód niepowodzenia —
+    do diagnostyki przez /api/budget-info (np. po zmianie trybu konta na Bitget:
+    Classic → Unified Trading Account). Nigdy nie rzuca — błąd zawsze wraca jako string."""
     client = _client()
     if client is None:
-        return None
+        return None, "brak klienta Bitget (BITGET_API_KEY/SECRET/PASSPHRASE nieskonfigurowane?)"
     try:
         resp = client.get("/api/v2/mix/account/account", {
             "symbol":      SYMBOL,
@@ -327,10 +335,12 @@ def get_account_balance() -> float | None:
             data = resp.get("data") or {}
             equity = data.get("equity") or data.get("usdtEquity") or data.get("available")
             if equity is not None:
-                return float(equity)
+                return float(equity), None
+            return None, f"code=00000, ale brak equity/usdtEquity/available w odpowiedzi: {data}"
+        return None, f"Bitget code={resp.get('code')} msg={resp.get('msg')}"
     except Exception as e:
         log.warning(f"[exchange] get_account_balance: {e}")
-    return None
+        return None, str(e)
 
 
 def get_available_balance() -> float | None:
