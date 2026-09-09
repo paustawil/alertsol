@@ -2841,51 +2841,6 @@ def api_resolved_csv(
     )
 
 
-@app.get("/api/trade-analysis")
-def api_trade_analysis(date_from: str | None = None):
-    """Zestawienie setupów SHADOW z timestampami wejścia/wyjścia i P&L% dla obu strategii TP.
-    Parametr date_from: ISO date, np. 2026-05-15 (domyślnie)."""
-    return db.get_trade_analysis(date_from)
-
-
-@app.get("/api/trade-analysis/csv")
-def api_trade_analysis_csv(date_from: str | None = None):
-    """CSV export zestawienia do analizy symulacyjnej."""
-    from fastapi.responses import Response
-    import csv
-    import io
-
-    rows = db.get_trade_analysis(date_from)
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "ID", "Alert", "Typ", "Wariant", "Kierunek", "Wynik",
-        "Wejście (UTC)", "Wyjście (UTC)", "Czas trwania (min)",
-        "P&L% TP1+TP2", "P&L% TP1-only",
-    ])
-    for r in rows:
-        dur_sec = r.get("duration_sec")
-        writer.writerow([
-            r.get("setup_id"),
-            str(r.get("alert_time", ""))[:16],
-            r.get("type"),
-            r.get("variant"),
-            r.get("direction"),
-            r.get("result"),
-            r.get("entry_time"),
-            r.get("exit_time"),
-            round(dur_sec / 60) if dur_sec else "",
-            r.get("pnl_tp1tp2_pct"),
-            r.get("pnl_tp1only_pct"),
-        ])
-
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=trade_analysis.csv"},
-    )
-
-
 @app.get("/api/pullback-analysis/csv")
 def api_pullback_analysis_csv(date_from: str | None = None):
     """CSV export trend_pullback (long+short) z market_context (exhaustion, regime_score)
@@ -3484,12 +3439,6 @@ def api_algo2_time_heatmap(period: int | None = None):
 def api_algo2_rr_analysis(period: int | None = None):
     """Analiza RR dla Algo2: deklarowany RR vs TP1/TP2 hit rate. period = liczba dni lub brak = all-time."""
     return db.get_algo2_rr_analysis(period)
-
-
-@app.get("/api/algo2/variant-stats")
-def api_algo2_variant_stats(period: int | None = None, _: None = Security(_require_api_key)):
-    """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
-    return db.get_algo2_variant_stats(period)
 
 
 @app.get("/api/algo2/variant-summary")
@@ -4294,11 +4243,6 @@ def api_dashboard_setups():
     return result
 
 
-@app.get("/api/dashboard/types")
-def api_dashboard_types(date_from: str = "", date_to: str = ""):
-    return db.get_all_types()
-
-
 @app.get("/api/dashboard/variants-tree")
 def api_dashboard_variants_tree():
     """Drzewo model→typ→wariant ze wszystkich setupów dla FilterTree3."""
@@ -4430,67 +4374,6 @@ def _map_result_display(t: dict) -> str:
     if t.get("cancel_reason"):              return "Anulowane"
     if t.get("entry_hit_at") is None:       return "Nie weszło"
     return "Nieokreślone"
-
-
-@app.get("/api/dashboard/trades")
-def api_dashboard_trades(
-    types:       str = "",
-    variants:    str = "",
-    result_cats: str = "win,loss",
-    directions:  str = "",
-    date_from:   str = "",
-    date_to:     str = "",
-    limit:       int = 50,
-    offset:      int = 0,
-):
-    """Zamknięte setupy dla zakładki Historia.
-    result_cats: comma-separated — win | loss | no_entry | cancelled
-    """
-    data = db.get_resolved_filtered(
-        types       = [t.strip() for t in types.split(",")   if t.strip()] or None,
-        variants    = [v.strip() for v in variants.split(",") if v.strip()] or None,
-        result_cats = [c.strip() for c in result_cats.split(",") if c.strip()] or None,
-        date_from   = date_from or None,
-        date_to     = date_to   or None,
-        limit       = min(limit, 200),
-        offset      = offset,
-    )
-    rows = data["rows"]
-
-    if directions:
-        dirs = {d.strip().lower() for d in directions.split(",") if d.strip()}
-        rows = [r for r in rows if (r.get("direction") or "").lower() in dirs]
-
-    def _f(v): return float(v) if v is not None else None
-    _tz_w = ZoneInfo("Europe/Warsaw")
-    def _dt(v, n):
-        if not v: return None
-        if isinstance(v, datetime):
-            return str(v.astimezone(_tz_w))[:n]
-        if isinstance(v, (int, float)):
-            return str(datetime.fromtimestamp(int(v), tz=_tz_w))[:n]
-        return str(v)[:n]
-    trades = []
-    for t in rows:
-        tps = t.get("tps") or []
-        trades.append({
-            "id":           t["setup_id"],
-            "kier":         (t.get("direction") or "").upper(),
-            "model":        t.get("model", ""),
-            "typ":          t.get("type", ""),
-            "variant":      t.get("variant") or "baseline",
-            "t_def":        _dt(t.get("alert_time"), 16),
-            "t_entry":      _dt(t.get("entry_hit_at"), 16),
-            "t_exit":       _dt(t.get("exit_time"), 16),
-            "we":           _f(t.get("avg_entry")),
-            "tp":           _f(t.get("avg_exit")) or (_f(tps[0]) if tps else None),
-            "result":       _map_result_display(t),
-            "pnl_tp12":     _f(t.get("pnl_usd")),
-            "pnl_tp1":      _f(t.get("tp1_only_pnl")),
-            "pnl_pct":      _f(t.get("pnl_pct")),
-            "pnl_tp1_pct":  _f(t.get("tp1_only_pnl_pct")),
-        })
-    return {"total": data["total"], "rows": trades, "totals": data["totals"]}
 
 
 @app.get("/api/dashboard/algo")
