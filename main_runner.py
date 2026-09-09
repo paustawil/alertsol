@@ -3758,13 +3758,18 @@ def api_simulator(
     date_to: str | None = None,
     min_regime_score: int | None = None,
     include_rejected: bool = False,
+    max_sl_loss_pct: float | None = None,
 ):
     """Dane do symulatora portfela: zamknięte setupy z entry/exit time i pnl_pct.
     include_rejected: domyślnie False, żeby setupy odrzucone algorytmicznie (śledzone
-    tylko do celów ML) nie mieszały się z realnymi zaakceptowanymi w symulacji."""
+    tylko do celów ML) nie mieszały się z realnymi zaakceptowanymi w symulacji.
+    max_sl_loss_pct: domyślnie brak filtra — gdy podane, wyklucza setupy, których
+    hipotetyczna strata na SL (pełny wolumen) przekracza ten % kapitału (margin),
+    patrz db.get_simulator_trades."""
     variant_list = [v.strip() for v in variants.split(",") if v.strip()] if variants else None
     return db.get_simulator_trades(date_from, date_to, variant_list, min_regime_score,
-                                    include_rejected=include_rejected)
+                                    include_rejected=include_rejected,
+                                    max_sl_loss_pct=max_sl_loss_pct)
 
 
 @app.get("/api/analytics/export")
@@ -4414,6 +4419,7 @@ def api_all_setups(
     models:        str = "",
     results:       str = "",
     shadow_filter: str = "all",
+    exclude_rejected: bool = False,
     date_from:     str = "",
     date_to:       str = "",
     limit:         int = 200,
@@ -4424,6 +4430,9 @@ def api_all_setups(
     results: TP1, TP2, TP1+BE, TP1+SL, TP1+TP2, SL, nieokreslone (przecinkami) — filtruje
     po kolumnie `result`, niezależnie od statuses (np. do wyfiltrowania samych setupów
     zamkniętych bez rozstrzygniętego wyniku: results=nieokreslone)
+    exclude_rejected: domyślnie False — gdy True, ukrywa setupy odrzucone algorytmicznie
+    (rejection niepuste) niezależnie od wybranych statuses; odwrotność chipa 'odrzucone'
+    w statuses, patrz db.get_all_setups_filtered.
     """
     tradeable: bool | None = None
     bitget_only = False
@@ -4443,6 +4452,7 @@ def api_all_setups(
         results   = [r.strip() for r in results.split(",")   if r.strip()] or None,
         tradeable = tradeable,
         bitget_only = bitget_only,
+        exclude_rejected = exclude_rejected,
         date_from = date_from or None,
         date_to   = date_to   or None,
         limit     = min(limit, 500),

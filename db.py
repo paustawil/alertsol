@@ -1203,6 +1203,7 @@ def get_simulator_trades(
     min_regime_score: int | None = None,
     model: str | None = None,
     include_rejected: bool = False,
+    max_sl_loss_pct: float | None = None,
 ) -> list[dict]:
     """Zwraca zamknięte setupy z entry_hit_at, exit_time, pnl_pct — do symulatora portfela.
 
@@ -1216,7 +1217,15 @@ def get_simulator_trades(
     do celów ML — nigdy nie były prawdziwym ani hipotetycznie wchodzonym tradem, więc nie
     powinny wchodzić do symulacji portfela razem z zaakceptowanymi setupami tego samego
     type:variant. Ten sam filtr (COALESCE(rejection,'') = '') jest już konsekwentnie
-    stosowany przy każdej innej analityce Algo2 w tym pliku."""
+    stosowany przy każdej innej analityce Algo2 w tym pliku.
+
+    max_sl_loss_pct: domyślnie brak filtra. Gdy podane, odrzuca setupy, których
+    hipotetyczna strata na SL (pełny wolumen, geometria wejście/SL zapisana przy
+    detekcji — niezależnie od tego, jak setup faktycznie się rozstrzygnął) przekracza
+    ten % zaangażowanego kapitału (trade_usdt/margin), czyli tak samo jak liczone jest
+    pnl_pct gdziekolwiek indziej w tym pliku. Pozwala wykluczyć z symulacji zbyt
+    ryzykowne setupy (np. gdzie SL leży bardzo daleko od wejścia). Setupy bez znanego
+    sl/entry są w takim przypadku również pomijane (ryzyko nieznane)."""
     trade_usdt = float(os.getenv("BITGET_TRADE_USDT", "100"))
     leverage = 20
     _tu = f"COALESCE(trade_usdt, {trade_usdt})"
@@ -1256,6 +1265,13 @@ def get_simulator_trades(
             THEN ({_sign}) * ((tps->>0)::numeric - {_entry}) * ({_full_qty})
         END"""
     tp1_only_pct_calc = f"({tp1_only_calc}) / NULLIF({_tu}, 0) * 100"
+    # Hipotetyczna strata na SL (pełny wolumen), niezależnie od faktycznego wyniku —
+    # geometria wejście/SL zapisana przy detekcji setupu, tak samo znormalizowana
+    # (% zaangażowanego kapitału) jak pnl_pct powyżej i wszędzie indziej w tym pliku.
+    sl_loss_pct_calc = f"""
+        CASE WHEN sl IS NOT NULL AND {_entry} IS NOT NULL
+        THEN ABS(({_sign}) * (sl - {_entry}) * ({_full_qty}) / NULLIF({_tu}, 0) * 100)
+        END"""
 
     where = ["resolved = TRUE", "entry_hit_at IS NOT NULL",
              "result IN ('TP1','TP2','TP1+BE','TP1+SL','TP1+TP2','SL')"]
@@ -1278,6 +1294,9 @@ def get_simulator_trades(
     if min_regime_score is not None:
         where.append("(market_context->>'regime_score')::int >= %(min_regime_score)s")
         params["min_regime_score"] = min_regime_score
+    if max_sl_loss_pct is not None:
+        where.append(f"({sl_loss_pct_calc}) <= %(max_sl_loss_pct)s")
+        params["max_sl_loss_pct"] = max_sl_loss_pct
 
     where_sql = " AND ".join(where)
 
@@ -1308,6 +1327,7 @@ def get_simulator_trades(
                        avg_exit,
                        ROUND(({pnl_pct_calc})::numeric, 4) AS pnl_pct,
                        ROUND(({tp1_only_pct_calc})::numeric, 4) AS tp1_only_pnl_pct,
+                       ROUND(({sl_loss_pct_calc})::numeric, 2) AS sl_loss_pct,
                        (market_context->>'regime_score')::int AS regime_score
                 FROM setups
                 WHERE {where_sql}
@@ -1862,6 +1882,7 @@ def get_all_setups_filtered(
     shadow: bool | None = None,
     tradeable: bool | None = None,
     bitget_only: bool = False,
+    exclude_rejected: bool = False,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = 100,
@@ -1871,7 +1892,13 @@ def get_all_setups_filtered(
     Obsługiwane statusy: pending, open, after_tp1, zamkniete, anulowane, nie_weszlo, odrzucone.
     'odrzucone' to setupy odrzucone algorytmicznie (rejection niepuste, patrz
     algo_detect_setups()/rejected_by_algo w sol_alert.py) — niezależnie od tego, czy
-    hipotetycznie i tak weszły/rozstrzygnęły się (śledzone dalej jako dane ML)."""
+    hipotetycznie i tak weszły/rozstrzygnęły się (śledzone dalej jako dane ML).
+
+    exclude_rejected: domyślnie False. Gdy True, dokłada AND COALESCE(rejection,'')=''
+    niezależnie od statuses — to jest odwrotność chipa 'odrzucone' (który dokłada
+    rejected setupy przez OR do wybranych statusów). Pozwala np. przeglądać 'zamkniete'
+    bez zaśmiecania listy setupami odrzuconymi algorytmicznie, które i tak dalej się
+    rozstrzygają jako dane ML."""
     where: list[str] = []
     params: dict = {}
 
@@ -1899,6 +1926,9 @@ def get_all_setups_filtered(
             status_conds.append("COALESCE(rejection, '') <> ''")
         if status_conds:
             where.append(f"({' OR '.join(status_conds)})")
+
+    if exclude_rejected:
+        where.append("COALESCE(rejection, '') = ''")
 
     if types:
         where.append("type = ANY(%(types)s)")
