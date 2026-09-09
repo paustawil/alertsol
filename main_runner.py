@@ -2,10 +2,12 @@
 """
 main_runner.py — główny proces Railway dla AlertSol
 
-Uruchamia 3 zadania w tle:
-  1. exchange_monitor  — co 15 sekund (natychmiastowa reakcja na order fills)
-  2. sol_alert_job     — co 15 minut (wykrywanie setupów)
-  3. sheets_export_job — co 5 minut (eksport zamkniętych setupów do Google Sheets)
+Uruchamia zadania w tle (APScheduler, patrz init_scheduler()):
+  1. exchange_monitor — co 15 sekund (natychmiastowa reakcja na order fills)
+  2. sol_alert        — co 5 minut (wykrywanie setupów, throttle wewnętrzny)
+  3. breakout_scan    — co 3 minuty
+  4. grok_shadow      — co 5 minut (throttle wewnętrzny)
+  5. weekly_transfer  — piątki 8:00 Warsaw
 
 + FastAPI web dashboard dostępny pod URL przydzielonym przez Railway.
 """
@@ -70,16 +72,6 @@ def run_breakout_scan():
         sol_alert.breakout_scan()
     except Exception:
         log.exception("breakout_scan() BŁĄD")
-
-
-def run_sheets_export():
-    """Google Sheets export — wyłączony."""
-    pass
-
-
-def run_profit_calculator_export():
-    """Google Sheets profit calculator — wyłączony."""
-    pass
 
 
 def run_grok_shadow():
@@ -2445,27 +2437,6 @@ def admin_get_setup(setup_id: int):
     return dict(row)
 
 
-@app.post("/admin/init-sheets")
-def admin_init_sheets():
-    """Tworzy brakujące zakładki Google Sheets (Alerty, Wyniki_Railway, Anulowane_Grok)."""
-    try:
-        import sol_alert
-        sol_alert._get_sheets()
-        return {"ok": True, "message": "Zakładki zainicjalizowane (lub już istniały)."}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-@app.post("/admin/run-sheets-export")
-def admin_run_sheets_export():
-    return {"ok": False, "message": "Google Sheets integration wyłączona."}
-
-
-@app.post("/admin/run-profit-calculator")
-def admin_run_profit_calculator():
-    return {"ok": False, "message": "Google Sheets integration wyłączona."}
-
-
 @app.get("/admin/test-candles")
 def admin_test_candles():
     """Test świeżości danych z Bitget: pobiera świece i zwraca zakres dat + wiek najnowszej."""
@@ -2495,19 +2466,6 @@ def admin_test_candles():
             result[interval] = {"error": str(e)}
     result["server_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     return result
-
-
-@app.post("/admin/reset-sheets-export")
-def admin_reset_sheets_export():
-    """Resetuje sheets_exported=FALSE dla wszystkich zamkniętych setupów.
-    Użyj jednorazowo po naprawie buga z eksportem do Sheets."""
-    with db._conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE setups SET sheets_exported = FALSE WHERE resolved = TRUE AND sheets_exported = TRUE"
-            )
-            count = cur.rowcount
-    return {"ok": True, "reset_count": count, "message": f"Zresetowano {count} setupów — zostaną wyeksportowane przy następnym cyklu (co 5 min)"}
 
 
 @app.get("/admin/diagnose-positions")
@@ -2880,51 +2838,6 @@ def api_resolved_csv(
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=alertsol_export.csv"},
-    )
-
-
-@app.get("/api/trade-analysis")
-def api_trade_analysis(date_from: str | None = None):
-    """Zestawienie setupów SHADOW z timestampami wejścia/wyjścia i P&L% dla obu strategii TP.
-    Parametr date_from: ISO date, np. 2026-05-15 (domyślnie)."""
-    return db.get_trade_analysis(date_from)
-
-
-@app.get("/api/trade-analysis/csv")
-def api_trade_analysis_csv(date_from: str | None = None):
-    """CSV export zestawienia do analizy symulacyjnej."""
-    from fastapi.responses import Response
-    import csv
-    import io
-
-    rows = db.get_trade_analysis(date_from)
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([
-        "ID", "Alert", "Typ", "Wariant", "Kierunek", "Wynik",
-        "Wejście (UTC)", "Wyjście (UTC)", "Czas trwania (min)",
-        "P&L% TP1+TP2", "P&L% TP1-only",
-    ])
-    for r in rows:
-        dur_sec = r.get("duration_sec")
-        writer.writerow([
-            r.get("setup_id"),
-            str(r.get("alert_time", ""))[:16],
-            r.get("type"),
-            r.get("variant"),
-            r.get("direction"),
-            r.get("result"),
-            r.get("entry_time"),
-            r.get("exit_time"),
-            round(dur_sec / 60) if dur_sec else "",
-            r.get("pnl_tp1tp2_pct"),
-            r.get("pnl_tp1only_pct"),
-        ])
-
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=trade_analysis.csv"},
     )
 
 
@@ -3526,12 +3439,6 @@ def api_algo2_time_heatmap(period: int | None = None):
 def api_algo2_rr_analysis(period: int | None = None):
     """Analiza RR dla Algo2: deklarowany RR vs TP1/TP2 hit rate. period = liczba dni lub brak = all-time."""
     return db.get_algo2_rr_analysis(period)
-
-
-@app.get("/api/algo2/variant-stats")
-def api_algo2_variant_stats(period: int | None = None, _: None = Security(_require_api_key)):
-    """Porównanie wariantów kalibracji dla trend_pullback_long/short. period = dni lub brak = all-time."""
-    return db.get_algo2_variant_stats(period)
 
 
 @app.get("/api/algo2/variant-summary")
@@ -4233,74 +4140,6 @@ def admin_backfill_tp1_tp2_result():
     return _backfill_tp2_result
 
 
-@app.post("/admin/run-gpt5-backtest")
-def admin_run_gpt5_backtest():
-    """Uruchamia backtest GPT5 (vision: wykresy PNG) w tle. Wyniki: arkusz 'GPT5 test'."""
-    import threading
-    import gpt5_backtest
-
-    def _run():
-        try:
-            gpt5_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt5-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT5 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT5 test' (~60-90 min)."}
-
-
-@app.post("/admin/run-gpt4-backtest")
-def admin_run_gpt4_backtest():
-    """Uruchamia backtest GPT4 w tle. Wyniki trafiają do arkusza 'GPT4 test'."""
-    import threading
-    import gpt4_backtest
-
-    def _run():
-        try:
-            gpt4_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt4-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT4 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT4 test' (~30-60 min)."}
-
-
-@app.post("/admin/run-gpt3-backtest")
-def admin_run_gpt3_backtest():
-    """Uruchamia backtest GPT3 w tle. Wyniki trafiają do arkusza 'GPT3 test'."""
-    import threading
-    import gpt3_backtest
-
-    def _run():
-        try:
-            gpt3_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt3-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT3 uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT3 test' (~30-60 min)."}
-
-
-@app.post("/admin/run-gpt-relaxed-backtest")
-def admin_run_gpt_relaxed_backtest():
-    """Uruchamia backtest GPT-Relaxed (web search) w tle. Wyniki: arkusz 'GPT-Relaxed test'."""
-    import threading
-    import gpt_relaxed_backtest
-
-    def _run():
-        try:
-            gpt_relaxed_backtest.run_backtest()
-        except Exception as e:
-            logging.error(f"[gpt-relaxed-backtest] Błąd: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return {"ok": True, "message": "Backtest GPT-Relaxed uruchomiony w tle. Wyniki pojawią się w arkuszu 'GPT-Relaxed test' (~60-90 min)."}
-
-
 # ── Dashboard v2 API ──────────────────────────────────────────────────────────
 
 def _fmt_pnl(val) -> str:
@@ -4402,11 +4241,6 @@ def api_dashboard_setups():
             "exchange_fee_close":       float(s["exchange_fee_close"]) if s.get("exchange_fee_close") is not None else None,
         })
     return result
-
-
-@app.get("/api/dashboard/types")
-def api_dashboard_types(date_from: str = "", date_to: str = ""):
-    return db.get_all_types()
 
 
 @app.get("/api/dashboard/variants-tree")
@@ -4540,67 +4374,6 @@ def _map_result_display(t: dict) -> str:
     if t.get("cancel_reason"):              return "Anulowane"
     if t.get("entry_hit_at") is None:       return "Nie weszło"
     return "Nieokreślone"
-
-
-@app.get("/api/dashboard/trades")
-def api_dashboard_trades(
-    types:       str = "",
-    variants:    str = "",
-    result_cats: str = "win,loss",
-    directions:  str = "",
-    date_from:   str = "",
-    date_to:     str = "",
-    limit:       int = 50,
-    offset:      int = 0,
-):
-    """Zamknięte setupy dla zakładki Historia.
-    result_cats: comma-separated — win | loss | no_entry | cancelled
-    """
-    data = db.get_resolved_filtered(
-        types       = [t.strip() for t in types.split(",")   if t.strip()] or None,
-        variants    = [v.strip() for v in variants.split(",") if v.strip()] or None,
-        result_cats = [c.strip() for c in result_cats.split(",") if c.strip()] or None,
-        date_from   = date_from or None,
-        date_to     = date_to   or None,
-        limit       = min(limit, 200),
-        offset      = offset,
-    )
-    rows = data["rows"]
-
-    if directions:
-        dirs = {d.strip().lower() for d in directions.split(",") if d.strip()}
-        rows = [r for r in rows if (r.get("direction") or "").lower() in dirs]
-
-    def _f(v): return float(v) if v is not None else None
-    _tz_w = ZoneInfo("Europe/Warsaw")
-    def _dt(v, n):
-        if not v: return None
-        if isinstance(v, datetime):
-            return str(v.astimezone(_tz_w))[:n]
-        if isinstance(v, (int, float)):
-            return str(datetime.fromtimestamp(int(v), tz=_tz_w))[:n]
-        return str(v)[:n]
-    trades = []
-    for t in rows:
-        tps = t.get("tps") or []
-        trades.append({
-            "id":           t["setup_id"],
-            "kier":         (t.get("direction") or "").upper(),
-            "model":        t.get("model", ""),
-            "typ":          t.get("type", ""),
-            "variant":      t.get("variant") or "baseline",
-            "t_def":        _dt(t.get("alert_time"), 16),
-            "t_entry":      _dt(t.get("entry_hit_at"), 16),
-            "t_exit":       _dt(t.get("exit_time"), 16),
-            "we":           _f(t.get("avg_entry")),
-            "tp":           _f(t.get("avg_exit")) or (_f(tps[0]) if tps else None),
-            "result":       _map_result_display(t),
-            "pnl_tp12":     _f(t.get("pnl_usd")),
-            "pnl_tp1":      _f(t.get("tp1_only_pnl")),
-            "pnl_pct":      _f(t.get("pnl_pct")),
-            "pnl_tp1_pct":  _f(t.get("tp1_only_pnl_pct")),
-        })
-    return {"total": data["total"], "rows": trades, "totals": data["totals"]}
 
 
 @app.get("/api/dashboard/algo")

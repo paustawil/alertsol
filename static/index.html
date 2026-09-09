@@ -1914,6 +1914,7 @@ function WindowDistributionPanel() {
 
   const pctColor=(v)=>v>0?'var(--green)':v<0?'var(--red)':'var(--text3)';
   const fmtPct=(v)=>`${v>=0?'+':''}${v}%`;
+  const fmtRoi=(v)=>`x${(1+v/100).toFixed(2)}`;
 
   return (
     <div className="panel" style={{flexShrink:0,marginTop:4}}>
@@ -2013,19 +2014,19 @@ function WindowDistributionPanel() {
             <div className="qs-lbl">Liczba okien</div>
           </div>
           <div className="qs-cell">
-            <div className="qs-val" style={{color:pctColor(result.min_pct)}}>{fmtPct(result.min_pct)}</div>
+            <div className="qs-val" style={{color:pctColor(result.min_pct)}}>{fmtRoi(result.min_pct)}</div>
             <div className="qs-lbl">Min</div>
           </div>
           <div className="qs-cell">
-            <div className="qs-val" style={{color:pctColor(result.max_pct)}}>{fmtPct(result.max_pct)}</div>
+            <div className="qs-val" style={{color:pctColor(result.max_pct)}}>{fmtRoi(result.max_pct)}</div>
             <div className="qs-lbl">Max</div>
           </div>
           <div className="qs-cell">
-            <div className="qs-val" style={{color:pctColor(result.avg_pct)}}>{fmtPct(result.avg_pct)}</div>
+            <div className="qs-val" style={{color:pctColor(result.avg_pct)}}>{fmtRoi(result.avg_pct)}</div>
             <div className="qs-lbl">Średnia</div>
           </div>
           <div className="qs-cell">
-            <div className="qs-val" style={{color:pctColor(result.median_pct)}}>{fmtPct(result.median_pct)}</div>
+            <div className="qs-val" style={{color:pctColor(result.median_pct)}}>{fmtRoi(result.median_pct)}</div>
             <div className="qs-lbl">Mediana</div>
           </div>
         </div>
@@ -2054,7 +2055,7 @@ function WindowDistributionPanel() {
         </div>
 
         <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
-          Najgorsze okno: {fmtPct(result.worst_pct)} (start {result.worst_start}). Najlepsze okno: {fmtPct(result.best_pct)} (start {result.best_start}).
+          Najgorsze okno: {fmtRoi(result.worst_pct)} (start {result.worst_start}). Najlepsze okno: {fmtRoi(result.best_pct)} (start {result.best_start}).
         </p>
 
         {result.monthly&&result.monthly.length>0&&<div>
