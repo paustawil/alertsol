@@ -4142,6 +4142,7 @@ def api_window_distribution(
     dist["window_days"] = window_days
     dist["pnl_mode"] = pnl_mode
     dist["include_rejected"] = include_rejected
+    dist["monthly"] = variant_sweep.monthly_returns(trades, 1000.0, pnl_mode)
     return dist
 
 

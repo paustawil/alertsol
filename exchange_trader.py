@@ -52,9 +52,29 @@ SINGLE_POSITION_MODE = True
 QTY_STEP     = 0.1
 PRICE_DEC    = 2
 BASE_URL     = "https://api.bitget.com"
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _send_telegram(text: str) -> None:
+    """Powiadomienie o RZECZYWIŚCIE potwierdzonym przez Bitget zdarzeniu (plan ordery
+    złożone / market entry wykonany) — w odróżnieniu od sol_alert.format_alert(), który
+    wysyła tylko informację o zaakceptowanym kandydacie, zanim złożenie zlecenia zostanie
+    w ogóle spróbowane (może się nie udać: MAX_POSITIONS, typ wyłączony w ustawieniach,
+    błąd API Bitget — patrz sync() niżej). Osobna, mała kopia zamiast importu z
+    sol_alert.py, żeby uniknąć cyklicznego importu (sol_alert importuje exchange_trader)."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        ).raise_for_status()
+    except Exception as e:
+        log.warning(f"[exchange] Telegram wysyłka nieudana: {e}")
 
 def _get_effective_trade_params(setup_type: str, variant: str | None) -> tuple[float, int, bool, str | None]:
     """Zwraca (trade_usdt_fallback, leverage, enabled, tp_strategy) dla danego type+variant.
@@ -1400,6 +1420,11 @@ def _sync_inner():
                     db.update_setup(s["setup_id"], entry_hit_at=now_ts)
                     modified = True
                     print(f"[exchange] {label}: market entry sukces → pozycja otwarta")
+                    _send_telegram(
+                        f"✅ <b>Zlecenie złożone</b> [{model}] #{sid}\n"
+                        f"{'📈' if direction == 'long' else '📉'} {direction.upper()} — market entry wykonany\n"
+                        f"Wartość: <b>${round(eff_usdt, 2)}</b> | dźwignia: {eff_lev}x"
+                    )
                     if _cancel_other_pending_on_position_open(client, int(sid), pending):
                         modified = True
                 else:
@@ -1419,6 +1444,11 @@ def _sync_inner():
                     s["exchange_position_opened"] = False
                     modified = True
                     print(f"[exchange] {label}: 2 plan ordery złożone ({_fmt_qty(half_qty)} SOL each @ W1={w1})")
+                    _send_telegram(
+                        f"✅ <b>Zlecenie złożone</b> [{model}] #{sid}\n"
+                        f"{'📈' if direction == 'long' else '📉'} {direction.upper()} — plan order @ W1=${w1:.2f}\n"
+                        f"Wolumen: {_fmt_qty(full_qty)} SOL | Wartość: <b>${round(eff_usdt, 2)}</b> | dźwignia: {eff_lev}x"
+                    )
                 else:
                     db.release_plan_order_claim(s["setup_id"])
             continue

@@ -43,6 +43,7 @@ import csv
 import itertools
 from datetime import datetime, timedelta, timezone
 from statistics import mean, median
+from zoneinfo import ZoneInfo
 
 import db
 
@@ -95,6 +96,75 @@ def simulate_equity(trades: list[dict], start_capital: float, pnl_mode: str) -> 
         "trades": entered, "wins": wins, "losses": losses, "skipped": skipped,
         "max_drawdown_pct": round(max_drawdown, 2),
     }
+
+
+def monthly_returns(trades: list[dict], start_capital: float, pnl_mode: str,
+                     tz: str = "Europe/Warsaw") -> list[dict]:
+    """Miesięczny equity curve (kalendarzowe miesiące, czas Europe/Warsaw — tak jak inne
+    zestawienia kalendarzowe w tym repo, np. db.get_algo2_daily_stats) — ta sama logika
+    compoundingu/blokady co simulate_equity(), ale zamiast jednego łącznego wyniku
+    zwraca kapitał na początku/końcu KAŻDEGO miesiąca z osobna. Miesiące bez rozstrzygniętych
+    trade'ów w danym okresie są wypełniane płasko (0%, kapitał bez zmian), żeby oś czasu
+    była ciągła (a nie tylko miesiące z aktywnością).
+
+    trades musi być posortowane rosnąco po entry_time (jak zwraca db.get_simulator_trades)."""
+    if not trades:
+        return []
+    zone = ZoneInfo(tz)
+    capital = start_capital
+    current_exit_time = None
+
+    # (year, month, kapitał_po_tym_trade, pnl_pct)
+    entries: list[tuple[int, int, float, float]] = []
+    for t in trades:
+        entry_time = t["entry_time"]
+        block_until = t["tp1_close_time"] if pnl_mode == "tp1" else t["exit_time"]
+        pnl_pct = t["tp1_only_pnl_pct"] if pnl_mode == "tp1" else t["pnl_pct"]
+
+        if current_exit_time is not None and entry_time < current_exit_time:
+            continue
+        current_exit_time = block_until
+        if pnl_pct is None:
+            continue
+        pnl_pct = float(pnl_pct)
+        capital += capital * (pnl_pct / 100)
+        local_dt = entry_time.replace(tzinfo=timezone.utc).astimezone(zone)
+        entries.append((local_dt.year, local_dt.month, capital, pnl_pct))
+
+    if not entries:
+        return []
+
+    (first_y, first_m), (last_y, last_m) = entries[0][:2], entries[-1][:2]
+    months: list[tuple[int, int]] = []
+    y, m = first_y, first_m
+    while (y, m) <= (last_y, last_m):
+        months.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+
+    out = []
+    cap_before = start_capital
+    idx = 0
+    for y, m in months:
+        cap_start = cap_before
+        cap_end = cap_before
+        n_trades = wins = 0
+        while idx < len(entries) and entries[idx][0] == y and entries[idx][1] == m:
+            cap_end = entries[idx][2]
+            if entries[idx][3] > 0:
+                wins += 1
+            n_trades += 1
+            idx += 1
+        return_pct = (cap_end - cap_start) / cap_start * 100 if cap_start else 0.0
+        out.append({
+            "month": f"{y:04d}-{m:02d}",
+            "start_capital": round(cap_start, 2),
+            "end_capital": round(cap_end, 2),
+            "return_pct": round(return_pct, 2),
+            "trades": n_trades,
+            "wins": wins,
+        })
+        cap_before = cap_end
+    return out
 
 
 # ── Ładowanie i grupowanie danych ─────────────────────────────────────────────

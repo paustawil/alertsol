@@ -1741,8 +1741,8 @@ function ViewSimulator() {
               <div className="qs-lbl">Kapitał końcowy</div>
             </div>
             <div className="qs-cell">
-              <div className="qs-val" style={{color:pnlC(simulation.totalReturn)}}>{simulation.totalReturn>0?'+':''}{simulation.totalReturn}%</div>
-              <div className="qs-lbl">Zwrot</div>
+              <div className="qs-val" style={{color:pnlC(simulation.totalReturn)}}>x{(1+simulation.totalReturn/100).toFixed(2)}</div>
+              <div className="qs-lbl">Zwrot (ROI)</div>
             </div>
             <div className="qs-cell">
               <div className="qs-val" style={{color:'var(--green)'}}>{simulation.wins}</div>
@@ -2056,6 +2056,11 @@ function WindowDistributionPanel() {
         <p style={{fontSize:9,color:'var(--text3)',fontStyle:'italic',margin:0}}>
           Najgorsze okno: {fmtPct(result.worst_pct)} (start {result.worst_start}). Najlepsze okno: {fmtPct(result.best_pct)} (start {result.best_start}).
         </p>
+
+        {result.monthly&&result.monthly.length>0&&<div>
+          <h5 style={{color:'var(--text2)',fontSize:11,margin:'0 0 6px'}}>Zwroty miesięczne — ten sam zestaw wariantów, ciągły equity curve (nie przesuwane okno)</h5>
+          <MonthlyReturnsChart monthly={result.monthly}/>
+        </div>}
       </div>}
     </div>
   );
@@ -2117,6 +2122,51 @@ function DistHistogram({histogram,avgPct,medianPct,minPct,maxPct}) {
       </div>
       <div style={{minHeight:16,fontSize:10,fontFamily:'var(--mono)',color:'var(--text2)',marginTop:2}}>
         {hover!==null&&`${fmtPct(histogram[hover].from)} … ${fmtPct(histogram[hover].to)}: ${histogram[hover].count} okien`}
+      </div>
+    </div>
+  );
+}
+
+function MonthlyReturnsChart({monthly}) {
+  const [hover,setHover]=useState(null);
+  const VB_W=640,VB_H=180;
+  const padL=36,padR=12,padT=12,padB=26;
+  const chartW=VB_W-padL-padR, chartH=VB_H-padT-padB;
+  const n=monthly.length;
+  const gap=4;
+  const barW=Math.max(2,(chartW-gap*(n-1))/n);
+  const maxAbs=Math.max(1,...monthly.map(m=>Math.abs(m.return_pct)));
+  const zeroY=padT+chartH/2;
+  const fmtPct=(v)=>`${v>=0?'+':''}${v}%`;
+  const fmtMonth=(ym)=>{
+    const [y,m]=ym.split('-');
+    return `${['sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru'][parseInt(m,10)-1]} ${y.slice(2)}`;
+  };
+  const thin=n>12;
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${VB_W} ${VB_H}`} style={{width:'100%',height:180,display:'block'}}>
+        <line x1={padL} y1={zeroY} x2={VB_W-padR} y2={zeroY} stroke="var(--border2)" strokeWidth="0.5"/>
+        {monthly.map((m,i)=>{
+          const x=padL+i*(barW+gap);
+          const h=(Math.abs(m.return_pct)/maxAbs)*(chartH/2);
+          const y=m.return_pct>=0?zeroY-h:zeroY;
+          const color=m.trades===0?'var(--text3)':m.return_pct>=0?'var(--green)':'var(--red)';
+          return <rect key={i} x={x} y={y} width={barW} height={Math.max(0,h)} rx={2} fill={color}
+            opacity={hover===null||hover===i?0.9:0.4}
+            onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)} style={{cursor:'pointer'}}/>;
+        })}
+        {monthly.map((m,i)=>{
+          if(thin&&i%2!==0) return null;
+          const x=padL+i*(barW+gap)+barW/2;
+          return <text key={i} x={x} y={VB_H-padB+12} fontSize="8" fill="var(--text3)" fontFamily="var(--mono)" textAnchor="middle">{fmtMonth(m.month)}</text>;
+        })}
+      </svg>
+      <div style={{minHeight:16,fontSize:10,fontFamily:'var(--mono)',color:'var(--text2)',marginTop:2}}>
+        {hover!==null
+          ? `${monthly[hover].month}: ${fmtPct(monthly[hover].return_pct)} (${monthly[hover].start_capital}→${monthly[hover].end_capital}, ${monthly[hover].trades} trade'ów${monthly[hover].trades>0?`, ${monthly[hover].wins}W/${monthly[hover].trades-monthly[hover].wins}L`:''})`
+          : 'najedź na słupek, żeby zobaczyć szczegóły miesiąca'}
       </div>
     </div>
   );
