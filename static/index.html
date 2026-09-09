@@ -744,6 +744,7 @@ const DEFAULT_STATUSES=['pending','open','after_tp1','zamkniete'];
 function ViewSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
   const [resultFilters,setResultFilters]=useState([]);
+  const [excludeRejected,setExcludeRejected]=useState(false);
   const [shadowFilter,setShadowFilter]=useState('all');
   const [showTypeFilter,setShowTypeFilter]=useState(false);
   const [filterTree,setFilterTree]=useState([]);
@@ -760,8 +761,17 @@ function ViewSetups() {
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'},{v:'odrzucone',l:'Odrzucone (algo)'}];
   const RESULT_OPTS=[{v:'TP1',l:'TP1'},{v:'TP2',l:'TP2'},{v:'TP1+BE',l:'TP1+BE'},{v:'TP1+SL',l:'TP1+SL'},{v:'TP1+TP2',l:'TP1+TP2'},{v:'SL',l:'SL'},{v:'nieokreslone',l:'Nieokreślone'}];
   const SHADOW_OPTS=[{v:'all',l:'Wszystkie'},{v:'real',l:'Real'},{v:'bitget',l:'Bitget'},{v:'shadow',l:'Shadow'}];
-  const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  const toggleStatus=(s)=>{
+    setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+    if(s==='odrzucone') setExcludeRejected(false);
+  };
   const toggleResult=(s)=>setResultFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  const toggleExcludeRejected=()=>{
+    setExcludeRejected(prev=>{
+      if(!prev) setStatusFilters(sf=>sf.filter(x=>x!=='odrzucone'));
+      return !prev;
+    });
+  };
   // Załaduj enabled types z ustawień przy montowaniu
   useEffect(()=>{
     fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
@@ -861,6 +871,7 @@ function ViewSetups() {
     const p=new URLSearchParams({limit:200,shadow_filter:shadowFilter});
     if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
     if(resultFilters.length>0) p.set('results',resultFilters.join(','));
+    if(excludeRejected) p.set('exclude_rejected','true');
     if(modelFilters.length>0) p.set('models',modelFilters.join(','));
     if(typeFilters.length>0) p.set('types',typeFilters.join(','));
     if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
@@ -869,7 +880,7 @@ function ViewSetups() {
     return fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>{});
-  },[statusFilters,resultFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
+  },[statusFilters,resultFilters,excludeRejected,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
   useEffect(()=>{
     if(settingsFilter===null) return;
     setRows(null);
@@ -941,6 +952,10 @@ function ViewSetups() {
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:9,color:'var(--text3)',minWidth:42,fontFamily:'var(--mono)'}}>Status:</span>
           {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
+          <span style={{width:1,alignSelf:'stretch',background:'var(--border2)',margin:'0 4px'}}/>
+          <div className={`filter-chip ${excludeRejected?'active':''}`} onClick={toggleExcludeRejected} title="Ukryj setupy odrzucone algorytmicznie (rejection), niezależnie od statusu">
+            🚫 Ukryj odrzucone
+          </div>
         </div>
         {/* Wynik */}
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
@@ -1371,6 +1386,7 @@ function ViewSimulator() {
   const [pnlMode,setPnlMode]=useState('tp12');
   const [minRegimeScore,setMinRegimeScore]=useState('');
   const [includeRejected,setIncludeRejected]=useState(false);
+  const [maxSlLossPct,setMaxSlLossPct]=useState('');
   const [withdrawEnabled,setWithdrawEnabled]=useState(false);
   const [withdrawMode,setWithdrawMode]=useState('weekly');
   const [withdrawPct,setWithdrawPct]=useState(50);
@@ -1441,6 +1457,7 @@ function ViewSimulator() {
     }
     if(minRegimeScore!=='') p.set('min_regime_score',minRegimeScore);
     if(includeRejected) p.set('include_rejected','true');
+    if(maxSlLossPct!=='') p.set('max_sl_loss_pct',maxSlLossPct);
     fetch('/api/simulator?'+p.toString())
       .then(r=>r.ok?r.json():[])
       .then(data=>{
@@ -1459,9 +1476,9 @@ function ViewSimulator() {
       })
       .catch(()=>setTrades([]))
       .finally(()=>setLoading(false));
-  },[selectedPairs,allTreePairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore,includeRejected]);
+  },[selectedPairs,allTreePairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore,includeRejected,maxSlLossPct]);
 
-  useEffect(()=>{runSim();},[selectedPairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore,includeRejected]);
+  useEffect(()=>{runSim();},[selectedPairs,periodMode,dateFrom,dateTo,fromDays,minRegimeScore,includeRejected,maxSlLossPct]);
 
   const simulation=React.useMemo(()=>{
     if(!trades||trades.length===0) return null;
@@ -1639,6 +1656,21 @@ function ViewSimulator() {
               onClick={()=>setIncludeRejected(p=>!p)}>{includeRejected?'Uwzględnione':'Wykluczone'}</div>
             <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>
               {includeRejected?'Setupy odrzucone algorytmicznie (rejection) też liczone w symulacji':'Setupy odrzucone algorytmicznie (śledzone tylko do ML) pominięte'}
+            </span>
+          </div>
+          <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:10,color:'var(--text3)',fontFamily:'var(--mono)',minWidth:50}}>Max SL:</span>
+            <div style={{display:'flex',gap:4}}>
+              {['',10,15,20,30].map(v=>
+                <div key={v} className={`filter-chip ${maxSlLossPct===v?'active':''}`}
+                  onClick={()=>setMaxSlLossPct(v)}>{v===''?'Wszystkie':`≤${v}%`}</div>
+              )}
+            </div>
+            <input type="number" min="0" step="1" placeholder="własny %" value={maxSlLossPct}
+              onChange={e=>setMaxSlLossPct(e.target.value===''?'':Math.max(0,Number(e.target.value)))}
+              style={{width:70,background:'var(--bg3)',border:'1px solid var(--border2)',borderRadius:4,padding:'4px 8px',color:'var(--text1)',fontFamily:'var(--mono)',fontSize:12,textAlign:'right'}}/>
+            <span style={{fontSize:9,color:'var(--text3)',fontStyle:'italic'}}>
+              {maxSlLossPct!==''?`Pomija setupy, których strata na SL (100% wolumenu, wg wejścia/SL z detekcji) przekracza ${maxSlLossPct}% kapitału (margin)`:'Bez filtra ryzyka — wszystkie setupy, niezależnie od odległości SL'}
             </span>
           </div>
           <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
@@ -3016,6 +3048,7 @@ function TabDashboard() {
 /* ── Mobile: TabSetups (unified — all statuses) ── */
 function TabSetups() {
   const [statusFilters,setStatusFilters]=useState(DEFAULT_STATUSES);
+  const [excludeRejected,setExcludeRejected]=useState(false);
   const [shadowFilter,setShadowFilter]=useState('all');
   const [settingsFilter,setSettingsFilter]=useState(null);
   const [rows,setRows]=useState(null);
@@ -3027,7 +3060,16 @@ function TabSetups() {
   const [dateFrom,setDateFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-30);return d.toISOString().split('T')[0];});
   const [dateTo,setDateTo]=useState('');
   const STATUS_OPTS=[{v:'pending',l:'Oczekuje'},{v:'open',l:'Pozycja'},{v:'after_tp1',l:'Po TP1'},{v:'zamkniete',l:'Zamknięte'},{v:'anulowane',l:'Anulowane'},{v:'nie_weszlo',l:'Nie weszło'},{v:'odrzucone',l:'Odrzucone (algo)'}];
-  const toggleStatus=(s)=>setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  const toggleStatus=(s)=>{
+    setStatusFilters(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+    if(s==='odrzucone') setExcludeRejected(false);
+  };
+  const toggleExcludeRejected=()=>{
+    setExcludeRejected(prev=>{
+      if(!prev) setStatusFilters(sf=>sf.filter(x=>x!=='odrzucone'));
+      return !prev;
+    });
+  };
   useEffect(()=>{
     fetch('/api/settings').then(r=>r.ok?r.json():{type_configs:{}}).then(d=>{
       const cfg=d.type_configs||{};
@@ -3073,6 +3115,7 @@ function TabSetups() {
     if(settingsFilter===null) return;
     const p=new URLSearchParams({limit:100,shadow_filter:shadowFilter});
     if(statusFilters.length>0) p.set('statuses',statusFilters.join(','));
+    if(excludeRejected) p.set('exclude_rejected','true');
     if(modelFilters.length>0) p.set('models',modelFilters.join(','));
     if(typeFilters.length>0) p.set('types',typeFilters.join(','));
     if(variantFilters.length>0) p.set('variants',variantFilters.join(','));
@@ -3081,7 +3124,7 @@ function TabSetups() {
     return fetch(`/api/dashboard/all-setups?${p}`)
       .then(r=>r.ok?r.json():{rows:[],total:0})
       .then(d=>{setRows(d.rows||[]);setTotal(d.total||0);}).catch(()=>{});
-  },[statusFilters,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
+  },[statusFilters,excludeRejected,shadowFilter,modelFilters,typeFilters,variantFilters,dateFrom,dateTo,settingsFilter]);
   useEffect(()=>{
     if(settingsFilter===null) return;
     setRows(null);
@@ -3102,6 +3145,9 @@ function TabSetups() {
         {STATUS_OPTS.map(({v,l})=><div key={v} className={`filter-chip ${statusFilters.includes(v)?'active':''}`} onClick={()=>toggleStatus(v)}>{l}</div>)}
       </div>
       <div style={{padding:'4px 12px',display:'flex',flexDirection:'column',gap:5}}>
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+          <div className={`filter-chip ${excludeRejected?'active':''}`} onClick={toggleExcludeRejected} style={{fontFamily:'var(--mono)',fontSize:9}}>🚫 Ukryj odrzucone</div>
+        </div>
         <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
           <span style={{fontSize:9,color:'var(--text3)',minWidth:36,fontFamily:'var(--mono)'}}>Źródło:</span>
           {['all','real','bitget','shadow'].map(v=><div key={v} className={`filter-chip ${shadowFilter===v?'active':''}`} onClick={()=>setShadowFilter(v)} style={{fontFamily:'var(--mono)',fontSize:9}}>{v==='all'?'Wszystkie':v==='real'?'Real':v==='bitget'?'Bitget':'Shadow'}</div>)}
