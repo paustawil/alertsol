@@ -3452,7 +3452,8 @@ def format_alert(model: str, setup: dict, current_price: float, filter_passed: b
         f"<b>SL:</b>  ${sl:.2f}\n"
         + f"{tps_txt}\n"
         f"<b>RR:</b>  {rr:.1f}:1\n"
-        f"Składam zlecenie o wartości: <b>${trade_margin}</b>"
+        f"Kandydat zaakceptowany (${trade_margin}) — wysyłam do Bitget, potwierdzenie "
+        f"złożenia zlecenia przyjdzie osobną wiadomością."
     )
 
 
