@@ -238,3 +238,54 @@ UPDATE setups SET
 WHERE setup_id = 1280
   AND result = 'TP1+TP2'
   AND pnl_usd IS NULL;
+
+-- ── Backfill ogólny: ten sam błąd co wyżej dla #1282/#1280, systematycznie ────
+--
+-- Źródło: sol_alert.py check_pending() liczył pnl_usd dla realnych (nie-shadow)
+-- setupów z domyślnym qty = (globalne stałe TRADE_USDT=100 * 20) / entry, zamiast
+-- z faktycznym qty wystawionym na Bitget (exchange_qty_full — ustawianym dynamicznie
+-- z equity konta), ilekroć exchange_qty_full nie było jeszcze zsynchronizowane do
+-- pamięciowego stanu setupu w momencie rozstrzygnięcia (wyścig z exchange_trader.py).
+-- pnl_pct dzieli tak policzone pnl_usd przez faktyczny trade_usdt tego setupu —
+-- gdy trade_usdt odbiega od 100 (rosnący kapitał, equity-based sizing), % wychodzi
+-- kilkukrotnie/kilkunastokrotnie zawyżone. Naprawione u źródła w sol_alert.py —
+-- tu retroaktywna korekta dla wszystkich dotkniętych, już rozstrzygniętych setupów
+-- z realną pozycją (exchange_qty_full znane — dla setupów shadow, bez realnej
+-- pozycji, nie da się wiarygodnie odtworzyć jakie qty „powinno” było być użyte,
+-- więc te pozostają nietknięte).
+WITH recomputed AS (
+    SELECT
+        s.setup_id,
+        (CASE s.direction WHEN 'long' THEN 1 ELSE -1 END)         AS sign,
+        COALESCE(s.avg_entry, (s.entries->>0)::numeric)           AS eff_entry,
+        NULLIF(s.exchange_qty_full, '')::numeric                  AS qty_full,
+        NULLIF(s.exchange_qty_half, '')::numeric                  AS qty_half
+    FROM setups s
+    WHERE s.resolved = TRUE
+      AND s.result IN ('SL', 'TP1', 'TP2', 'TP1+BE', 'TP1+TP2', 'TP1+SL')
+      AND s.pnl_usd IS NOT NULL
+      AND s.trade_usdt IS NOT NULL
+      AND NULLIF(s.exchange_qty_full, '') IS NOT NULL
+), corrected AS (
+    SELECT
+        s.setup_id,
+        CASE s.result
+            WHEN 'SL'      THEN r.sign * r.qty_full * (COALESCE(s.avg_exit, s.sl) - r.eff_entry)
+            WHEN 'TP1'     THEN r.sign * r.qty_full * (COALESCE(s.avg_exit, (s.tps->>0)::numeric) - r.eff_entry)
+            WHEN 'TP2'     THEN r.sign * r.qty_full * (COALESCE(s.avg_exit, (s.tps->>1)::numeric) - r.eff_entry)
+            WHEN 'TP1+BE'  THEN r.sign * r.qty_half * ((s.tps->>0)::numeric - r.eff_entry)
+            WHEN 'TP1+TP2' THEN r.sign * r.qty_half * ((s.tps->>0)::numeric - r.eff_entry)
+                           + r.sign * r.qty_half * ((s.tps->>1)::numeric - r.eff_entry)
+            WHEN 'TP1+SL'  THEN r.sign * r.qty_half * ((s.tps->>0)::numeric - r.eff_entry)
+                           + r.sign * r.qty_half * (COALESCE(s.avg_exit, s.sl) - r.eff_entry)
+        END AS true_pnl_usd
+    FROM setups s
+    JOIN recomputed r USING (setup_id)
+)
+UPDATE setups s SET
+    pnl_usd = ROUND(c.true_pnl_usd, 4),
+    pnl_pct = ROUND(c.true_pnl_usd / NULLIF(s.trade_usdt, 0) * 100, 2)
+FROM corrected c
+WHERE s.setup_id = c.setup_id
+  AND c.true_pnl_usd IS NOT NULL
+  AND ABS(s.pnl_usd - c.true_pnl_usd) > 0.05;
