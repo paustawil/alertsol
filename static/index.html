@@ -1496,6 +1496,7 @@ function ViewSimulator() {
     let totalWithdrawn=0;
     let capitalAtPeriodStart=startCapital;
     let nextWithdrawTs=null;
+    let bankrupt=false;
 
     const calcNextWithdraw=(fromMs)=>{
       const d=new Date(fromMs);
@@ -1553,6 +1554,14 @@ function ViewSimulator() {
 
       tryWithdraw(entryTime);
 
+      if(bankrupt){
+        skipped++;
+        steps.push({...base,skipped:true,bankrupt:true,
+          pnl_pct:isNaN(pnlPct)?0:pnlPct,pnl_usd:0,
+          capital_before:0,capital_after:0});
+        continue;
+      }
+
       if(currentExitTime&&entryTime<currentExitTime){
         skipped++;
         steps.push({...base,skipped:true,blocked_by:blockingId,
@@ -1564,9 +1573,15 @@ function ViewSimulator() {
       currentExitTime=blockUntilTime;
       blockingId=t.setup_id;
       if(isNaN(pnlPct)) continue;
-      const pnlUsd=capital*(pnlPct/100);
+      // pnl_pct to wynik lewarowany (20x) liczony względem marży transakcji i przy
+      // dużym SL może przekroczyć -100% — strata pojedynczej transakcji nie może
+      // jednak zabrać więcej kapitału niż aktualnie jest na koncie (likwidacja),
+      // inaczej kapitał schodzi poniżej zera i kolejna "strata" (ujemny pnlPct razy
+      // już ujemny kapitał) sztucznie generuje zysk zamiast dalszej straty.
+      const pnlUsd=Math.max(capital*(pnlPct/100),-capital);
       const prevCapital=capital;
       capital=capital+pnlUsd;
+      if(capital<=0){capital=0;bankrupt=true;}
       if(capital>maxCapital) maxCapital=capital;
       const dd=(maxCapital-capital)/maxCapital*100;
       if(dd>maxDrawdown) maxDrawdown=dd;
@@ -1839,12 +1854,12 @@ function ViewSimulator() {
                   const rowStyle={opacity};
                   return (
                   <tr key={s.id+'-'+i} style={rowStyle}>
-                    <td style={{width:20,textAlign:'center'}}>{sk?<span title={`Pominięta — blokowana przez #${s.blocked_by}`} style={{color:'var(--amber)',fontSize:13,cursor:'help'}}>⏸</span>:<span style={{color:'var(--green)',fontSize:11}}>✓</span>}</td>
+                    <td style={{width:20,textAlign:'center'}}>{sk?<span title={s.bankrupt?'Pominięta — kapitał wyzerowany (bankructwo)':`Pominięta — blokowana przez #${s.blocked_by}`} style={{color:s.bankrupt?'var(--red)':'var(--amber)',fontSize:13,cursor:'help'}}>{s.bankrupt?'✕':'⏸'}</span>:<span style={{color:'var(--green)',fontSize:11}}>✓</span>}</td>
                     <td style={{color:'var(--text3)',fontFamily:'var(--mono)'}}>{i+1}</td>
                     <td style={{fontFamily:'var(--mono)',fontWeight:600}}>{s.id}</td>
                     <td style={{fontSize:11}}>{s.type}<span style={{color:'var(--text3)',fontSize:9,marginLeft:4}}>{s.variant}</span></td>
                     <td><span className={`kier-badge ${s.direction}`}>{s.direction}</span></td>
-                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:sk?'var(--text3)':s.result==='SL'?'var(--red)':'var(--green)'}}>{s.result}{sk&&<span style={{color:'var(--amber)',fontSize:9,marginLeft:4}}>skip #{s.blocked_by}</span>}</td>
+                    <td style={{fontFamily:'var(--mono)',fontWeight:600,color:sk?'var(--text3)':s.result==='SL'?'var(--red)':'var(--green)'}}>{s.result}{sk&&<span style={{color:s.bankrupt?'var(--red)':'var(--amber)',fontSize:9,marginLeft:4}}>{s.bankrupt?'bankructwo':`skip #${s.blocked_by}`}</span>}</td>
                     <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{fmtD(s.entry_time)}</td>
                     <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--text2)'}}>{fmtD(s.exit_time)}</td>
                     <td style={{fontFamily:'var(--mono)',fontWeight:600,color:sk?'var(--text3)':pnlC(s.pnl_pct)}}>{sk?'—':`${s.pnl_pct>0?'+':''}${s.pnl_pct.toFixed(2)}%`}</td>

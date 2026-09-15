@@ -3122,7 +3122,15 @@ def check_pending(candles_m15: list[dict]):
             price_move = (eff_exit - eff_entry) if d == "long" else (eff_entry - eff_exit)
             qty = float((s.get("exchange_qty_full") or "0").replace(",", "."))
             if qty <= 0:
-                qty = (TRADE_USDT * LEVERAGE) / eff_entry
+                # Musi użyć FAKTYCZNEGO trade_usdt tego setupu (ustawianego dynamicznie
+                # z equity konta przez exchange_trader._calc_dynamic_trade_usdt), a nie
+                # globalnego stałego TRADE_USDT — inaczej pnl_usd wychodzi policzony na
+                # innej podstawie niż trade_usdt, przez który później dzieli się pnl_pct
+                # (patrz db.py get_all_setups_filtered/get_simulator_trades), co dawało
+                # dziesięciokrotnie zawyżone/zaniżone %. Ten sam problem naprawiono już
+                # ręcznie dla setupów #1282/#1280 w schema.sql — to jest naprawa u źródła.
+                _tu = float(s.get("trade_usdt") or TRADE_USDT)
+                qty = (_tu * LEVERAGE) / eff_entry
             move = round(price_move * qty, 2)
 
         if result:
