@@ -3322,6 +3322,13 @@ def api_update_result(setup_id: int, body: ResultUpdate):
             pnl_usd = sign * half_qty * (tp1_setup - avg_entry) + sign * half_qty * (tp2_setup - avg_entry)
 
     db.resolve_setup(setup_id, body.result, avg_entry, avg_exit, pnl_usd, None)
+    if body.result != "anulowany" and s.get("cancel_reason"):
+        # Ręczna korekta na realny wynik transakcji musi też wyczyścić leftover
+        # cancel_reason/cancel_time/cancel_price z poprzedniej (błędnej) inwalidacji —
+        # inaczej db.get_all_setups_filtered() i _map_result_display() nadal
+        # klasyfikują setup jako "anulowane" mimo poprawionego result (patrz #9423:
+        # cancel_reason IS NOT NULL wygrywał z result w filtrze statusu "anulowane").
+        db.update_setup(setup_id, cancel_reason=None, cancel_time=None, cancel_price=None)
     return {
         "ok":       True,
         "setup_id": setup_id,
