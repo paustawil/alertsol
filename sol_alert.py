@@ -3162,7 +3162,15 @@ def check_pending(candles_m15: list[dict]):
                 sl_adjusted=s.get("sl_adjusted", False),
                 entries_hit=s.get("entries_hit", 1),
             )
-            if s.get("entry_hit_at") is not None and s.get("status") != "after_tp1":
+            if s.get("tp1_hit_at") is not None:
+                # TP1 padł (choćby tylko w symulacji świec — np. gdy realne
+                # zlecenia na giełdzie nie działają) — status MUSI przejść na
+                # after_tp1, inaczej check_open_setups_invalidation() nadal
+                # widzi status="open" i po OPEN_TRADE_TIMEOUT_H (16h) zamyka
+                # setup jako "inwalidacja"/anulowany, mimo że TP1 realnie padł.
+                if s.get("status") != "after_tp1":
+                    _upd["status"] = "after_tp1"
+            elif s.get("entry_hit_at") is not None and s.get("status") != "after_tp1":
                 _upd["status"] = "open"
             db.update_setup(s["setup_id"], **_upd)
 
